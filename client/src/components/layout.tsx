@@ -2,7 +2,7 @@ import { Link, useLocation } from "wouter";
 import { LayoutDashboard, BookOpen, Activity, User, TrendingUp, Menu, X, PieChart, Wallet, Globe, CandlestickChart, Bitcoin, CreditCard } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import MarketTicker from "./market-ticker";
+import MarketTicker from "@/components/market-ticker";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();

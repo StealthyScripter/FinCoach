@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { PlayCircle, Clock, BarChart, CheckCircle2, ArrowRight } from "lucide-react";
+import { PlayCircle, Clock, BarChart, CheckCircle2, ArrowRight, Activity } from "lucide-react";
 import { useRoute } from "wouter";
 
 export default function Learn() {
