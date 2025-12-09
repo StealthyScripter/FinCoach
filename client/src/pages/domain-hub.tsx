@@ -88,17 +88,17 @@ export default function DomainHub() {
 
         <Tabs defaultValue="academy" className="space-y-6">
           <div className="border-b border-border/50">
-            <TabsList className="bg-transparent p-0 h-auto gap-6">
-              <TabsTrigger value="academy" className="bg-transparent border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:text-primary rounded-none px-0 py-2 font-serif text-lg">
+            <TabsList className="bg-transparent p-0 h-auto gap-6 justify-start w-full">
+              <TabsTrigger value="academy" className="bg-transparent border-b-2 border-transparent text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-primary hover:text-white rounded-none px-0 py-2 font-serif text-lg">
                 Academy & Materials
               </TabsTrigger>
-              <TabsTrigger value="simulator" className="bg-transparent border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:text-primary rounded-none px-0 py-2 font-serif text-lg">
+              <TabsTrigger value="simulator" className="bg-transparent border-b-2 border-transparent text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-primary hover:text-white rounded-none px-0 py-2 font-serif text-lg">
                 Live Simulator
               </TabsTrigger>
-              <TabsTrigger value="backtest" className="bg-transparent border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:text-primary rounded-none px-0 py-2 font-serif text-lg">
+              <TabsTrigger value="backtest" className="bg-transparent border-b-2 border-transparent text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-primary hover:text-white rounded-none px-0 py-2 font-serif text-lg">
                 Backtesting Lab
               </TabsTrigger>
-              <TabsTrigger value="intel" className="bg-transparent border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:text-primary rounded-none px-0 py-2 font-serif text-lg">
+              <TabsTrigger value="intel" className="bg-transparent border-b-2 border-transparent text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-primary hover:text-white rounded-none px-0 py-2 font-serif text-lg">
                 Market Intel
               </TabsTrigger>
             </TabsList>
