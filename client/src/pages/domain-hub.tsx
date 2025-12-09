@@ -58,7 +58,7 @@ export default function DomainHub() {
         {/* Domain Header / Cockpit */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="md:col-span-3 space-y-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="text-primary border-primary/30 uppercase tracking-widest text-[10px]">
                 {domain} DOMAIN
               </Badge>
@@ -66,8 +66,8 @@ export default function DomainHub() {
                 WEEK 4 / 12
               </Badge>
             </div>
-            <h1 className="text-4xl font-bold text-white capitalize font-serif">{domain} Management</h1>
-            <p className="text-muted-foreground max-w-2xl">
+            <h1 className="text-3xl md:text-4xl font-bold text-white capitalize font-serif">{domain} Management</h1>
+            <p className="text-muted-foreground max-w-2xl text-sm md:text-base">
               Master the art of {domain} through structured modules, live market simulations, and historical backtesting.
             </p>
           </div>
@@ -87,8 +87,8 @@ export default function DomainHub() {
         </div>
 
         <Tabs defaultValue="academy" className="space-y-6">
-          <div className="border-b border-border/50">
-            <TabsList className="bg-transparent p-0 h-auto gap-6 justify-start w-full">
+          <div className="border-b border-border/50 overflow-x-auto">
+            <TabsList className="bg-transparent p-0 h-auto gap-6 justify-start w-full min-w-max">
               <TabsTrigger value="academy" className="bg-transparent border-b-2 border-transparent text-muted-foreground data-[state=active]:border-primary data-[state=active]:text-primary hover:text-white rounded-none px-0 py-2 font-serif text-lg">
                 Academy & Materials
               </TabsTrigger>

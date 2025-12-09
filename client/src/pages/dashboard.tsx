@@ -37,10 +37,10 @@ export default function Dashboard() {
         </div>
 
         {/* Bento Grid / Newspaper Layout */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 auto-rows-min">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 auto-rows-min">
           
           {/* Main Headline (Hero) - Spans 2 cols, 2 rows */}
-          <div className="md:col-span-2 md:row-span-2 group relative overflow-hidden rounded-xl border border-border/50 bg-card hover:border-primary/50 transition-all cursor-pointer">
+          <div className="md:col-span-2 md:row-span-2 group relative overflow-hidden rounded-xl border border-border/50 bg-card hover:border-primary/50 transition-all cursor-pointer min-h-[400px]">
             <div className="absolute inset-0 z-0">
               <img 
                 src={generatedImage} 
