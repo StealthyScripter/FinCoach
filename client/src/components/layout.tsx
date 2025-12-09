@@ -12,6 +12,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { href: "/", icon: LayoutDashboard, label: "Dashboard" },
     { href: "/learn", icon: BookOpen, label: "Academy" },
     { href: "/challenge", icon: Activity, label: "Live Challenge" },
+    { href: "/reports", icon: PieChart, label: "Reports" },
     { href: "/profile", icon: User, label: "Profile" },
   ];
 

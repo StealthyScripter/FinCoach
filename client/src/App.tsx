@@ -8,13 +8,17 @@ import Dashboard from "@/pages/dashboard";
 import Learn from "@/pages/learn";
 import Challenge from "@/pages/challenge";
 
+import DomainHub from "@/pages/domain-hub";
+import Reports from "@/pages/reports";
+
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/learn" component={Learn} />
-      <Route path="/learn/:domain" component={Learn} />
+      <Route path="/learn/:domain" component={DomainHub} />
       <Route path="/challenge" component={Challenge} />
+      <Route path="/reports" component={Reports} />
       <Route component={NotFound} />
     </Switch>
   );
