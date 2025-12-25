@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/dashboard";
 import Learn from "@/pages/learn";
 import Challenge from "@/pages/challenge";
+import Profile from "./pages/profile";
 
 import DomainHub from "@/pages/domain-hub";
 import Reports from "@/pages/reports";
@@ -19,6 +20,7 @@ function Router() {
       <Route path="/learn/:domain" component={DomainHub} />
       <Route path="/challenge" component={Challenge} />
       <Route path="/reports" component={Reports} />
+      <Route path="/profile" component={Profile} />
       <Route component={NotFound} />
     </Switch>
   );
