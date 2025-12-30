@@ -10,8 +10,9 @@ import { MarketPulse } from "@/components/market-pulse";
 import { OpenPosition, OpenPositionData } from "@/components/open-position";
 import { ArticleModal } from "@/components/articleModal";
 import { SectorChart } from "@/components/sector-chart";
+import { NewsCard } from "@/components/news-card";
 
-interface Story {
+export interface Story {
   id: number;
   headline: string;
   excerpt: string;
@@ -276,52 +277,6 @@ export default function Dashboard() {
   const filteredStories = filter === 'all' ? stories : stories.filter(s => s.category === filter);
   const editorsPick = editors_pick;
 
-  const NewsArticle = ({ story }: { story: Story }) => {
-    const borderColorClass =
-      story.sentiment === 'bullish'
-        ? 'border-green-500'
-        : story.sentiment === 'bearish'
-        ? 'border-red-500'
-        : story.sentiment === 'positive'
-        ? 'border-blue-500'
-        : story.sentiment === 'negative'
-        ? 'border-orange-500'
-        : 'border-gray-400';
-
-    return (
-      <div
-        className={`border-l-4 pl-4 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${borderColorClass}`}
-        onClick={() => setSelectedArticle(story)}
-      >
-        <div className="flex justify-between items-start mb-2">
-          <div className="flex-1">
-            <h3 className="text-base font-bold text-gray-900 leading-tight mb-2">{story.headline}</h3>
-            <p className="text-gray-700 text-sm mb-3">{story.excerpt}</p>
-          </div>
-          <div className="text-3xl ml-4 shrink-0">{story.image}</div>
-        </div>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4 text-xs text-gray-500">
-            <span>{story.source}</span>
-            <span>{story.time}</span>
-            <span
-              className={`font-semibold ${
-                story.sentiment === 'bullish'
-                  ? 'text-green-600'
-                  : story.sentiment === 'bearish'
-                  ? 'text-red-600'
-                  : 'text-gray-600'
-              }`}
-            >
-              Score: {story.score}
-            </span>
-          </div>
-          <Bookmark size={16} className="text-gray-400 hover:text-blue-600" />
-        </div>
-      </div>
-    );
-  };
-
   return (
     <Layout>
       <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -444,8 +399,12 @@ export default function Dashboard() {
           </div>
 
           <div className="space-y-6">
-            {filteredStories.map(story => (
-              <NewsArticle key={story.id} story={story} />
+            {filteredStories.map((story) => (
+              <NewsCard
+                key={story.id}
+                story={story}
+                onSelect={setSelectedArticle}
+              />
             ))}
           </div>
         </div>
