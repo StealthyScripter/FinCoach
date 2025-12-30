@@ -7,6 +7,7 @@ import { Link } from "wouter";
 import generatedImage from '@assets/generated_images/abstract_digital_finance_visualization_with_glowing_data_streams.png';
 import React, { useState } from 'react';
 import { MarketPulse } from "@/components/market-pulse";
+import { OpenPosition, OpenPositionData } from "@/components/open-position";
 
 interface Story {
   id: number;
@@ -24,6 +25,12 @@ interface Story {
   aiAnalysis?: string;
 }
 
+const dailygoal = 72;
+const marketOpenTime = "09:30 AM EST";
+const marketCloseTime = "04:00 PM EST";
+const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const edition = {vol: 24, issue: 102, cities: ["New York", "london", "tokyo"]};
+
 const MOCK_CHART_DATA = [
   { name: '09:00', value: 4000 },
   { name: '10:00', value: 3000 },
@@ -33,6 +40,12 @@ const MOCK_CHART_DATA = [
   { name: '14:00', value: 2390 },
   { name: '15:00', value: 3490 },
 ];
+
+const exchangeHours: Record<string, { open: number; close: number }> = {
+  "New York": { open: 9, close: 16 }, // NYSE 9am - 4pm EST
+  London: { open: 8, close: 16 },     // LSE 8am - 4pm GMT
+  Tokyo: { open: 9, close: 15 },      // TSE 9am - 3pm JST
+};
 
 const marketStats = [
   // Forex
@@ -53,6 +66,35 @@ const marketStats = [
   { category: "crypto", label: "Solana", value: "22.5", change: "-0.5%", up: false },
 ];
 
+const positions: OpenPositionData[] = [
+  {
+    title: "USD/JPY Short",
+    price: "148.20",
+    change: "+0.45%",
+    changeUp: true,
+    thesis: "Bank of Japan intervention rumors are heating up. Risk/Reward favors downside.",
+    validation: "Wait for break below 147.80 to confirm trend reversal.",
+    position: "open",
+  },
+  {
+    title: "EUR/USD Long",
+    price: "1.1050",
+    change: "-0.15%",
+    changeUp: false,
+    thesis: "ECB rate decisions favor USD strength.",
+    validation: "Monitor 1.10 support.",
+    position: "monitoring",
+  },
+  {
+    title: "BTC Long",
+    price: "$36,500",
+    change: "+2.3%",
+    changeUp: true,
+    thesis: "Bullish momentum on-chain, whales accumulating.",
+    validation: "Watch $35,000 as support.",
+    position: "open",
+  },
+];
 
 const stories: Story[] = [
   {
@@ -147,9 +189,30 @@ const stories: Story[] = [
   }
 ];
 
+function isMarketOpen(city: string): boolean {
+  const hours = exchangeHours[city];
+  if (!hours) return false;
+
+  // Map city to timezone
+  const timezoneMap: Record<string, string> = {
+    "New York": "America/New_York",
+    London: "Europe/London",
+    Tokyo: "Asia/Tokyo",
+  };
+
+  const tz = timezoneMap[city];
+  const now = new Date();
+  const localHour = Number(
+    now.toLocaleString("en-US", { hour: "2-digit", hour12: false, timeZone: tz })
+  );
+
+  return localHour >= hours.open && localHour < hours.close;
+}
+
 export default function Dashboard() {
   const [selectedArticle, setSelectedArticle] = useState<Story | null>(null);
   const [filter, setFilter] = useState<'all' | 'stocks' | 'crypto' | 'forex' | 'commodities'>('all');
+  const anyMarketOpen = edition.cities.some((city) => isMarketOpen(city));
 
   const filteredStories = filter === 'all' ? stories : stories.filter(s => s.category === filter);
 
@@ -208,12 +271,14 @@ export default function Dashboard() {
           <div>
             <h1 className="text-5xl md:text-7xl font-bold tracking-tighter text-white font-serif italic">THE DAILY ALPHA</h1>
             <p className="text-muted-foreground mt-2 font-mono uppercase tracking-widest text-xs">
-              Vol. 24 • Issue 102 • London / New York / Tokyo
+              Vol. {edition.vol} • Issue {edition.issue} • {edition.cities.join(" / ")}
             </p>
           </div>
           <div className="text-right mt-4 md:mt-0">
-            <div className="text-3xl font-bold text-primary font-mono">MARKET OPEN</div>
-            <div className="text-sm text-muted-foreground">09:42:12 EST</div>
+            <div className={`text-3xl font-bold font-mono ${anyMarketOpen ? "text-primary" : "text-red-500"}`}>
+              {anyMarketOpen ? "MARKET OPEN" : "MARKET CLOSED"}
+            </div>
+            <div className="text-sm text-muted-foreground">{currentTime}</div>
           </div>
         </div>
 
@@ -242,32 +307,8 @@ export default function Dashboard() {
           </div>
 
           {/* Active Position */}
-          <div className="md:col-span-1 md:row-span-2 bg-secondary/20 border border-border/50 rounded-xl p-6 flex flex-col">
-            <div className="flex items-center gap-2 text-primary mb-4">
-              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-              <span className="font-mono text-xs uppercase tracking-wider">Active Position</span>
-            </div>
-            <h3 className="text-xl font-bold text-white mb-2">USD/JPY Short</h3>
-            <div className="text-4xl font-mono font-bold text-white mb-1">148.20</div>
-            <div className="flex items-center gap-2 text-emerald-500 mb-6 font-mono text-sm">
-              <TrendingUp className="h-4 w-4" /> +0.45% (Unrealized)
-            </div>
+          <OpenPosition positions={positions} />
 
-            <div className="flex-1 space-y-4">
-              <div className="p-3 bg-background/50 rounded border border-border/50">
-                <p className="text-xs text-muted-foreground mb-1">Thesis</p>
-                <p className="text-sm text-slate-300">Bank of Japan intervention rumors are heating up. Risk/Reward favors downside.</p>
-              </div>
-              <div className="p-3 bg-background/50 rounded border border-border/50">
-                <p className="text-xs text-muted-foreground mb-1">Validation</p>
-                <p className="text-sm text-slate-300">Wait for break below 147.80 to confirm trend reversal.</p>
-              </div>
-            </div>
-
-            <Button variant="outline" className="w-full mt-6 border-primary/20 hover:bg-primary/10 hover:text-primary">
-              Manage Position
-            </Button>
-          </div>
 
           {/* Market Pulse / Mini Stats */}
           <MarketPulse stats={marketStats} />
@@ -276,9 +317,9 @@ export default function Dashboard() {
           <div className="md:col-span-1 md:row-span-1 bg-primary/10 border border-primary/20 rounded-xl p-6 flex flex-col justify-center">
             <div className="flex justify-between items-center mb-2">
               <span className="font-bold text-primary">Daily Goal</span>
-              <span className="font-mono text-white">68%</span>
+              <span className="font-mono text-white">0%</span>
             </div>
-            <Progress value={68} className="h-2 bg-primary/20" />
+            <Progress value={0} className="h-2 bg-primary/20" />
             <p className="text-xs text-primary/80 mt-3">
               You're on a 12-day streak! Keep it up to unlock the "Hedge Fund Manager" badge.
             </p>
