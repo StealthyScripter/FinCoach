@@ -9,6 +9,7 @@ import React, { useState } from 'react';
 import { MarketPulse } from "@/components/market-pulse";
 import { OpenPosition, OpenPositionData } from "@/components/open-position";
 import { ArticleModal } from "@/components/articleModal";
+import { SectorChart } from "@/components/sector-chart";
 
 interface Story {
   id: number;
@@ -95,6 +96,40 @@ const positions: OpenPositionData[] = [
     position: "open",
   },
 ];
+
+export const MOCK_SECTOR_DATA = {
+  stocks: [
+    { name: "09:00", high: 4200, low: 4150, avg: 4175 },
+    { name: "10:00", high: 4250, low: 4205, avg: 4225 },
+    { name: "11:00", high: 4300, low: 4250, avg: 4270 },
+    { name: "12:00", high: 4350, low: 4280, avg: 4315 },
+    { name: "13:00", high: 4400, low: 4320, avg: 4360 },   // 🚀 strong uptrend
+  ],
+
+  forex: [
+    { name: "09:00", high: 1.10, low: 1.09, avg: 1.095 },
+    { name: "10:00", high: 1.09, low: 1.08, avg: 1.085 },
+    { name: "11:00", high: 1.08, low: 1.07, avg: 1.075 },
+    { name: "12:00", high: 1.07, low: 1.06, avg: 1.065 },
+    { name: "13:00", high: 1.06, low: 1.05, avg: 1.055 }, // 📉 clear downtrend
+  ],
+
+  oil: [
+    { name: "09:00", high: 78, low: 76, avg: 77 },
+    { name: "10:00", high: 80, low: 77, avg: 78.5 },
+    { name: "11:00", high: 82, low: 79, avg: 80.5 },
+    { name: "12:00", high: 81, low: 78, avg: 79.5 },
+    { name: "13:00", high: 83, low: 79, avg: 81 },        // mild up, one dip
+  ],
+
+  metals: [
+    { name: "09:00", high: 2000, low: 1970, avg: 1985 },
+    { name: "10:00", high: 1985, low: 1950, avg: 1965 },
+    { name: "11:00", high: 1960, low: 1930, avg: 1945 },
+    { name: "12:00", high: 1975, low: 1940, avg: 1958 },
+    { name: "13:00", high: 1950, low: 1915, avg: 1932 }, // drop → small bounce → sharper drop
+  ],
+};
 
 const stories: Story[] = [
   {
@@ -334,7 +369,7 @@ export default function Dashboard() {
           </div>
 
           {/* Sector Chart */}
-          <div className="md:col-span-2 bg-card/50 border border-border/50 rounded-xl p-6">
+          {/* <div className="md:col-span-2 bg-card/50 border border-border/50 rounded-xl p-6">
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-bold text-white flex items-center gap-2">
                 <Newspaper className="h-4 w-4 text-muted-foreground" />
@@ -361,7 +396,8 @@ export default function Dashboard() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-          </div>
+          </div> */}
+          <SectorChart data={MOCK_SECTOR_DATA} />
 
           {/* Editors Picks */}
           <div className="md:col-span-2 border-t-4 border-white/10 bg-card rounded-xl p-6">
