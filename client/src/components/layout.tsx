@@ -28,7 +28,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">
       <MarketTicker />
-      
+
       <div className="flex flex-1 overflow-hidden">
         {/* Desktop Sidebar */}
         <aside className="hidden md:flex flex-col w-64 border-r border-border bg-card/30 backdrop-blur-xl">
@@ -38,20 +38,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <span className="text-xl font-bold tracking-tight text-white">FinMind AI</span>
             </div>
           </div>
-          
+
           <nav className="flex-1 p-4 space-y-6 overflow-y-auto">
             <div className="space-y-2">
               <p className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Main</p>
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = location === item.href;
-                
+
                 return (
                   <Link key={item.href} href={item.href}>
                     <div className={cn(
                       "flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 cursor-pointer group",
-                      isActive 
-                        ? "bg-primary/10 text-primary border border-primary/20 shadow-[0_0_15px_rgba(16,185,129,0.15)]" 
+                      isActive
+                        ? "bg-primary/10 text-primary border border-primary/20 shadow-[0_0_15px_rgba(16,185,129,0.15)]"
                         : "text-muted-foreground hover:text-white hover:bg-white/5"
                     )}>
                       <Icon className={cn("h-4 w-4", isActive && "animate-pulse")} />
@@ -67,13 +67,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               {domains.map((item) => {
                 const Icon = item.icon;
                 const isActive = location === item.href;
-                
+
                 return (
                   <Link key={item.href} href={item.href}>
                     <div className={cn(
                       "flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 cursor-pointer group",
-                      isActive 
-                        ? "bg-primary/10 text-primary border border-primary/20" 
+                      isActive
+                        ? "bg-primary/10 text-primary border border-primary/20"
                         : "text-muted-foreground hover:text-white hover:bg-white/5"
                     )}>
                       <Icon className={cn("h-4 w-4")} />
@@ -120,11 +120,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   const isActive = location === item.href;
                   return (
                     <Link key={item.href} href={item.href}>
-                      <div 
+                      <div
                         className={cn(
                           "flex items-center gap-4 p-4 rounded-xl border transition-colors",
-                          isActive 
-                            ? "bg-primary/10 border-primary/30 text-primary" 
+                          isActive
+                            ? "bg-primary/10 border-primary/30 text-primary"
                             : "border-border text-muted-foreground"
                         )}
                         onClick={() => setIsMobileMenuOpen(false)}
@@ -144,11 +144,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   const isActive = location === item.href;
                   return (
                     <Link key={item.href} href={item.href}>
-                      <div 
+                      <div
                         className={cn(
                           "flex items-center gap-4 p-4 rounded-xl border transition-colors",
-                          isActive 
-                            ? "bg-primary/10 border-primary/30 text-primary" 
+                          isActive
+                            ? "bg-primary/10 border-primary/30 text-primary"
                             : "border-border text-muted-foreground"
                         )}
                         onClick={() => setIsMobileMenuOpen(false)}
@@ -165,7 +165,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         )}
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto pt-16 md:pt-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-slate-900 via-background to-background">
+        <main className="flex-1 overflow-y-auto pt-16 md:pt-0 bg-[radial-gradient(ellipse_at_top_right,var(--tw-gradient-stops))] from-slate-900 via-background to-background">
           <div className="container max-w-7xl mx-auto p-6 md:p-8">
             {children}
           </div>

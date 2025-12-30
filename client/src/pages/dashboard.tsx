@@ -8,6 +8,7 @@ import generatedImage from '@assets/generated_images/abstract_digital_finance_vi
 import React, { useState } from 'react';
 import { MarketPulse } from "@/components/market-pulse";
 import { OpenPosition, OpenPositionData } from "@/components/open-position";
+import { ArticleModal } from "@/components/articleModal";
 
 interface Story {
   id: number;
@@ -25,11 +26,10 @@ interface Story {
   aiAnalysis?: string;
 }
 
-const dailygoal = 72;
-const marketOpenTime = "09:30 AM EST";
-const marketCloseTime = "04:00 PM EST";
+const daily_goal = 72;
+const day_streak = 8;
 const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-const edition = {vol: 24, issue: 102, cities: ["New York", "london", "tokyo"]};
+const edition = {vol: 24, issue: 102, cities: ["New York", "london", "tokyo", "Chicago"]};
 
 const MOCK_CHART_DATA = [
   { name: '09:00', value: 4000 },
@@ -317,11 +317,11 @@ export default function Dashboard() {
           <div className="md:col-span-1 md:row-span-1 bg-primary/10 border border-primary/20 rounded-xl p-6 flex flex-col justify-center">
             <div className="flex justify-between items-center mb-2">
               <span className="font-bold text-primary">Daily Goal</span>
-              <span className="font-mono text-white">0%</span>
+              <span className="font-mono text-white">{daily_goal}%</span>
             </div>
-            <Progress value={0} className="h-2 bg-primary/20" />
+            <Progress value={daily_goal} className="h-2 bg-primary/20" />
             <p className="text-xs text-primary/80 mt-3">
-              You're on a 12-day streak! Keep it up to unlock the "Hedge Fund Manager" badge.
+              You're on a {day_streak}-day streak! Keep it up to unlock the "Hedge Fund Manager" badge.
             </p>
             <div>
               <Link href="/challenge">
@@ -388,38 +388,11 @@ export default function Dashboard() {
         </div>
 
         {/* Selected Article Modal */}
-        {selectedArticle && (
-          <div className="fixed inset-0 bg-black bg-opacity-30 flex justify-center items-center p-4 z-50">
-            <div className="bg-white rounded-lg max-w-lg w-full p-6 relative">
-              <button
-                className="absolute top-3 right-3 text-gray-500 hover:text-gray-900 font-bold"
-                onClick={() => setSelectedArticle(null)}
-              >
-                X
-              </button>
-              <h2 className="text-xl font-bold mb-2">{selectedArticle.headline}</h2>
-              <p className="text-gray-700 mb-4">{selectedArticle.content}</p>
-              <p className="text-xs text-gray-500 mb-2">
-                Source: {selectedArticle.source} | {selectedArticle.time}
-              </p>
-              <span
-                className={`font-semibold ${
-                  selectedArticle.sentiment === 'bullish'
-                    ? 'text-green-600'
-                    : selectedArticle.sentiment === 'bearish'
-                    ? 'text-red-600'
-                    : 'text-gray-600'
-                }`}
-              >
-                Score: {selectedArticle.score}
-              </span>
-            </div>
-          </div>
-        )}
+        <ArticleModal story={selectedArticle} onClose={() => setSelectedArticle(null)} />
 
-        {/* Latest Headlines Filters */}
+        {/* Headlines Filters */}
         <div>
-          <h2 className="text-2xl font-black text-gray-900 mb-4 uppercase tracking-wider">Latest Headlines</h2>
+          <h2 className="text-2xl font-black text-gray-900 mb-4 uppercase tracking-wider">Headlines</h2>
           <div className="flex gap-4 mb-6">
             {['all', 'stocks', 'crypto', 'forex', 'commodities'].map(cat => (
               <Button
