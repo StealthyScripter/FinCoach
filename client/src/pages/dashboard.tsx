@@ -1,11 +1,12 @@
 import Layout from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Bookmark, Clock, Newspaper, TrendingUp, Zap } from "lucide-react";
+import { Bookmark, Clock, Newspaper, TrendingUp, Zap} from "lucide-react";
 import { AreaChart, Area, XAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Link } from "wouter";
 import generatedImage from '@assets/generated_images/abstract_digital_finance_visualization_with_glowing_data_streams.png';
 import React, { useState } from 'react';
+import { MarketPulse } from "@/components/market-pulse";
 
 interface Story {
   id: number;
@@ -32,6 +33,26 @@ const MOCK_CHART_DATA = [
   { name: '14:00', value: 2390 },
   { name: '15:00', value: 3490 },
 ];
+
+const marketStats = [
+  // Forex
+  { category: "forex", label: "USD/JPY", value: "148.20", change: "-0.1%", up: false },
+  { category: "forex", label: "EUR/USD", value: "1.08", change: "+0.2%", up: true },
+  { category: "forex", label: "GBP/USD", value: "1.25", change: "+0.1%", up: true },
+  { category: "forex", label: "AUD/USD", value: "0.65", change: "-0.05%", up: false },
+  { category: "forex", label: "CAD/USD", value: "0.73", change: "+0.03%", up: true },
+
+  // Stocks
+  { category: "stocks", label: "S&P 500", value: "4,200", change: "+0.5%", up: true },
+  { category: "stocks", label: "Dow Jones", value: "34,500", change: "-0.3%", up: false },
+  { category: "stocks", label: "Nasdaq", value: "13,200", change: "+0.8%", up: true },
+
+  // Crypto
+  { category: "crypto", label: "Bitcoin", value: "29,800", change: "+1.2%", up: true },
+  { category: "crypto", label: "Ethereum", value: "1,850", change: "+0.8%", up: true },
+  { category: "crypto", label: "Solana", value: "22.5", change: "-0.5%", up: false },
+];
+
 
 const stories: Story[] = [
   {
@@ -220,7 +241,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Top Story */}
+          {/* Active Position */}
           <div className="md:col-span-1 md:row-span-2 bg-secondary/20 border border-border/50 rounded-xl p-6 flex flex-col">
             <div className="flex items-center gap-2 text-primary mb-4">
               <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
@@ -249,24 +270,7 @@ export default function Dashboard() {
           </div>
 
           {/* Market Pulse / Mini Stats */}
-          <div className="md:col-span-1 md:row-span-1 bg-card border border-border/50 rounded-xl p-6">
-            <h4 className="font-mono text-xs text-muted-foreground uppercase tracking-wider mb-4 border-b border-border/50 pb-2">Market Pulse</h4>
-            <div className="space-y-4">
-              {[
-                { label: "VIX", value: "14.20", change: "-2.1%", up: false },
-                { label: "10Y Yield", value: "4.12%", change: "+1.2%", up: true },
-                { label: "Gold", value: "2,340", change: "+0.4%", up: true },
-              ].map((stat, i) => (
-                <div key={i} className="flex justify-between items-center">
-                  <span className="font-medium text-slate-300">{stat.label}</span>
-                  <div className="text-right">
-                    <div className="text-white font-mono font-bold">{stat.value}</div>
-                    <div className={`text-xs ${stat.up ? 'text-emerald-500' : 'text-rose-500'}`}>{stat.change}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <MarketPulse stats={marketStats} />
 
           {/* Learning Progress */}
           <div className="md:col-span-1 md:row-span-1 bg-primary/10 border border-primary/20 rounded-xl p-6 flex flex-col justify-center">
