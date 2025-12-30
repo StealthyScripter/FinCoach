@@ -131,6 +131,31 @@ export const MOCK_SECTOR_DATA = {
   ],
 };
 
+export const editors_pick = [
+  {
+    id: 1,
+    headline: "Tech Stocks Rally as AI Spending Surges",
+    content:
+      "Markets climbed as investors rotated back into high-growth tech names, driven by stronger-than-expected demand in artificial intelligence infrastructure.",
+    source: "Bloomberg",
+    time: "2h ago",
+    sentiment: "bullish",
+    score: 82,
+    image: "https://images.unsplash.com/photo-1581091870624-8b4d1a64a5e8?auto=format&fit=crop&w=800&q=80", // placeholder AI/tech image
+  },
+  {
+    id: 2,
+    headline: "Oil Slips as Global Demand Outlook Softens",
+    content:
+      "Crude prices moved lower after new economic data signaled slower industrial activity — raising questions about fuel consumption heading into next quarter.",
+    source: "Reuters",
+    time: "4h ago",
+    sentiment: "bearish",
+    score: 61,
+    image: "https://images.unsplash.com/photo-1581091012184-f8f8f8147d9b?auto=format&fit=crop&w=800&q=80", // placeholder oil/energy image
+  },
+];
+
 const stories: Story[] = [
   {
     id: 1,
@@ -248,8 +273,8 @@ export default function Dashboard() {
   const [selectedArticle, setSelectedArticle] = useState<Story | null>(null);
   const [filter, setFilter] = useState<'all' | 'stocks' | 'crypto' | 'forex' | 'commodities'>('all');
   const anyMarketOpen = edition.cities.some((city) => isMarketOpen(city));
-
   const filteredStories = filter === 'all' ? stories : stories.filter(s => s.category === filter);
+  const editorsPick = editors_pick;
 
   const NewsArticle = ({ story }: { story: Story }) => {
     const borderColorClass =
@@ -369,58 +394,35 @@ export default function Dashboard() {
           </div>
 
           {/* Sector Chart */}
-          {/* <div className="md:col-span-2 bg-card/50 border border-border/50 rounded-xl p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="font-bold text-white flex items-center gap-2">
-                <Newspaper className="h-4 w-4 text-muted-foreground" />
-                Sector Performance
-              </h3>
-              <select className="bg-background border border-border rounded text-xs px-2 py-1 text-muted-foreground">
-                <option>Intraday</option>
-                <option>1 Week</option>
-              </select>
-            </div>
-            <div className="h-[200px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={MOCK_CHART_DATA}>
-                  <defs>
-                    <linearGradient id="colorValue2" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                  <XAxis dataKey="name" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
-                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b' }} itemStyle={{ color: '#fff' }} />
-                  <Area type="monotone" dataKey="value" stroke="#3b82f6" fillOpacity={1} fill="url(#colorValue2)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div> */}
           <SectorChart data={MOCK_SECTOR_DATA} />
 
           {/* Editors Picks */}
           <div className="md:col-span-2 border-t-4 border-white/10 bg-card rounded-xl p-6">
             <h3 className="font-serif italic text-2xl text-white mb-6">Editors' Picks</h3>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="space-y-3 group cursor-pointer">
-                <div className="aspect-video bg-muted rounded-lg overflow-hidden relative">
-                  <div className="absolute inset-0 bg-linear-to-tr from-purple-900/40 to-blue-900/40" />
-                  <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-xs text-white font-mono">CRYPTO</div>
+              {editorsPick.map((story, i) => (
+                <div key={i} className="space-y-3 group cursor-pointer">
+                  <div className="aspect-video bg-muted rounded-lg overflow-hidden relative">
+                    <img src={story.image} alt={story.headline} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-linear-to-tr from-primary/30 to-secondary/30" />
+                    <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-xs text-white font-mono">
+                      {(story as any)?.source?.toUpperCase?.() || "FEATURED"}
+                    </div>
+                  </div>
+
+                  <h4 className="font-bold text-white group-hover:text-primary transition-colors">
+                    {story.headline}
+                  </h4>
+
+                  <p className="text-sm text-muted-foreground line-clamp-2">
+                    {story.content}
+                  </p>
                 </div>
-                <h4 className="font-bold text-white group-hover:text-primary transition-colors">Is Bitcoin the new Digital Gold?</h4>
-                <p className="text-sm text-muted-foreground line-clamp-2">Exploring the correlation between BTC and commodities in the 2024 cycle.</p>
-              </div>
-              <div className="space-y-3 group cursor-pointer">
-                <div className="aspect-video bg-muted rounded-lg overflow-hidden relative">
-                  <div className="absolute inset-0 bg-linear-to-tr from-emerald-900/40 to-teal-900/40" />
-                  <div className="absolute bottom-2 left-2 bg-black/60 px-2 py-1 rounded text-xs text-white font-mono">FOREX</div>
-                </div>
-                <h4 className="font-bold text-white group-hover:text-primary transition-colors">The Carry Trade Unwind</h4>
-                <p className="text-sm text-muted-foreground line-clamp-2">What happens when the Yen strengthens? A deep dive into global liquidity.</p>
-              </div>
+              ))}
             </div>
           </div>
+
         </div>
 
         {/* Selected Article Modal */}
