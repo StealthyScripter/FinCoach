@@ -2,6 +2,8 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { createApiRateLimiter } from "./rateLimit";
+import { metricsService } from "./metricsService";
 
 const app = express();
 const httpServer = createServer(app);
@@ -21,6 +23,7 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+app.use("/api", createApiRateLimiter());
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -47,6 +50,7 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
+      metricsService.recordRequest();
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;

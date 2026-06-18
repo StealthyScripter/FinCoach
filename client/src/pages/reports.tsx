@@ -5,6 +5,7 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
 import { TrendingUp, Award, Target, FileText } from "lucide-react";
+import { useMarketPilotOverview } from "@/lib/marketpilot";
 
 const PERFORMANCE_DATA = [
   { month: 'Jan', portfolio: 4000, forex: 2400, crypto: 2400 },
@@ -26,6 +27,8 @@ const SKILL_DATA = [
 ];
 
 export default function Reports() {
+  const { data: marketPilot } = useMarketPilotOverview();
+
   return (
     <Layout>
       <div className="space-y-8 animate-in fade-in duration-500">
@@ -46,6 +49,44 @@ export default function Reports() {
              </div>
           </div>
         </div>
+
+        {marketPilot && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {marketPilot.researchReports.slice(0, 2).map((report) => (
+              <Card key={report.id} className="border-border/50 bg-card/70">
+                <CardHeader>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="border-primary/30 text-primary uppercase">
+                      {report.agent}
+                    </Badge>
+                    <Badge variant="secondary">
+                      {report.classification}
+                    </Badge>
+                    <span className="text-xs font-mono text-muted-foreground">
+                      Confidence {report.confidence}%
+                    </span>
+                  </div>
+                  <CardTitle className="text-white">{report.title}</CardTitle>
+                  <CardDescription>{report.summary}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">Main cause</div>
+                    <p className="mt-1 text-sm text-slate-200">{report.mainCause}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">Verification</div>
+                    <p className="mt-1 text-sm text-slate-200">{report.verification.evidenceSummary}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">What would disprove this</div>
+                    <p className="mt-1 text-sm text-slate-200">{report.verification.whatWouldDisprove}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           

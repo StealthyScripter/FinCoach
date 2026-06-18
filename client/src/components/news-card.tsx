@@ -1,6 +1,6 @@
 import { Bookmark } from "lucide-react";
 import React from "react";
-import { Story } from "../pages/dashboard";
+import type { Story } from "@/lib/story";
 
 interface newsCardProps {
   story: Story;

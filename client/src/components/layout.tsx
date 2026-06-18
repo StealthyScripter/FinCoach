@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { LayoutDashboard, BookOpen, Activity, User, TrendingUp, Menu, X, PieChart, Wallet, Globe, CandlestickChart, Bitcoin, CreditCard } from "lucide-react";
+import { BookOpen, TrendingUp, Menu, X, PieChart, Globe, CandlestickChart, Bitcoin, CreditCard, ShieldCheck, Search, ListChecks, NotebookText, Settings, Radio } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import MarketTicker from "@/components/market-ticker";
@@ -9,19 +9,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const navItems = [
-    { href: "/", icon: LayoutDashboard, label: "Dashboard" },
-    { href: "/learn", icon: BookOpen, label: "Academy" },
-    { href: "/challenge", icon: Activity, label: "Live Challenge" },
-    { href: "/reports", icon: PieChart, label: "Reports" },
-    { href: "/profile", icon: User, label: "Profile" },
+    { href: "/ask", icon: Search, label: "Ask" },
+    { href: "/learn", icon: BookOpen, label: "Learn" },
+    { href: "/opportunities", icon: ListChecks, label: "Opportunities" },
+    { href: "/portfolio", icon: PieChart, label: "Portfolio" },
+    { href: "/journal", icon: NotebookText, label: "Journal" },
+    { href: "/execution", icon: Radio, label: "Execution" },
+    { href: "/system", icon: Settings, label: "System" },
   ];
 
   const domains = [
-    { href: "/learn/portfolio", icon: PieChart, label: "Portfolio" },
-    { href: "/learn/budgeting", icon: Wallet, label: "Budgeting" },
     { href: "/learn/forex", icon: Globe, label: "Forex" },
     { href: "/learn/stocks", icon: CandlestickChart, label: "Stocks" },
+    { href: "/learn/etfs", icon: PieChart, label: "ETFs" },
+    { href: "/learn/options", icon: ShieldCheck, label: "Options" },
     { href: "/learn/crypto", icon: Bitcoin, label: "Crypto" },
+    { href: "/learn/risk-management", icon: ShieldCheck, label: "Risk" },
     { href: "/learn/loans", icon: CreditCard, label: "Loans & Credit" },
   ];
 
@@ -35,7 +38,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div className="p-6 border-b border-border/50">
             <div className="flex items-center gap-2 text-primary">
               <TrendingUp className="h-8 w-8" />
-              <span className="text-xl font-bold tracking-tight text-white">FinMind AI</span>
+              <span className="text-xl font-bold tracking-tight text-white">MarketPilot AI</span>
             </div>
           </div>
 
@@ -63,7 +66,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="space-y-2">
-              <p className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Domains</p>
+              <p className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Learn Topics</p>
               {domains.map((item) => {
                 const Icon = item.icon;
                 const isActive = location === item.href;
@@ -102,7 +105,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <div className="md:hidden absolute top-0 left-0 right-0 p-4 flex justify-between items-center bg-background/80 backdrop-blur-md border-b border-border z-50">
           <div className="flex items-center gap-2 text-primary">
             <TrendingUp className="h-6 w-6" />
-            <span className="text-lg font-bold text-white">FinMind AI</span>
+            <span className="text-lg font-bold text-white">MarketPilot AI</span>
           </div>
           <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
             {isMobileMenuOpen ? <X className="text-white" /> : <Menu className="text-white" />}
@@ -138,7 +141,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               </div>
 
               <div className="space-y-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Domains</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Learn Topics</p>
                 {domains.map((item) => {
                   const Icon = item.icon;
                   const isActive = location === item.href;

@@ -1,5 +1,5 @@
 import React from "react";
-import { Story } from "../pages/dashboard";
+import type { Story } from "@/lib/story";
 
 interface ArticleModalProps {
   story: Story | null;
