@@ -8,7 +8,8 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useBrokerReadiness, useComplianceAudit, useComplianceProfile, useLiveAssistancePolicy, useMarketEvents, useMarketPilotOverview, useRiskSettings, type BrokerReadiness, type ComplianceAuditSummary, type ComplianceProfile, type LiveAssistancePolicy, type OrderPreview } from "@/lib/marketpilot";
+import { useBrokerReadiness, useComplianceAudit, useComplianceProfile, useLiveAssistancePolicy, useMarketEvents, useMarketPilotOverview, usePredictionInsights, useRiskSettings, type BrokerReadiness, type ComplianceAuditSummary, type ComplianceProfile, type LiveAssistancePolicy, type OrderPreview } from "@/lib/marketpilot";
+import { buildMemoryActionChecklist, buildPredictionLessonCue } from "@shared/assistantPresentation";
 import type { ComplianceAcknowledgementSubmission, JournalReviewResult, JournalReviewSubmission, PaperTradeCloseRequest, PaperTradeCloseResult, RiskSettingsUpdate, TradeTicketProposal } from "@shared/schema";
 import { useMutation } from "@tanstack/react-query";
 import { AlertTriangle, CalendarClock, CheckCircle2, FileCheck2, History, KeyRound, Lock, Plus, ReceiptText, ShieldCheck, SlidersHorizontal, Smartphone, XCircle } from "lucide-react";
@@ -47,6 +48,9 @@ export default function TradeDesk() {
   const { data: livePolicy } = useLiveAssistancePolicy();
   const { data: riskSettings } = useRiskSettings();
   const { data: complianceProfile } = useComplianceProfile();
+  const { data: insights } = usePredictionInsights();
+  const lessonCue = buildPredictionLessonCue(insights?.topThemes[0], insights?.recentRules[0]);
+  const lessonChecklist = buildMemoryActionChecklist(lessonCue);
   const auditTarget = data?.tradeTickets.find((ticket) => ticket.status === "paper_filled")?.id ?? data?.tradeTickets[0]?.id;
   const complianceAudit = useComplianceAudit(auditTarget);
   const [proposal, setProposal] = useState<TradeTicketProposal>(initialProposal);
@@ -217,6 +221,57 @@ export default function TradeDesk() {
 
         <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
           <div className="space-y-5">
+            <Card className="border-border/50 bg-card/70">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <ReceiptText className="h-5 w-5 text-primary" />
+                  Learning Guardrails
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm text-slate-200">
+                {lessonCue && (
+                  <div className="rounded-lg border border-primary/30 bg-background/35 p-3">
+                    <div className="text-xs uppercase tracking-wide text-primary">Memory reuse</div>
+                    <p className="mt-2">{lessonCue.cue}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {lessonCue.theme} · {lessonCue.count} repeats · {lessonCue.source}
+                    </p>
+                  </div>
+                )}
+                {lessonChecklist.length > 0 && (
+                  <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">Pre-submit checklist</div>
+                    <ul className="mt-2 space-y-2">
+                      {lessonChecklist.map((item) => (
+                        <li key={item} className="flex gap-2">
+                          <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary" />
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Top repeated lesson</div>
+                  <p className="mt-1">
+                    {insights?.topThemes[0]?.theme ?? "No repeated lessons recorded yet."}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Latest rule update</div>
+                  <p className="mt-1">
+                    {insights?.recentRules[0]?.futureRuleAdjustment ?? "No recent rule updates recorded yet."}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Review count</div>
+                  <p className="mt-1">
+                    {insights?.reviewCount ?? 0} prediction review{(insights?.reviewCount ?? 0) === 1 ? "" : "s"} recorded
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
             <Card className="border-primary/30 bg-card/70">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-white">

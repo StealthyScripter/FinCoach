@@ -3,11 +3,14 @@ import Layout from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { useAssistantOpportunities } from "@/lib/marketpilot";
+import { useAssistantOpportunities, usePredictionInsights } from "@/lib/marketpilot";
+import { buildPredictionLessonCue } from "@shared/assistantPresentation";
 import { ChevronDown } from "lucide-react";
 
 export default function Opportunities() {
   const { data, isLoading } = useAssistantOpportunities();
+  const { data: insights } = usePredictionInsights();
+  const lessonCue = buildPredictionLessonCue(insights?.topThemes[0], insights?.recentRules[0]);
   const ranked = data?.all ?? [];
   const highConviction = ranked.filter((signal) => signal.category === "opportunity" && signal.confidence >= 70).slice(0, 5);
   const riskWarnings = ranked.filter((signal) => signal.category === "risk_warning" || signal.riskSeverity >= 85).slice(0, 5);
@@ -29,6 +32,19 @@ export default function Opportunities() {
 
         {data && (
           <>
+            {lessonCue && (
+              <Card className="border-primary/30 bg-card/70">
+                <CardHeader>
+                  <CardTitle className="text-white">Memory cue</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm text-slate-200">
+                  <p>{lessonCue.cue}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {lessonCue.theme} · {lessonCue.count} repeats · {lessonCue.source}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
             <SignalSection title="High conviction" signals={highConviction.length > 0 ? highConviction : data.primary.slice(0, 3)} />
             <SignalSection title="Watchlist" signals={watchlist} />
             <SignalSection title="Risk warning" signals={riskWarnings} />

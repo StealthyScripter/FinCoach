@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { DecisionCard as DecisionCardData } from "@/lib/marketpilot";
+import { decisionCardHighlights } from "@shared/assistantPresentation";
 import { AlertTriangle, CheckCircle2, ChevronDown, ShieldCheck, Target } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -20,15 +21,18 @@ export function DecisionCard({ card }: { card: DecisionCardData }) {
         <p className="text-sm text-muted-foreground">{card.situation}</p>
       </CardHeader>
       <CardContent className="space-y-4">
-        <KeyItem icon={<Target className="h-4 w-4 text-primary" />} label="Conclusion" value={card.mainConclusion} />
-        <KeyItem icon={<ShieldCheck className="h-4 w-4 text-primary" />} label="Suggested action" value={card.suggestedAction} />
-        <KeyItem icon={<AlertTriangle className="h-4 w-4 text-amber-300" />} label="Could be wrong if" value={card.whatCouldProveWrong[0] ?? "Contradictory evidence strengthens."} />
-        <KeyItem icon={<CheckCircle2 className="h-4 w-4 text-primary" />} label="Learning note" value={card.learningNote} />
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <ListPanel title="Why" items={card.why.slice(0, 3)} />
-          <ListPanel title="Next step" items={[card.nextStep]} />
-        </div>
+        {decisionCardHighlights(card).map((item, index) => (
+          <KeyItem
+            key={item.label}
+            icon={
+              index === 0 ? <Target className="h-4 w-4 text-primary" /> :
+              index === 1 ? <ShieldCheck className="h-4 w-4 text-primary" /> :
+              <AlertTriangle className="h-4 w-4 text-amber-300" />
+            }
+            label={item.label}
+            value={item.value}
+          />
+        ))}
 
         <Collapsible>
           <CollapsibleTrigger asChild>
@@ -38,6 +42,11 @@ export function DecisionCard({ card }: { card: DecisionCardData }) {
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-3 space-y-3">
+            <div className="grid gap-3 md:grid-cols-2">
+              <ListPanel title="Why" items={card.why.slice(0, 3)} />
+              <ListPanel title="Next step" items={[card.nextStep]} />
+            </div>
+            <ListPanel title="Learning note" items={[card.learningNote]} />
             <div className="grid gap-3 lg:grid-cols-3">
               <ListPanel title="Facts" items={card.details.facts} />
               <ListPanel title="Interpretations" items={card.details.interpretations} />

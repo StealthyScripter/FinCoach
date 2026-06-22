@@ -12,6 +12,7 @@ import Profile from "./pages/profile";
 import Reports from "@/pages/reports";
 import TradeDesk from "@/pages/trade-desk";
 import SimulationLab from "@/pages/simulation-lab";
+import StrategyLab from "@/pages/strategy-lab";
 import Intelligence from "@/pages/intelligence";
 import AskMarketPilot from "@/pages/ask-marketpilot";
 import Opportunities from "@/pages/opportunities";
@@ -34,6 +35,7 @@ function Router() {
       <Route path="/execution" component={ExecutionCenter} />
       <Route path="/challenge" component={Challenge} />
       <Route path="/trade-desk" component={TradeDesk} />
+      <Route path="/strategy-lab" component={StrategyLab} />
       <Route path="/intelligence" component={Intelligence} />
       <Route path="/simulations" component={SimulationLab} />
       <Route path="/reports" component={Reports} />

@@ -1,8 +1,9 @@
 import { Link, useLocation } from "wouter";
-import { BookOpen, TrendingUp, Menu, X, PieChart, Globe, CandlestickChart, Bitcoin, CreditCard, ShieldCheck, Search, ListChecks, NotebookText, Settings, Radio } from "lucide-react";
-import { useState } from "react";
+import { BookOpen, TrendingUp, Menu, X, PieChart, Globe, CandlestickChart, Bitcoin, CreditCard, ShieldCheck, Search, ListChecks, NotebookText, Settings, Radio, FlaskConical } from "lucide-react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import MarketTicker from "@/components/market-ticker";
+import { apiRequest } from "@/lib/queryClient";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -12,6 +13,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { href: "/ask", icon: Search, label: "Ask" },
     { href: "/learn", icon: BookOpen, label: "Learn" },
     { href: "/opportunities", icon: ListChecks, label: "Opportunities" },
+    { href: "/strategy-lab", icon: FlaskConical, label: "Strategy Lab" },
     { href: "/portfolio", icon: PieChart, label: "Portfolio" },
     { href: "/journal", icon: NotebookText, label: "Journal" },
     { href: "/execution", icon: Radio, label: "Execution" },
@@ -27,6 +29,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { href: "/learn/risk-management", icon: ShieldCheck, label: "Risk" },
     { href: "/learn/loans", icon: CreditCard, label: "Loans & Credit" },
   ];
+
+  useEffect(() => {
+    void apiRequest("POST", "/api/marketpilot/demo-run/screen-visit", { screen: location }).catch(() => undefined);
+  }, [location]);
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">

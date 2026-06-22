@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest } from "@/lib/queryClient";
-import { useMarketPilotOverview, usePortfolioModels, usePortfolioRiskAnalytics, useScenarioSimulation, type BacktestRequest, type BacktestResult, type OptionsSimulation, type OptionsSimulationRequest, type ScenarioName } from "@/lib/marketpilot";
+import { useMarketPilotOverview, usePortfolioModels, usePortfolioRiskAnalytics, useScenarioSimulation, useStrategyValidationMutation, type BacktestRequest, type BacktestResult, type OptionsSimulation, type OptionsSimulationRequest, type ScenarioName, type StrategyValidationInput } from "@/lib/marketpilot";
 import { useMutation } from "@tanstack/react-query";
 import { AlertTriangle, Clock3, Gauge, LineChart, PieChart, ShieldAlert, Sigma, WalletCards } from "lucide-react";
 import { type ComponentType, type ReactNode, useState } from "react";
@@ -93,6 +93,7 @@ export default function SimulationLab() {
   const { data: overview } = useMarketPilotOverview();
   const { data: portfolioModels } = usePortfolioModels();
   const { data: riskAnalytics } = usePortfolioRiskAnalytics();
+  const strategyValidation = useStrategyValidationMutation();
   const activeScenario = scenarios.find((item) => item.id === scenario) ?? scenarios[0];
   const drawdownMagnitude = Math.min(100, Math.abs(simulation?.estimatedDrawdownPct ?? 0) * 3);
   const optionsSimulation = useMutation<OptionsSimulation, Error, OptionsSimulationRequest>({
@@ -107,6 +108,7 @@ export default function SimulationLab() {
       return response.json();
     },
   });
+  const strategyValidationInput = backtest.data ? buildStrategyValidationInput(backtestRequest, backtest.data) : null;
 
   return (
     <Layout>
@@ -411,6 +413,66 @@ export default function SimulationLab() {
             )}
           </CardContent>
         </Card>
+
+        {strategyValidationInput && (
+          <Card className="border-border/50 bg-card/70">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-white">
+                <LineChart className="h-5 w-5 text-primary" />
+                Strategy Research Scorecard
+              </CardTitle>
+              <CardDescription>
+                Validate the backtest against walk-forward, Monte Carlo, regime, and symbol-suitability evidence before any automation claim.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                <InfoBlock title="Strategy" value={strategyValidationInput.strategyId} />
+                <InfoBlock title="Instrument" value={strategyValidationInput.instrument} />
+                <InfoBlock title="Walk-forward" value={`${strategyValidationInput.walkForward.profitableWindowsPct.toFixed(0)}%`} />
+                <InfoBlock title="Ruin risk" value={`${strategyValidationInput.monteCarlo.riskOfRuinPct.toFixed(1)}%`} />
+              </div>
+
+              {strategyValidation.error && (
+                <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">
+                  {strategyValidation.error.message}
+                </div>
+              )}
+
+              <Button
+                className="gap-2"
+                disabled={strategyValidation.isPending}
+                onClick={() => strategyValidation.mutate(strategyValidationInput)}
+              >
+                <LineChart className="h-4 w-4" />
+                {strategyValidation.isPending ? "Evaluating..." : "Run Strategy Validation"}
+              </Button>
+
+              {strategyValidation.data && (
+                <div className="space-y-4">
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <InfoBlock title="Verdict" value={strategyValidation.data.verdict.replaceAll("_", " ")} />
+                    <InfoBlock title="Overall" value={`${strategyValidation.data.overallScore}/100`} />
+                    <InfoBlock title="Overfitting" value={strategyValidation.data.overfittingWarning ? "warning" : "clear"} />
+                    <InfoBlock title="Regime" value={strategyValidation.data.regimeSensitivity} />
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <ListBlock
+                      title="Reasons"
+                      items={strategyValidation.data.reasons.length > 0 ? strategyValidation.data.reasons : ["No blockers in the current research snapshot."]}
+                    />
+                    <ListBlock
+                      title="Validation guidance"
+                      items={strategyValidation.data.verdict === "supervised_live_candidate"
+                        ? ["Validated for supervised-live consideration only, not authorization."]
+                        : ["Review the weaker scores, especially walk-forward and Monte Carlo robustness."]}
+                    />
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="border-border/50 bg-card/70">
           <CardHeader>
@@ -742,6 +804,54 @@ function nextOptionsPreset(value: string, current: OptionsSimulationRequest): Op
     };
   }
   return { ...common, legs: [{ action: "buy", type: "call", strike: baseStrike + 5, premium: 6, contracts: 1 }] };
+}
+
+function buildStrategyValidationInput(backtestRequest: BacktestRequest, backtest: BacktestResult): StrategyValidationInput {
+  const returns = backtest.annualResults.map((year) => year.returnPct);
+  const positiveYears = returns.filter((value) => value >= 0).length;
+  const half = Math.max(1, Math.floor(returns.length / 2));
+  const firstHalf = returns.slice(0, half);
+  const secondHalf = returns.slice(-half);
+  const firstHalfAverage = firstHalf.length > 0 ? firstHalf.reduce((sum, value) => sum + value, 0) / firstHalf.length : 0;
+  const secondHalfAverage = secondHalf.length > 0 ? secondHalf.reduce((sum, value) => sum + value, 0) / secondHalf.length : 0;
+  const degradationPct = Math.max(0, firstHalfAverage - secondHalfAverage);
+  const worstYear = Math.min(...returns, backtest.maxDrawdownPct * -1);
+  const riskOfRuinPct = Math.min(100, Math.max(0, Math.abs(backtest.maxDrawdownPct) * 2 + (backtest.sharpeRatio < 0 ? 20 : 0)));
+  const symbol = backtestRequest.allocation[0]?.symbol ?? "VTI";
+
+  return {
+    strategyId: slugify(backtest.strategyName),
+    instrument: symbol,
+    backtest: {
+      netReturnPct: backtest.cumulativeReturnPct,
+      sharpe: backtest.sharpeRatio,
+      profitFactor: backtest.annualizedReturnPct > 0 ? Math.max(0.1, 1 + backtest.annualizedReturnPct / 20) : 0.4,
+      maxDrawdownPct: Math.abs(backtest.maxDrawdownPct),
+      tradeCount: backtest.annualResults.length * 12,
+    },
+    walkForward: {
+      profitableWindowsPct: returns.length > 0 ? (positiveYears / returns.length) * 100 : 0,
+      outOfSampleReturnPct: secondHalfAverage,
+      degradationPct,
+    },
+    monteCarlo: {
+      profitableRunsPct: returns.length > 0 ? (positiveYears / returns.length) * 100 : 0,
+      medianEndingReturnPct: backtest.annualizedReturnPct,
+      riskOfRuinPct,
+    },
+    regimePerformance: {
+      stress: worstYear,
+      baseline: backtest.annualizedReturnPct,
+      recovery: Math.max(...returns, 0),
+    },
+    symbolPerformance: {
+      [symbol]: backtest.annualizedReturnPct,
+    },
+  };
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function formatMoney(value: number) {

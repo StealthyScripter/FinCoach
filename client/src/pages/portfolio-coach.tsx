@@ -3,12 +3,13 @@ import Layout from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { useMarketPilotOverview, usePortfolioRiskAnalytics } from "@/lib/marketpilot";
+import { useMarketPilotOverview, usePortfolioModels, usePortfolioRiskAnalytics } from "@/lib/marketpilot";
 import { ChevronDown } from "lucide-react";
 
 export default function PortfolioCoach() {
   const { data } = useMarketPilotOverview();
   const { data: risk } = usePortfolioRiskAnalytics();
+  const { data: models } = usePortfolioModels();
 
   if (!data) {
     return <Layout><div className="text-muted-foreground">Loading portfolio coach...</div></Layout>;
@@ -51,33 +52,85 @@ export default function PortfolioCoach() {
         : ["Risk analytics loading."],
     },
   };
+  const rankedModels = [...(models ?? [])].sort((left, right) =>
+    left.maxDriftPct - right.maxDriftPct || left.turnoverEstimate - right.turnoverEstimate || left.name.localeCompare(right.name),
+  );
+  const bestModel = rankedModels[0];
+  const topModels = rankedModels.slice(0, 3);
 
   return (
     <Layout>
       <div className="space-y-6 animate-in fade-in duration-500">
         <DecisionCard card={card} />
         <div className="grid gap-4 md:grid-cols-3">
-          {data.portfolio.holdings.slice(0, 3).map((holding) => (
-            <Card key={holding.symbol} className="border-border/60 bg-card/60">
-              <CardHeader>
-                <CardTitle className="text-white">{holding.symbol}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <div className="text-slate-200">{holding.name}</div>
-                <div className="text-muted-foreground">Allocation {holding.allocation.toFixed(1)}%</div>
-                <div className="text-muted-foreground">Risk contribution {holding.riskContribution.toFixed(1)}%</div>
-              </CardContent>
-            </Card>
-          ))}
+          <SummaryStat label="Largest risk" value={`${largest.symbol} · ${largest.riskContribution.toFixed(1)}%`} />
+          <SummaryStat label="Portfolio risk" value={`${data.portfolio.riskScore}/100`} />
+          <SummaryStat label="Cash" value={`$${data.portfolio.cash.toLocaleString()}`} />
         </div>
+
         <Collapsible>
           <CollapsibleTrigger asChild>
-            <Button variant="outline" className="w-full justify-between">
-              Show factor, correlation, and Monte Carlo details
+            <Button variant="outline" className="w-full justify-between border-border/60">
+              Show portfolio model, holdings, and factor details
               <ChevronDown className="h-4 w-4" />
             </Button>
           </CollapsibleTrigger>
-          <CollapsibleContent className="mt-4">
+          <CollapsibleContent className="mt-4 space-y-4">
+            <Card className="border-border/60 bg-card/60">
+              <CardHeader>
+                <CardTitle className="text-white">Portfolio Model Recommendation</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="rounded-lg border border-border/60 bg-background/35 p-4 text-sm text-slate-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold text-white">{bestModel?.name ?? "Loading model comparisons..."}</span>
+                    {bestModel && (
+                      <span className="text-xs uppercase tracking-wide text-primary">
+                        Drift {bestModel.maxDriftPct.toFixed(1)}% / Turnover ${bestModel.turnoverEstimate.toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-2">{bestModel?.objective ?? "Compare the current portfolio against model portfolios to determine the least disruptive improvement path."}</p>
+                  {bestModel && (
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      <MiniList title="Gates" items={bestModel.suitabilityGates} />
+                      <MiniList title="Risk notes" items={bestModel.riskNotes} />
+                    </div>
+                  )}
+                </div>
+                <div className="grid gap-4 lg:grid-cols-3">
+                  {topModels.length > 0 ? topModels.map((model) => (
+                    <div key={model.id} className="rounded-lg border border-border/60 bg-background/35 p-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-semibold text-white">{model.name}</div>
+                          <div className="text-xs uppercase tracking-wide text-muted-foreground">{model.level}</div>
+                        </div>
+                        <div className="text-right text-xs text-muted-foreground">
+                          <div>Drift {model.maxDriftPct.toFixed(1)}%</div>
+                          <div>Turnover ${model.turnoverEstimate.toLocaleString()}</div>
+                        </div>
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {model.targetAllocation.slice(0, 3).map((target) => (
+                          <div key={`${model.id}-${target.symbol}`} className="rounded-md bg-card/60 p-2 text-xs text-slate-200">
+                            <div className="flex items-center justify-between gap-2">
+                              <span>{target.symbol}</span>
+                              <span>{target.currentPct.toFixed(1)}% → {target.targetPct.toFixed(1)}%</span>
+                            </div>
+                            <div className="mt-1 text-muted-foreground">{target.sleeve}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="rounded-lg border border-border/60 bg-background/35 p-4 text-sm text-muted-foreground">
+                      Loading portfolio model comparisons...
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
             <Card className="border-border/60 bg-card/60">
               <CardContent className="grid gap-3 pt-6 md:grid-cols-3">
                 {(card.details.advancedAnalytics).map((item) => (
@@ -85,9 +138,45 @@ export default function PortfolioCoach() {
                 ))}
               </CardContent>
             </Card>
+            <div className="grid gap-4 md:grid-cols-3">
+              {data.portfolio.holdings.slice(0, 3).map((holding) => (
+                <Card key={holding.symbol} className="border-border/60 bg-card/60">
+                  <CardHeader>
+                    <CardTitle className="text-white">{holding.symbol}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm">
+                    <div className="text-slate-200">{holding.name}</div>
+                    <div className="text-muted-foreground">Allocation {holding.allocation.toFixed(1)}%</div>
+                    <div className="text-muted-foreground">Risk contribution {holding.riskContribution.toFixed(1)}%</div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           </CollapsibleContent>
         </Collapsible>
       </div>
     </Layout>
+  );
+}
+
+function SummaryStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+      <p className="mt-1 text-sm font-medium text-white">{value}</p>
+    </div>
+  );
+}
+
+function MiniList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-md border border-border/60 bg-card/50 p-3">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="mt-2 space-y-2">
+        {items.slice(0, 3).map((item) => (
+          <div key={item} className="text-xs text-slate-200">{item}</div>
+        ))}
+      </div>
+    </div>
   );
 }
