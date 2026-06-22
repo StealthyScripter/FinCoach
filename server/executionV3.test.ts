@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AutomationLevelService } from "./execution/automationLevels";
 import { ExecutionEmergencyState, EmergencyControlService } from "./execution/emergencyControls";
 import { FinalConfirmationService, LIVE_CONFIRMATION_PHRASE } from "./execution/finalConfirmation";
+import { ControlledLiveWorkflowService } from "./execution/controlledLiveWorkflow";
 import { selectLiveReadinessPanel } from "./execution/executionCenter";
 import { LIVE_SAFETY_QUIZ, LiveSafetyQuizService } from "./execution/liveSafetyQuiz";
 import { LiveTradingPermissionService } from "./execution/liveTradingPermission";
 import { LiveReadinessReportService } from "./execution/liveReadinessReport";
 import { OrderPreviewService } from "./execution/orderPreview";
+import { ProductionResilienceService } from "./execution/productionResilience";
 import { ExecutionRiskService } from "./execution/riskControls";
+import { JsonFileReliabilityStateStore } from "./execution/reliabilityStateStore";
 import { OandaSandboxAdapter } from "./execution/sandboxAdapters";
+import { eventLogService } from "./eventLogService";
+import { buildControlledLiveSequence } from "../shared/controlledLiveWorkflow";
 
 const now = new Date();
 const quizService = new LiveSafetyQuizService();
@@ -21,6 +29,7 @@ const failedQuiz = quizService.grade({}, now);
 assert.equal(failedQuiz.passed, false);
 
 const permissionService = new LiveTradingPermissionService();
+const workflowService = new ControlledLiveWorkflowService();
 const permissionInput = {
   userId: "user-v3",
   proficiencyScore: 92,
@@ -40,6 +49,7 @@ const permissionInput = {
   brokerCredentialsEncrypted: true,
   sessionMfaVerified: true,
 };
+workflowService.gradeQuiz(permissionInput.userId, correctAnswers, now);
 const permission = permissionService.evaluate(permissionInput, now);
 assert.equal(permission.allowed, true);
 assert.equal(permission.productionLiveSubmissionAllowed, false);
@@ -71,6 +81,17 @@ const preview = previewService.create({
   provider: "oanda_sandbox",
   environment: "sandbox",
 }, now);
+workflowService.evaluatePermission(permissionInput, now);
+const workflowPreview = workflowService.createPreview({
+  request,
+  accountEquity: 100_000,
+  currentPortfolioExposure: 20_000,
+  estimatedSpread: 0.0001,
+  commissionRate: 0.00002,
+  estimatedSlippageRate: 0.00005,
+  invalidationRule: "Close below the London range low",
+  provider: "oanda_sandbox",
+}, now);
 assert.equal(preview.instrument, "EUR/USD");
 assert.equal(preview.quantity, 10_000);
 assert.ok(preview.notionalValue > 0);
@@ -78,6 +99,7 @@ assert.ok(preview.estimatedMargin > 0);
 assert.ok(preview.maxLossEstimate > 0);
 assert.equal(preview.confirmationText, LIVE_CONFIRMATION_PHRASE);
 assert.equal(preview.submissionAllowed, false);
+assert.equal(workflowPreview.instrument, preview.instrument);
 
 const confirmationService = new FinalConfirmationService();
 const confirmation = confirmationService.confirm({
@@ -90,8 +112,81 @@ const confirmation = confirmationService.confirm({
   confirmationPhrase: LIVE_CONFIRMATION_PHRASE,
   currentTimestamp: now.toISOString(),
 }, now);
+const workflowConfirmation = workflowService.confirm({
+  orderPreviewId: workflowPreview.id,
+  userId: "user-v3",
+  brokerAccountId: "oanda-sandbox-account",
+  riskSummaryHash: workflowPreview.riskSummaryHash,
+  confirmationPhrase: LIVE_CONFIRMATION_PHRASE,
+  currentTimestamp: now.toISOString(),
+}, now);
 assert.equal(confirmation.accepted, true);
 assert.equal(confirmation.singleUse, true);
+assert.equal(workflowConfirmation.accepted, true);
+const workflowSnapshot = workflowService.snapshot("user-v3");
+assert.equal(workflowSnapshot.quizPassed, true);
+assert.equal(workflowSnapshot.permission?.allowed, true);
+assert.equal(workflowSnapshot.previewCount, 1);
+assert.equal(workflowSnapshot.confirmationCount, 1);
+assert.equal(workflowSnapshot.productionLiveSubmissionAllowed, false);
+assert.equal(workflowSnapshot.requiredConfirmationPhrase, LIVE_CONFIRMATION_PHRASE);
+const workflowHistory = await workflowService.history({
+  userId: "user-v3",
+  previewId: workflowPreview.id,
+  correlationId: workflowPreview.correlationId,
+});
+const expectedDurability = Boolean(eventLogService.persistenceHealth().configured && eventLogService.persistenceHealth().store?.status === "healthy");
+assert.ok(workflowHistory.some((entry) => entry.type === "controlled_live.quiz_recorded"));
+assert.ok(workflowHistory.some((entry) => entry.type === "controlled_live.permission_evaluated"));
+assert.ok(workflowHistory.some((entry) => entry.type === "controlled_live.preview_created"));
+assert.ok(workflowHistory.some((entry) => entry.type === "controlled_live.confirmation_recorded"));
+assert.ok(workflowHistory.every((entry) => entry.durable === expectedDurability));
+const liveSequence = buildControlledLiveSequence(workflowHistory);
+assert.equal(liveSequence.steps[0].completed, true);
+assert.equal(liveSequence.steps[1].completed, true);
+assert.equal(liveSequence.steps[2].completed, true);
+assert.equal(liveSequence.steps[3].completed, true);
+assert.equal(liveSequence.currentStepLabel, "Workflow complete");
+assert.equal(liveSequence.workflowComplete, true);
+assert.equal(liveSequence.completedStepCount, 4);
+assert.equal(liveSequence.totalStepCount, 4);
+assert.equal(liveSequence.latestTransitionAt, workflowHistory[0]?.createdAt ?? null);
+const workflowStateDir = mkdtempSync(join(tmpdir(), "marketpilot-controlled-live-"));
+const workflowStateFile = join(workflowStateDir, "workflow-state.json");
+try {
+  const persistentStore = new JsonFileReliabilityStateStore(workflowStateFile);
+  const persistentWorkflow = new ControlledLiveWorkflowService(persistentStore);
+  persistentWorkflow.gradeQuiz("persisted-user", correctAnswers, now);
+  persistentWorkflow.evaluatePermission({ ...permissionInput, userId: "persisted-user" }, now);
+  const persistedPreview = persistentWorkflow.createPreview({
+    request,
+    accountEquity: 100_000,
+    currentPortfolioExposure: 20_000,
+    estimatedSpread: 0.0001,
+    commissionRate: 0.00002,
+    estimatedSlippageRate: 0.00005,
+    invalidationRule: "Close below the London range low",
+    provider: "oanda_sandbox",
+  }, now);
+  const persistedConfirmation = persistentWorkflow.confirm({
+    orderPreviewId: persistedPreview.id,
+    userId: "persisted-user",
+    brokerAccountId: "oanda-sandbox-account",
+    riskSummaryHash: persistedPreview.riskSummaryHash,
+    confirmationPhrase: LIVE_CONFIRMATION_PHRASE,
+    currentTimestamp: now.toISOString(),
+  }, now);
+  const reloadedWorkflow = new ControlledLiveWorkflowService(new JsonFileReliabilityStateStore(workflowStateFile));
+  const reloadedSnapshot = reloadedWorkflow.snapshot("persisted-user");
+  assert.equal(reloadedSnapshot.quizPassed, true);
+  assert.equal(reloadedSnapshot.permission?.allowed, true);
+  assert.equal(reloadedSnapshot.previewCount, 1);
+  assert.equal(reloadedSnapshot.confirmationCount, 1);
+  assert.equal(reloadedSnapshot.latestPreview?.id, persistedPreview.id);
+  assert.equal(reloadedSnapshot.latestConfirmation?.id, persistedConfirmation.id);
+} finally {
+  rmSync(workflowStateDir, { recursive: true, force: true });
+}
 assert.equal(confirmationService.confirm({
   orderPreviewId: preview.id,
   previewExpiresAt: preview.expiresAt,
@@ -161,12 +256,38 @@ assert.equal(emergencyReport.signalsFrozen, true);
 assert.equal(disconnected, true);
 
 const reportService = new LiveReadinessReportService();
+const resilienceService = new ProductionResilienceService();
+const resilienceReady = resilienceService.evaluate({
+  observabilityConfigured: true,
+  incidentResponseRunbookAcknowledged: true,
+  incidentResponseDrillComplete: true,
+  disasterRecoveryBackupConfigured: true,
+  disasterRecoveryRestoreTestComplete: true,
+  providerRecoveryTelemetryVisible: true,
+  auditExportReplicationConfigured: true,
+  emergencyControlsAvailable: true,
+});
+assert.equal(resilienceReady.ready, true);
+const resilienceBlocked = resilienceService.evaluate({
+  observabilityConfigured: false,
+  incidentResponseRunbookAcknowledged: false,
+  incidentResponseDrillComplete: false,
+  disasterRecoveryBackupConfigured: false,
+  disasterRecoveryRestoreTestComplete: false,
+  providerRecoveryTelemetryVisible: false,
+  auditExportReplicationConfigured: false,
+  emergencyControlsAvailable: false,
+});
+assert.equal(resilienceBlocked.ready, false);
+
 const sandboxReport = reportService.generate({
   permission,
   strategyReady: true,
   brokerReady: true,
   riskPrecheckApproved: true,
   riskLimitsConfigured: true,
+  marketRulesReady: true,
+  resilienceReady: true,
   credentialsEncrypted: true,
   mfaVerified: true,
   complianceReady: true,
@@ -184,6 +305,8 @@ assert.equal(reportService.generate({
   brokerReady: true,
   riskPrecheckApproved: true,
   riskLimitsConfigured: true,
+  marketRulesReady: true,
+  resilienceReady: true,
   credentialsEncrypted: true,
   mfaVerified: true,
   complianceReady: true,
@@ -200,6 +323,8 @@ const blockedReport = reportService.generate({
   brokerReady: false,
   riskPrecheckApproved: false,
   riskLimitsConfigured: false,
+  marketRulesReady: false,
+  resilienceReady: false,
   credentialsEncrypted: false,
   mfaVerified: false,
   complianceReady: false,

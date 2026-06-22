@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type { OrderRequest, Position } from "./domain";
+import { governanceRepository, type GovernanceRepository } from "./governanceRepository";
 
 export type LimitedAutonomyPolicy = {
   enabled: boolean;
@@ -117,10 +118,27 @@ export type ExecutionAuditEntry = {
 
 export class ExecutionAuditLog {
   private entries: ExecutionAuditEntry[] = [];
+  private pending = new Set<Promise<unknown>>();
+  private persistenceFailures = 0;
+  private lastPersistenceError: string | null = null;
+
+  constructor(private readonly repository?: GovernanceRepository) {}
 
   append(entry: Omit<ExecutionAuditEntry, "id" | "createdAt">) {
     const saved = { ...entry, id: randomUUID(), createdAt: new Date().toISOString() };
     this.entries.push(saved);
+    if (this.repository) {
+      const persistence = this.repository.saveExecutionAudit(saved);
+      this.pending.add(persistence);
+      void persistence.then(
+        () => this.pending.delete(persistence),
+        (error) => {
+          this.pending.delete(persistence);
+          this.persistenceFailures += 1;
+          this.lastPersistenceError = error instanceof Error ? error.message : "Execution audit persistence failed";
+        },
+      );
+    }
     return saved;
   }
 
@@ -130,6 +148,29 @@ export class ExecutionAuditLog {
 
   clearForTest() {
     this.entries = [];
+  }
+
+  async flushPersistence() {
+    await Promise.all(Array.from(this.pending));
+    if (this.persistenceFailures > 0) throw new Error(this.lastPersistenceError ?? "Execution audit persistence is incomplete");
+  }
+
+  async durableList() {
+    await this.flushPersistence();
+    if (!this.repository) return this.list();
+    const persisted = await this.repository.listExecutionAudits();
+    const combined = new Map<string, ExecutionAuditEntry>();
+    [...persisted, ...this.entries].forEach((entry) => combined.set(entry.id, entry as ExecutionAuditEntry));
+    return Array.from(combined.values()).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  persistenceHealth() {
+    return {
+      configured: Boolean(this.repository),
+      repository: this.repository?.health() ?? null,
+      failureCount: this.persistenceFailures,
+      lastError: this.lastPersistenceError,
+    };
   }
 }
 
@@ -158,4 +199,4 @@ function round(value: number) {
 }
 
 export const executionRiskService = new ExecutionRiskService();
-export const executionAuditLog = new ExecutionAuditLog();
+export const executionAuditLog = new ExecutionAuditLog(governanceRepository);

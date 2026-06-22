@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AutomationLevelService } from "./execution/automationLevels";
+import { AUTOMATION_LEVEL_ACKNOWLEDGEMENT, AutomationLevelService } from "./execution/automationLevels";
 import { BrokerConnectionReadinessService } from "./execution/brokerConnectionReadiness";
 import { selectExecutionCenterData } from "./execution/executionCenter";
 import { commodityPositionSizingEngine, forexPositionSizingEngine } from "./execution/positionSizing";
@@ -27,14 +27,69 @@ assert.equal(rejectedValidation.verdict, "reject");
 assert.equal(rejectedValidation.tradeCountSufficiency, 0);
 
 const automation = new AutomationLevelService();
-assert.equal(automation.snapshot().level, 1);
+assert.equal(automation.snapshot().level, 0);
+assert.equal(automation.allows("signals"), false);
 assert.equal(automation.allows("paper_auto_entry"), false);
 automation.setLevel(4);
 assert.equal(automation.allows("paper_auto_entry"), true);
 assert.equal(automation.allows("paper_auto_exit"), true);
+assert.equal(automation.allows("sandbox_execution"), true);
 assert.equal(automation.allows("supervised_live_preview"), false);
 automation.setLevel(5);
 assert.equal(automation.snapshot().userConfirmationRequired, true);
+assert.equal(automation.snapshot().liveOrderSubmissionAllowed, false);
+
+const gatedAutomation = new AutomationLevelService();
+assert.equal(gatedAutomation.requestTransition({
+  targetLevel: 1,
+  actorId: "operator",
+  acknowledgement: "",
+  registeredStrategyCount: 0,
+  validatedStrategyCount: 0,
+  constraintsConfigured: false,
+  monitoringEnabled: true,
+  killSwitchAvailable: true,
+  sandboxReady: false,
+  supervisedPermissionActive: false,
+  semiAutonomousApproved: false,
+  auditExportReady: false,
+  semiAutonomousScope: null,
+}).changed, false);
+assert.equal(gatedAutomation.snapshot().level, 0);
+assert.equal(gatedAutomation.requestTransition({
+  targetLevel: 1,
+  actorId: "operator",
+  acknowledgement: AUTOMATION_LEVEL_ACKNOWLEDGEMENT,
+  registeredStrategyCount: 0,
+  validatedStrategyCount: 0,
+  constraintsConfigured: false,
+  monitoringEnabled: true,
+  killSwitchAvailable: true,
+  sandboxReady: false,
+  supervisedPermissionActive: false,
+  semiAutonomousApproved: false,
+  auditExportReady: false,
+  semiAutonomousScope: null,
+}).changed, true);
+assert.equal(gatedAutomation.requestTransition({
+  targetLevel: 3,
+  actorId: "operator",
+  acknowledgement: AUTOMATION_LEVEL_ACKNOWLEDGEMENT,
+  registeredStrategyCount: 1,
+  validatedStrategyCount: 1,
+  constraintsConfigured: true,
+  monitoringEnabled: true,
+  killSwitchAvailable: true,
+  sandboxReady: true,
+  supervisedPermissionActive: false,
+  semiAutonomousApproved: false,
+  auditExportReady: false,
+  semiAutonomousScope: null,
+}).changed, false);
+automation.setLevel(6);
+assert.equal(automation.allows("bounded_semi_autonomous_candidate"), true);
+assert.equal(automation.snapshot().configuredConstraintsRequired, true);
+assert.equal(automation.snapshot().continuousMonitoringRequired, true);
 assert.equal(automation.snapshot().liveOrderSubmissionAllowed, false);
 
 const lifecycleService = new TradeLifecycleService();

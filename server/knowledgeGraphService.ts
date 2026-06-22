@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type { KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeGraphReport, MarketPilotOverview } from "@shared/schema";
+import { predictionReviewService } from "./predictionReviewService";
 
 export class KnowledgeGraphService {
   build(overview: MarketPilotOverview, startNodeId: string | null = null, now = new Date()): KnowledgeGraphReport {
@@ -41,11 +42,11 @@ export class KnowledgeGraphService {
           id: `asset-${report.asset}`,
           type: "Asset",
           label: report.asset,
-        timestamp: report.generatedAt,
-        confidence: 75,
-        sourceCount: report.verification.sources.length,
-        metadata: {},
-      });
+          timestamp: report.generatedAt,
+          confidence: 75,
+          sourceCount: report.verification.sources.length,
+          metadata: {},
+        });
         addEdge({ from: reportId, to: `asset-${report.asset}`, type: "references", confidence: report.confidence });
       }
       for (const contradiction of report.verification.contradictoryEvidence) {
@@ -111,6 +112,34 @@ export class KnowledgeGraphService {
         });
         addEdge({ from: lessonId, to: `journal-${entry.id}`, type: "learned_from", confidence: entry.qualityScore });
       }
+    }
+
+    for (const review of predictionReviewService.listReviews()) {
+      const reviewNodeId = `prediction-review-${review.predictionId}`;
+      const lessonNodeId = `prediction-lesson-${review.predictionId}`;
+      addNode({
+        id: reviewNodeId,
+        type: "AgentDecision",
+        label: `Prediction review: ${review.predictionId}`,
+        timestamp: review.reviewedAt,
+        confidence: review.confidence,
+        sourceCount: review.whatWasMissed.length,
+        metadata: {
+          reviewId: review.id,
+          updatedLesson: review.updatedLesson,
+          futureRuleAdjustment: review.futureRuleAdjustment,
+        },
+      });
+      addNode({
+        id: lessonNodeId,
+        type: "LessonLearned",
+        label: review.updatedLesson,
+        timestamp: review.reviewedAt,
+        confidence: review.confidence,
+        sourceCount: review.whatWasMissed.length,
+        metadata: { predictionId: review.predictionId, reviewId: review.id },
+      });
+      addEdge({ from: reviewNodeId, to: lessonNodeId, type: "learned_from", confidence: review.confidence });
     }
 
     const traversalStart = startNodeId && nodes.some((node) => node.id === startNodeId) ? startNodeId : nodes[0]?.id ?? null;

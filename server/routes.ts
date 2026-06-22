@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { backtestRequestSchema, complianceAcknowledgementSubmissionSchema, journalReviewSubmissionSchema, optionsSimulationRequestSchema, paperTradeCloseRequestSchema, paperTradeFillRequestSchema, predictionReviewSubmissionSchema, quizSubmissionSchema, riskSettingsUpdateSchema, tradeTicketProposalSchema, tradingAssistantRequestSchema } from "@shared/schema";
@@ -24,9 +24,14 @@ import { getStorageHealth } from "./storageMode";
 import { providerRegistryService } from "./providerRegistryService";
 import { agentMemoryService } from "./memoryService";
 import { eventLogService } from "./eventLogService";
-import { metricsService } from "./metricsService";
+import { metricsService, renderPrometheusMetrics } from "./metricsService";
 import { knowledgeGraphService } from "./knowledgeGraphService";
+import { knowledgeGraphArchiveService } from "./knowledgeGraphArchiveService";
 import { institutionalAnalyticsService } from "./institutionalAnalyticsService";
+import { institutionalAnalyticsArchiveService } from "./institutionalAnalyticsArchiveService";
+import { modelValidationBenchmarkService } from "./modelValidationBenchmarkService";
+import { traceService } from "./traceService";
+import { otelTraceService } from "./otelTraceService";
 import { aiProvider } from "./aiProviderService";
 import { supervisorRuntime } from "./supervisorRuntimeService";
 import { ragContextBuilder } from "./ragService";
@@ -52,7 +57,7 @@ import { paperAutomationService } from "./execution/paperAutomation";
 import { paperExecutionProvider } from "./execution/providers";
 import { DEFAULT_AUTONOMY_POLICY, executionAuditLog, executionRiskService, summarizePositions } from "./execution/riskControls";
 import { evaluateLiveReadiness } from "./execution/liveReadiness";
-import { automationLevelSchema, automationLevelService } from "./execution/automationLevels";
+import { AUTOMATION_LEVEL_ACKNOWLEDGEMENT, automationLevelSchema, automationLevelService } from "./execution/automationLevels";
 import { strategyValidationInputSchema } from "./execution/strategyValidation";
 import { executionRiskPrecheckService } from "./execution/riskPrecheck";
 import { brokerConnectionReadinessService } from "./execution/brokerConnectionReadiness";
@@ -69,6 +74,35 @@ import { liveTradingPermissionService } from "./execution/liveTradingPermission"
 import { liveReadinessReportService } from "./execution/liveReadinessReport";
 import { EmergencyControlService } from "./execution/emergencyControls";
 import { sandboxBrokerAdapters } from "./execution/sandboxAdapters";
+import { sandboxBrokerRuntime, sandboxConfirmedSubmitSchema, sandboxIdempotencyResolutionSchema, sandboxPreviewSchema, sandboxProviderSchema } from "./execution/sandboxBrokerRuntime";
+import { SandboxBrokerError } from "./execution/brokerFailures";
+import { accountSyncService } from "./execution/accountSyncService";
+import { selectSandboxExecutionCenterData } from "./execution/sandboxExecutionCenter";
+import { sandboxExecutionMetrics } from "./execution/sandboxMetrics";
+import { liveDataPaperOpsRuntime, operationalStrategySchema } from "./execution/liveDataPaperOpsRuntime";
+import { selectStrategyPerformanceDashboard } from "./execution/strategyPerformanceDashboard";
+import { economicEventRiskService } from "./execution/economicEventRiskService";
+import { paperStrategyRuntime } from "./execution/paperStrategyRuntime";
+import { strategyAdaptationService } from "./execution/strategyAdaptationService";
+import { postTradeReviewService } from "./execution/postTradeReviewService";
+import { strategyEvidenceStore } from "./execution/strategyEvidenceStore";
+import { z } from "zod";
+import { MetaTraderBridgePriceFeedProvider, OandaPracticePriceFeedProvider, priceFeedService } from "./execution/priceFeedService";
+import { strategyLifecycleMonitorService } from "./execution/strategyLifecycleMonitorService";
+import { marketSessionRulesService } from "./execution/marketSessionRules";
+import { reliabilityStateStore } from "./execution/reliabilityStateStore";
+import { providerRecoveryTelemetry } from "./execution/providerRecoveryTelemetry";
+import { productionResilienceService } from "./execution/productionResilience";
+import { productionResilienceEvidenceSchema, productionResilienceEvidenceService } from "./execution/productionResilienceEvidence";
+import {
+  semiAutonomousApprovalService,
+  semiAutonomousRequestSchema,
+  semiAutonomousReviewSchema,
+} from "./execution/semiAutonomousApprovalService";
+import { strategyLabService } from "./execution/strategyLabService";
+import { auditExportService } from "./execution/auditExportService";
+import { telegramBotService } from "./telegramService";
+import { demoRunService } from "./demoRunService";
 
 const emergencyControlService = new EmergencyControlService(
   executionRiskService,
@@ -84,6 +118,11 @@ export async function registerRoutes(
     windowMs: 60_000,
     maxRequests: 30,
     keyPrefix: "tradingview-webhook",
+  });
+  const telegramRateLimiter = createApiRateLimiter({
+    windowMs: 60_000,
+    maxRequests: 20,
+    keyPrefix: "telegram-webhook",
   });
 
   app.get("/api/health", async (_req, res) => {
@@ -106,6 +145,52 @@ export async function registerRoutes(
     res.json(providerRegistryService.getSnapshot());
   });
 
+  app.get("/api/marketpilot/telegram/status", async (_req, res) => {
+    res.json(telegramBotService.status());
+  });
+
+  app.get("/api/marketpilot/demo-run/status", async (_req, res) => {
+    res.json(await demoRunService.status());
+  });
+
+  app.get("/api/marketpilot/demo-run/telemetry", async (_req, res) => {
+    res.json(await demoRunService.telemetry());
+  });
+
+  app.get("/api/marketpilot/demo-run/report", async (_req, res) => {
+    res.json(await demoRunService.report());
+  });
+
+  app.get("/api/marketpilot/demo-run/export", async (_req, res) => {
+    res.json(await demoRunService.export());
+  });
+
+  app.post("/api/marketpilot/demo-run/start", async (_req, res) => {
+    res.json(await demoRunService.start());
+  });
+
+  app.post("/api/marketpilot/demo-run/pause", async (_req, res) => {
+    res.json(await demoRunService.pause());
+  });
+
+  app.post("/api/marketpilot/demo-run/resume", async (_req, res) => {
+    res.json(await demoRunService.resume());
+  });
+
+  app.post("/api/marketpilot/demo-run/stop", async (_req, res) => {
+    res.json(await demoRunService.stop());
+  });
+
+  app.post("/api/marketpilot/demo-run/screen-visit", async (req, res) => {
+    const screen = typeof req.body?.screen === "string" ? req.body.screen : "";
+    if (screen.trim()) await demoRunService.recordScreenVisit(screen);
+    res.json({ accepted: true, screen: screen.trim() || null });
+  });
+
+  app.get("/api/marketpilot/connectors", async (_req, res) => {
+    res.json(telegramBotService.connectorRegistry());
+  });
+
   app.get("/api/health/security", async (_req, res) => {
     const overview = await storage.getMarketPilotOverview();
     const brokerReadiness = brokerReadinessService.evaluate(overview);
@@ -125,19 +210,42 @@ export async function registerRoutes(
   });
 
   app.get("/api/metrics", async (_req, res) => {
-    const overview = await storage.getMarketPilotOverview();
-    const verificationQuality = verificationQualityService.evaluate(overview);
-    res.json(metricsService.snapshot({ overview, verificationQuality }));
+    res.json(await loadMetricsSnapshot());
+  });
+
+  app.get("/api/metrics/prometheus", async (_req, res) => {
+    const snapshot = await loadMetricsSnapshot();
+    res.type("text/plain; version=0.0.4; charset=utf-8").send(renderPrometheusMetrics(snapshot));
   });
 
   app.get("/api/marketpilot/event-log", async (_req, res) => {
     res.json(eventLogService.snapshot());
   });
 
+  app.get("/api/marketpilot/event-log/export", async (_req, res) => {
+    res.type("text/plain; charset=utf-8").send(eventLogService.exportJsonLines());
+  });
+
   app.get("/api/marketpilot/memory/health", async (_req, res) => {
     const overview = await storage.getMarketPilotOverview();
-    agentMemoryService.hydrateFromOverview(overview);
+    await agentMemoryService.hydrateFromOverview(overview);
     res.json(agentMemoryService.health());
+  });
+
+  app.get("/api/marketpilot/memory/recall", async (req, res) => {
+    const query = typeof req.query.query === "string" ? req.query.query.trim() : "";
+    if (!query) {
+      res.status(400).json({ message: "query is required" });
+      return;
+    }
+    const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : 3;
+    const overview = await storage.getMarketPilotOverview();
+    await agentMemoryService.hydrateFromOverview(overview);
+    res.json({
+      generatedAt: new Date().toISOString(),
+      query,
+      items: agentMemoryService.recall(query, Number.isFinite(limit) && limit > 0 ? Math.min(limit, 10) : 3),
+    });
   });
 
   app.get("/api/marketpilot/ai/status", async (_req, res) => {
@@ -153,8 +261,34 @@ export async function registerRoutes(
     res.json(await ragContextBuilder.build(await storage.getMarketPilotOverview(), query));
   });
 
+  app.get("/api/marketpilot/rag/archive", async (_req, res) => {
+    const [runs, documents] = await Promise.all([
+      storage.getRagRuns(),
+      storage.getRagDocuments(),
+    ]);
+    res.json({
+      generatedAt: new Date().toISOString(),
+      runs,
+      documents,
+    });
+  });
+
+  app.get("/api/marketpilot/ai/evaluations/archive", async (_req, res) => {
+    res.json({
+      generatedAt: new Date().toISOString(),
+      evaluations: await storage.getAiEvaluations(),
+    });
+  });
+
   app.get("/api/marketpilot/vector-store/health", async (_req, res) => {
     res.json(vectorStore.health());
+  });
+
+  app.get("/api/marketpilot/vector-store/archive", async (_req, res) => {
+    res.json({
+      generatedAt: new Date().toISOString(),
+      records: await vectorStore.list(100),
+    });
   });
 
   app.get("/api/marketpilot/cache/health", async (_req, res) => {
@@ -163,6 +297,16 @@ export async function registerRoutes(
 
   app.get("/api/marketpilot/timeseries/health", async (_req, res) => {
     res.json(timeSeriesStore.health());
+  });
+
+  app.get("/api/marketpilot/timeseries/archive", async (_req, res) => {
+    res.json({
+      generatedAt: new Date().toISOString(),
+      priceBars: await timeSeriesStore.listPriceBars(50),
+      economicObservations: await timeSeriesStore.listEconomicObservations(50),
+      optionsSnapshots: await timeSeriesStore.listOptionsSnapshots(50),
+      ingestionRuns: await timeSeriesStore.listIngestionRuns(50),
+    });
   });
 
   app.get("/api/marketpilot/public-providers/health", async (_req, res) => {
@@ -177,6 +321,13 @@ export async function registerRoutes(
     const assets = Array.isArray(req.body?.assets) ? req.body.assets.filter((asset: unknown): asset is string => typeof asset === "string") : undefined;
     const dryRun = Boolean(req.body?.dryRun);
     res.status(201).json(await ingestionRunnerService.run({ providers, assets, dryRun }));
+  });
+
+  app.get("/api/marketpilot/ingestion/archive", async (_req, res) => {
+    res.json({
+      generatedAt: new Date().toISOString(),
+      runs: await storage.getIngestionRuns(),
+    });
   });
 
   app.get("/api/marketpilot/event-log-store/health", async (_req, res) => {
@@ -201,16 +352,62 @@ export async function registerRoutes(
 
   app.post("/api/marketpilot/ai/research-draft", async (req, res) => {
     const symbol = typeof req.body?.symbol === "string" ? req.body.symbol : "SPY";
-    res.status(201).json(await aiResearchDraftService.generate(await storage.getMarketPilotOverview(), symbol));
+    const overview = await storage.getMarketPilotOverview();
+    const result = await aiResearchDraftService.generate(overview, symbol);
+    await aiResearchDraftService.persistDraft(result, overview.user.id);
+    res.status(201).json(result);
   });
 
   app.get("/api/marketpilot/knowledge-graph", async (req, res) => {
     const start = typeof req.query.start === "string" ? req.query.start : null;
-    res.json(knowledgeGraphService.build(await storage.getMarketPilotOverview(), start));
+    const overview = await storage.getMarketPilotOverview();
+    const report = knowledgeGraphService.build(overview, start);
+    knowledgeGraphArchiveService.record(report, overview);
+    res.json(report);
+  });
+
+  app.get("/api/marketpilot/knowledge-graph/archive", async (_req, res) => {
+    res.json({ events: knowledgeGraphArchiveService.latest() });
   });
 
   app.get("/api/marketpilot/analytics/institutional", async (_req, res) => {
-    res.json(institutionalAnalyticsService.snapshot(await storage.getMarketPilotOverview()));
+    const overview = await storage.getMarketPilotOverview();
+    const snapshot = institutionalAnalyticsService.snapshot(overview);
+    institutionalAnalyticsArchiveService.record(snapshot, overview);
+    res.json(snapshot);
+  });
+
+  app.get("/api/marketpilot/analytics/archive", async (_req, res) => {
+    res.json({ events: institutionalAnalyticsArchiveService.latest() });
+  });
+
+  app.get("/api/marketpilot/analytics/model-validation", async (_req, res) => {
+    const overview = await storage.getMarketPilotOverview();
+    const report = modelValidationBenchmarkService.run(overview);
+    modelValidationBenchmarkService.record(report, overview);
+    res.json(report);
+  });
+
+  app.get("/api/marketpilot/analytics/model-validation/archive", async (_req, res) => {
+    res.json({ events: modelValidationBenchmarkService.latest() });
+  });
+
+  app.get("/api/marketpilot/traces/:correlationId", async (req, res) => {
+    const correlationId = String(req.params.correlationId || "").trim();
+    if (!correlationId) {
+      res.status(400).json({ message: "Correlation ID is required" });
+      return;
+    }
+    res.json(await traceService.build(correlationId));
+  });
+
+  app.get("/api/marketpilot/traces/:correlationId/otel", async (req, res) => {
+    const correlationId = String(req.params.correlationId || "").trim();
+    if (!correlationId) {
+      res.status(400).json({ message: "Correlation ID is required" });
+      return;
+    }
+    res.json(await otelTraceService.build(correlationId));
   });
 
   app.get("/api/marketpilot/analytics/correlations", async (_req, res) => {
@@ -287,6 +484,8 @@ export async function registerRoutes(
 
   app.get("/api/marketpilot/assistant/opportunities", async (_req, res) => {
     const overview = await storage.getMarketPilotOverview();
+    const insight = predictionReviewService.insights(1);
+    const memoryLesson = insight.topThemes[0]?.latestUpdatedLesson ?? insight.recentRules[0]?.updatedLesson ?? null;
     const ranked = signalPriorityService.rank([
       ...overview.researchReports.map((report) => ({
         id: `research-${report.id}`,
@@ -320,7 +519,7 @@ export async function registerRoutes(
         actionability: ticket.status === "risk_rejected" ? 35 : 70,
         details: [...ticket.supportingEvidence, ...ticket.riskCheck.reasons],
       })),
-    ]);
+    ], 12, { memoryLesson });
 
     res.json({
       primary: informationRelevanceFilter.primary(ranked),
@@ -348,6 +547,10 @@ export async function registerRoutes(
 
   app.get("/api/marketpilot/assistant/prediction-reviews", async (_req, res) => {
     res.json(predictionReviewService.listReviews());
+  });
+
+  app.get("/api/marketpilot/assistant/prediction-insights", async (_req, res) => {
+    res.json(predictionReviewService.insights());
   });
 
   app.post("/api/marketpilot/assistant/prediction-reviews", async (req, res) => {
@@ -457,10 +660,12 @@ export async function registerRoutes(
 
   app.get("/api/marketpilot/alerts", async (_req, res) => {
     const overview = await storage.getMarketPilotOverview();
-    res.json(alertService.evaluateAlerts({
+    const alerts = alertService.evaluateAlerts({
       overview,
       events: eventCalendarService.getUpcomingEvents(),
-    }));
+    });
+    void Promise.all(alerts.map((alert) => telegramBotService.notifyAlert(alert)));
+    res.json(alerts);
   });
 
   app.get("/api/marketpilot/ingestion/snapshot", async (_req, res) => {
@@ -628,7 +833,15 @@ export async function registerRoutes(
       return;
     }
 
-    res.json(backtestingService.run(parsed.data));
+    const result = backtestingService.run(parsed.data);
+    strategyEvidenceStore.recordBacktestResult(parsed.data.strategyName, {
+      verdict: result.maxDrawdownPct > 20 ? "watch" : result.sharpeRatio < 0 ? "retire" : "healthy",
+      summary: `Backtest from ${result.startYear} to ${result.endYear} ended at ${result.finalValue}.`,
+      symbol: parsed.data.allocation[0]?.symbol ?? null,
+      regime: "backtest",
+      evidence: result,
+    });
+    res.json(result);
   });
 
   app.post("/api/marketpilot/backtests/markets", async (req, res) => {
@@ -637,12 +850,44 @@ export async function registerRoutes(
       res.status(400).json({ message: "Invalid forex/commodity backtest", issues: parsed.error.flatten() });
       return;
     }
-    res.json(marketBacktestingService.run(parsed.data));
+    const result = marketBacktestingService.run(parsed.data);
+    strategyEvidenceStore.recordBacktestResult(parsed.data.strategyName, {
+      verdict: result.maxDrawdownPct > 20 ? "watch" : "healthy",
+      summary: `Market backtest completed for ${parsed.data.strategyName} on ${parsed.data.instrument}.`,
+      symbol: parsed.data.instrument,
+      regime: "market_backtest",
+      evidence: result,
+    });
+    res.json(result);
   });
 
   app.post("/api/webhooks/tradingview", tradingViewRateLimiter, async (req, res) => {
     const result = tradingViewWebhookProvider.receive(req.body);
     res.status(result.accepted ? 202 : 400).json(result);
+  });
+
+  app.post("/api/telegram/webhook", telegramRateLimiter, async (req, res) => {
+    const secretHeader = req.header("X-Telegram-Bot-Api-Secret-Token") ?? undefined;
+    const result = await telegramBotService.handleWebhook(req.body, secretHeader);
+    res.status(result.status).json({
+      accepted: result.accepted,
+      reason: result.reason ?? null,
+      correlationId: result.correlationId,
+      productionLiveExecutionBlocked: true,
+    });
+  });
+
+  app.post("/api/telegram/set-webhook", async (_req, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.MARKETPILOT_ALLOW_TELEGRAM_WEBHOOK_SETUP !== "true") {
+      res.status(403).json({ message: "Telegram webhook setup is disabled in production." });
+      return;
+    }
+    const result = await telegramBotService.setWebhook();
+    res.status(result.ok ? 201 : 400).json({
+      ok: result.ok,
+      reason: result.reason,
+      productionLiveExecutionBlocked: true,
+    });
   });
 
   app.get("/api/marketpilot/execution/instruments", async (_req, res) => {
@@ -675,17 +920,204 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/marketpilot/strategy-validation", async (req, res) => {
+    const parsed = strategyValidationInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid strategy validation request", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      res.json(paperAutomationService.validateStrategy(parsed.data));
+    } catch (error) {
+      res.status(404).json({ message: error instanceof Error ? error.message : "Strategy validation failed" });
+    }
+  });
+
+  app.get("/api/marketpilot/strategy-lab", async (_req, res) => {
+    const [overview, journalReviews] = await Promise.all([
+      storage.getMarketPilotOverview(),
+      storage.getJournalReviews(),
+    ]);
+    const strategies = paperAutomationService.listStrategies();
+    const validations = paperAutomationService.listStrategyValidations();
+    const validationInputs = paperAutomationService.listStrategyValidationInputs();
+    const closedTrades = paperStrategyRuntime.listClosed();
+    const postTradeReviews = postTradeReviewService.list();
+    const predictionReviews = predictionReviewService.listReviews();
+    const adaptations = strategyAdaptationService.list();
+    const lifecycleReports = strategyLifecycleMonitorService.list();
+    res.json(strategyLabService.build({
+      strategies,
+      validationInputs,
+      scorecards: validations,
+      closedTrades,
+      postTradeReviews,
+      predictionReviews,
+      journalReviews,
+      adaptations,
+      lifecycleReports,
+    }, new Date(overview.auditLogs[0]?.createdAt ?? new Date().toISOString())));
+  });
+
+  app.get("/api/marketpilot/strategy-evidence", async (_req, res) => {
+    res.json(strategyEvidenceStore.snapshot());
+  });
+
+  app.get("/api/marketpilot/strategy-evidence/export", async (_req, res) => {
+    await strategyEvidenceStore.flushPersistence();
+    res.type("text/plain; charset=utf-8").send(strategyEvidenceStore.exportJsonLines());
+  });
+
   app.get("/api/marketpilot/execution/automation-level", async (_req, res) => {
-    res.json(automationLevelService.snapshot());
+    res.json({
+      ...automationLevelService.snapshot(),
+      semiAutonomousApproval: await semiAutonomousApprovalService.active(),
+    });
   });
 
   app.post("/api/marketpilot/execution/automation-level", async (req, res) => {
     const parsed = automationLevelSchema.safeParse(req.body?.level);
     if (!parsed.success) {
-      res.status(400).json({ message: "Automation level must be an integer from 0 through 5" });
+      res.status(400).json({ message: "Automation level must be an integer from 0 through 6" });
       return;
     }
-    res.status(201).json(automationLevelService.setLevel(parsed.data));
+    const actorId = typeof req.body?.actorId === "string" ? req.body.actorId : "";
+    const workflow = controlledLiveWorkflowService.snapshot(actorId || "unknown");
+    const configuredProviders = sandboxBrokerRuntime.configuredProviders();
+    const validations = paperAutomationService.listStrategyValidations();
+    const risk = executionRiskService.snapshot();
+    const activeSemiAutonomousApproval = await semiAutonomousApprovalService.active();
+    const activeStrategyIds = liveDataPaperOpsRuntime.snapshot().strategyOps
+      .filter((state) => state?.status === "active")
+      .map((state) => state!.strategyId);
+    const semiAutonomousScopeValid = Boolean(
+      activeSemiAutonomousApproval
+      && activeStrategyIds.every((strategyId) => activeSemiAutonomousApproval.scope.strategyIds.includes(strategyId))
+      && activeSemiAutonomousApproval.scope.maxDailyLoss <= risk.maxDailyLoss
+      && activeSemiAutonomousApproval.scope.sandboxOnly
+    );
+    const auditHealth = auditExportService.health();
+    const transition = automationLevelService.requestTransition({
+      targetLevel: parsed.data,
+      actorId,
+      acknowledgement: typeof req.body?.acknowledgement === "string" ? req.body.acknowledgement : "",
+      registeredStrategyCount: paperAutomationService.listStrategies().length + liveDataPaperOpsRuntime.snapshot().strategyOps.length,
+      validatedStrategyCount: validations.filter((item) => item.verdict !== "reject").length,
+      constraintsConfigured: risk.maxDailyLoss > 0,
+      monitoringEnabled: true,
+      killSwitchAvailable: true,
+      sandboxReady: configuredProviders.oandaPractice || configuredProviders.metaTraderDemo,
+      supervisedPermissionActive: Boolean(
+        workflow.permission?.allowed
+        && Date.parse(workflow.permission.expirationTimestamp) > Date.now()
+      ),
+      semiAutonomousApproved: semiAutonomousScopeValid,
+      auditExportReady: Boolean(
+        auditHealth.signingConfigured
+        && auditHealth.exportDirectoryConfigured
+        && auditHealth.repository.durable
+        && auditHealth.sourcePersistence.events.store?.provider === "postgres"
+        && auditHealth.sourcePersistence.events.failureCount === 0
+        && auditHealth.sourcePersistence.executionAudit.repository?.durable
+        && auditHealth.sourcePersistence.executionAudit.failureCount === 0
+      ),
+      semiAutonomousScope: activeSemiAutonomousApproval?.scope ?? null,
+    });
+    await liveDataPaperOpsRuntime.enforceAutomationLevel();
+    res.status(transition.changed ? 201 : 409).json({
+      ...transition,
+      requiredAcknowledgement: AUTOMATION_LEVEL_ACKNOWLEDGEMENT,
+      productionOrderSubmissionEnabled: false,
+    });
+  });
+
+  app.post("/api/marketpilot/execution/semi-autonomous-approvals", async (req, res) => {
+    const parsed = semiAutonomousRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid semi-autonomous approval request", issues: parsed.error.flatten() });
+      return;
+    }
+    res.status(201).json(await semiAutonomousApprovalService.request(parsed.data));
+  });
+
+  app.post("/api/marketpilot/execution/semi-autonomous-approvals/:id/reviews", async (req, res) => {
+    const parsed = semiAutonomousReviewSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid semi-autonomous review", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      res.status(201).json(await semiAutonomousApprovalService.review(req.params.id, parsed.data));
+    } catch (error) {
+      res.status(409).json({ message: error instanceof Error ? error.message : "Approval review failed" });
+    }
+  });
+
+  app.post("/api/marketpilot/execution/semi-autonomous-approvals/:id/revoke", async (req, res) => {
+    try {
+      const revoked = await semiAutonomousApprovalService.revoke(
+        req.params.id,
+        typeof req.body?.revokedBy === "string" ? req.body.revokedBy : "",
+        typeof req.body?.reason === "string" ? req.body.reason : "",
+      );
+      if (automationLevelService.snapshot().level === 6) {
+        automationLevelService.setLevel(0);
+        await liveDataPaperOpsRuntime.enforceAutomationLevel();
+      }
+      res.status(201).json(revoked);
+    } catch (error) {
+      res.status(409).json({ message: error instanceof Error ? error.message : "Approval revocation failed" });
+    }
+  });
+
+  app.get("/api/marketpilot/execution/semi-autonomous-approvals", async (_req, res) => {
+    res.json({
+      approvals: await semiAutonomousApprovalService.list(),
+      active: await semiAutonomousApprovalService.active(),
+      repository: semiAutonomousApprovalService.health(),
+      productionOrderSubmissionEnabled: false,
+    });
+  });
+
+  app.post("/api/marketpilot/execution/audit-exports", async (req, res) => {
+    try {
+      const result = await auditExportService.generate(
+        typeof req.body?.generatedBy === "string" ? req.body.generatedBy : "",
+      );
+      res.status(201).json(result);
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Audit export failed" });
+    }
+  });
+
+  app.get("/api/marketpilot/execution/audit-exports", async (_req, res) => {
+    res.json({
+      exports: await auditExportService.list(),
+      health: auditExportService.health(),
+    });
+  });
+
+  app.get("/api/marketpilot/execution/audit-exports/:id", async (req, res) => {
+    const bundle = await auditExportService.get(req.params.id);
+    if (!bundle) {
+      res.status(404).json({ message: "Audit export not found" });
+      return;
+    }
+    res.json({
+      ...bundle,
+      productionOrderSubmissionEnabled: false,
+    });
+  });
+
+  app.post("/api/marketpilot/execution/audit-exports/verify", async (req, res) => {
+    const artifact = req.body?.artifact;
+    const digest = typeof req.body?.digest === "string" ? req.body.digest : "";
+    const signature = typeof req.body?.signature === "string" ? req.body.signature : null;
+    if (!artifact || artifact.format !== "marketpilot-audit-export-v1" || !digest) {
+      res.status(400).json({ message: "artifact and digest are required" });
+      return;
+    }
+    res.json(auditExportService.verify(artifact, digest, signature));
   });
 
   app.post("/api/marketpilot/execution/paper/signals", async (req, res) => {
@@ -722,6 +1154,24 @@ export async function registerRoutes(
     }
     const permission = controlledLiveWorkflowService.evaluatePermission(parsed.data);
     res.status(permission.allowed ? 201 : 409).json(permission);
+  });
+
+  app.get("/api/marketpilot/execution/controlled-live-workflow", async (req, res) => {
+    const userId = typeof req.query.userId === "string" && req.query.userId.trim() ? req.query.userId : "demo-user";
+    res.json(controlledLiveWorkflowService.snapshot(userId));
+  });
+
+  app.get("/api/marketpilot/execution/controlled-live-workflow/history", async (req, res) => {
+    const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : 25;
+    const userId = typeof req.query.userId === "string" ? req.query.userId : null;
+    const previewId = typeof req.query.previewId === "string" ? req.query.previewId : null;
+    const correlationId = typeof req.query.correlationId === "string" ? req.query.correlationId : null;
+    res.json(await controlledLiveWorkflowService.history({
+      limit: Number.isFinite(limit) ? Math.max(1, Math.min(100, limit)) : 25,
+      userId,
+      previewId,
+      correlationId,
+    }));
   });
 
   app.post("/api/marketpilot/execution/live-order-preview", async (req, res) => {
@@ -762,6 +1212,406 @@ export async function registerRoutes(
       res.status(order.status === "sandbox_filled" ? 201 : 409).json(order);
     } catch (error) {
       res.status(409).json({ message: error instanceof Error ? error.message : "Sandbox submission failed" });
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/providers", async (_req, res) => {
+    res.json(sandboxBrokerRuntime.configuredProviders());
+  });
+
+  app.get("/api/marketpilot/execution/sandbox-panel", async (req, res) => {
+    const configured = sandboxBrokerRuntime.configuredProviders();
+    const requested = sandboxProviderSchema.safeParse(req.query.provider);
+    const provider = requested.success
+      ? requested.data
+      : configured.oandaPractice
+        ? "oanda_practice" as const
+        : configured.metaTraderDemo
+          ? "metatrader_demo" as const
+          : null;
+    if (!provider) {
+      res.json(selectSandboxExecutionCenterData({
+        health: null,
+        account: null,
+        positions: [],
+        latestOrder: sandboxBrokerRuntime.getLatestOrder(),
+        killSwitchActive: executionRiskService.snapshot().globalKillSwitch,
+        latestReconciliation: sandboxBrokerRuntime.reconciliationReports()[0] ?? null,
+      }));
+      return;
+    }
+    try {
+      const adapter = sandboxBrokerRuntime.adapter(provider);
+      const [health, account, positions] = await Promise.all([
+        adapter.health(),
+        adapter.getAccountSummary(),
+        adapter.getOpenPositions(),
+      ]);
+      res.json(selectSandboxExecutionCenterData({
+        health,
+        account,
+        positions,
+        latestOrder: sandboxBrokerRuntime.getLatestOrder(),
+        killSwitchActive: executionRiskService.snapshot().globalKillSwitch,
+        latestReconciliation: sandboxBrokerRuntime.reconciliationReports()[0] ?? null,
+      }));
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/:provider/health", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.json(await sandboxBrokerRuntime.adapter(provider.data).health());
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/:provider/account", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.json(await sandboxBrokerRuntime.adapter(provider.data).getAccountSummary());
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/:provider/instruments", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.json(await sandboxBrokerRuntime.adapter(provider.data).getInstruments());
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/:provider/pricing/:symbol", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.json(await sandboxBrokerRuntime.adapter(provider.data).getPricingSnapshot(req.params.symbol));
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.post("/api/marketpilot/execution/sandbox/preview", async (req, res) => {
+    const parsed = sandboxPreviewSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid sandbox order preview", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      res.status(201).json(await sandboxBrokerRuntime.preview(parsed.data.provider, parsed.data.request));
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.post("/api/marketpilot/execution/sandbox/confirmed-submit", async (req, res) => {
+    const parsed = sandboxConfirmedSubmitSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid confirmed sandbox submission", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const order = await sandboxBrokerRuntime.submit(parsed.data);
+      res.status(order.status === "rejected" ? 409 : 201).json(order);
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/:provider/orders/:orderId", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.json(await sandboxBrokerRuntime.adapter(provider.data).getOrderStatus(req.params.orderId));
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/:provider/positions", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.json(await sandboxBrokerRuntime.adapter(provider.data).getOpenPositions());
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/:provider/trades", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.json(await sandboxBrokerRuntime.adapter(provider.data).getTrades());
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.post("/api/marketpilot/execution/sandbox/:provider/sync", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.status(201).json(await accountSyncService.sync(
+        sandboxBrokerRuntime.adapter(provider.data),
+        typeof req.body?.userId === "string" ? req.body.userId : "execution-center-user",
+      ));
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.post("/api/marketpilot/execution/sandbox/:provider/disconnect", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.status(201).json(await sandboxBrokerRuntime.adapter(provider.data).disconnect());
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox-metrics", async (_req, res) => {
+    res.json(sandboxExecutionMetrics.snapshot());
+  });
+
+  app.get("/api/marketpilot/execution/reliability-state/health", async (_req, res) => {
+    res.json({
+      ...reliabilityStateStore.health(),
+      transactionCoordinator: sandboxBrokerRuntime.transactionalReliabilityHealth(),
+      productionOrderSubmissionEnabled: false,
+    });
+  });
+
+  app.get("/api/marketpilot/execution/provider-recovery", async (_req, res) => {
+    res.json({
+      providers: providerRecoveryTelemetry.list(),
+      automaticOrderResubmissionEnabled: false,
+      productionOrderSubmissionEnabled: false,
+    });
+  });
+
+  app.get("/api/marketpilot/execution/resilience", async (_req, res) => {
+    const providerRecovery = providerRecoveryTelemetry.list();
+    const evidence = productionResilienceEvidenceService.snapshot();
+    const resilience = productionResilienceService.evaluate({
+      observabilityConfigured: evidence.observabilityConfigured || (eventLogService.persistenceHealth().configured && executionAuditLog.persistenceHealth().configured),
+      incidentResponseRunbookAcknowledged: evidence.incidentResponseRunbookAcknowledged,
+      incidentResponseDrillComplete: evidence.incidentResponseDrillComplete,
+      disasterRecoveryBackupConfigured: evidence.disasterRecoveryBackupConfigured || Boolean(process.env.MARKETPILOT_DISASTER_RECOVERY_DIR),
+      disasterRecoveryRestoreTestComplete: evidence.disasterRecoveryRestoreTestComplete,
+      providerRecoveryTelemetryVisible: evidence.providerRecoveryTelemetryVisible || providerRecovery.length > 0,
+      auditExportReplicationConfigured: evidence.auditExportReplicationConfigured || Boolean(auditExportService.health().exportDirectoryConfigured && auditExportService.health().archiveDirectoryConfigured),
+      emergencyControlsAvailable: evidence.emergencyControlsAvailable || Boolean(emergencyControlService.snapshot()),
+    });
+    res.json({
+      ...resilience,
+      providerRecovery,
+      evidence: evidence.records,
+      productionOrderSubmissionEnabled: false,
+    });
+  });
+
+  app.post("/api/marketpilot/execution/resilience/evidence", async (req, res) => {
+    const parsed = productionResilienceEvidenceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid production resilience evidence", issues: parsed.error.flatten() });
+      return;
+    }
+    res.status(201).json(productionResilienceEvidenceService.record(parsed.data));
+  });
+
+  app.post("/api/marketpilot/execution/sandbox/:provider/reconcile", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    if (!provider.success) {
+      res.status(400).json({ message: "Unsupported sandbox provider" });
+      return;
+    }
+    try {
+      res.status(201).json(await sandboxBrokerRuntime.reconcile(
+        provider.data,
+        typeof req.body?.userId === "string" ? req.body.userId : "execution-center-user",
+      ));
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox-reconciliation", async (_req, res) => {
+    res.json(sandboxBrokerRuntime.reconciliationReports());
+  });
+
+  app.post("/api/marketpilot/execution/sandbox/idempotency/resolve", async (req, res) => {
+    const parsed = sandboxIdempotencyResolutionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid idempotency resolution", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      res.status(201).json(await sandboxBrokerRuntime.resolveIdempotency(parsed.data));
+    } catch (error) {
+      res.status(409).json({ message: error instanceof Error ? error.message : "Idempotency resolution failed" });
+    }
+  });
+
+  app.get("/api/marketpilot/execution/sandbox/idempotency", async (_req, res) => {
+    res.json(sandboxBrokerRuntime.idempotencyRecords());
+  });
+
+  app.get("/api/marketpilot/execution/strategy-ops/dashboard", async (_req, res) => {
+    res.json(selectStrategyPerformanceDashboard(
+      liveDataPaperOpsRuntime.snapshot(),
+      executionRiskService.snapshot(),
+    ));
+  });
+
+  app.post("/api/marketpilot/execution/price-feeds/demo/poll", async (req, res) => {
+    const symbol = typeof req.body?.symbol === "string" ? req.body.symbol : "";
+    if (!symbol) {
+      res.status(400).json({ message: "symbol is required" });
+      return;
+    }
+    try {
+      res.status(201).json(await liveDataPaperOpsRuntime.pollDemo(symbol));
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Demo price poll failed" });
+    }
+  });
+
+  app.post("/api/marketpilot/execution/price-feeds/:provider/poll", async (req, res) => {
+    const provider = sandboxProviderSchema.safeParse(req.params.provider);
+    const symbol = typeof req.body?.symbol === "string" ? req.body.symbol : "";
+    if (!provider.success || !symbol) {
+      res.status(400).json({ message: "A supported practice/demo provider and symbol are required" });
+      return;
+    }
+    try {
+      const adapter = sandboxBrokerRuntime.adapter(provider.data);
+      const priceProvider = provider.data === "oanda_practice"
+        ? new OandaPracticePriceFeedProvider(adapter)
+        : new MetaTraderBridgePriceFeedProvider(adapter);
+      res.status(201).json(await priceFeedService.poll(priceProvider, symbol));
+    } catch (error) {
+      sendSandboxError(res, error);
+    }
+  });
+
+  app.post("/api/marketpilot/execution/strategy-ops", async (req, res) => {
+    const parsed = operationalStrategySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid operational strategy", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      res.status(201).json(await liveDataPaperOpsRuntime.registerStrategy(parsed.data));
+    } catch (error) {
+      res.status(409).json({ message: error instanceof Error ? error.message : "Strategy registration failed" });
+    }
+  });
+
+  app.post("/api/marketpilot/execution/paper-runtime/:strategyId/start", async (req, res) => {
+    try {
+      res.status(201).json(await liveDataPaperOpsRuntime.startStrategy(req.params.strategyId));
+    } catch (error) {
+      res.status(409).json({ message: error instanceof Error ? error.message : "Paper strategy start failed" });
+    }
+  });
+
+  app.post("/api/marketpilot/execution/paper-runtime/:strategyId/stop", async (req, res) => {
+    try {
+      res.status(201).json(await liveDataPaperOpsRuntime.stopStrategy(req.params.strategyId));
+    } catch (error) {
+      res.status(409).json({ message: error instanceof Error ? error.message : "Paper strategy stop failed" });
+    }
+  });
+
+  const eventRiskSchema = z.object({
+    id: z.string().optional(),
+    type: z.enum(["CPI", "NFP", "FOMC", "central_bank_rate_decision", "crude_oil_inventories", "major_geopolitical_risk"]),
+    title: z.string().min(1),
+    startsAt: z.string().datetime(),
+    endsAt: z.string().datetime(),
+    severity: z.enum(["low", "medium", "high", "critical"]),
+    symbols: z.array(z.string()).default([]),
+    assetClasses: z.array(z.enum(["forex", "commodity"])).default([]),
+    notes: z.string().default(""),
+    enabled: z.boolean().default(true),
+  });
+
+  app.post("/api/marketpilot/execution/event-blackouts", async (req, res) => {
+    const parsed = eventRiskSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid economic event", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      res.status(201).json(economicEventRiskService.configure(parsed.data));
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Event configuration failed" });
+    }
+  });
+
+  app.post("/api/marketpilot/execution/adaptation-suggestions/:id/review", async (req, res) => {
+    const decision = z.enum(["approved", "rejected"]).safeParse(req.body?.decision);
+    const reviewedBy = typeof req.body?.reviewedBy === "string" ? req.body.reviewedBy : "";
+    if (!decision.success || !reviewedBy) {
+      res.status(400).json({ message: "decision and reviewedBy are required" });
+      return;
+    }
+    try {
+      res.status(201).json(strategyAdaptationService.review(req.params.id, decision.data, reviewedBy));
+    } catch (error) {
+      res.status(404).json({ message: error instanceof Error ? error.message : "Suggestion review failed" });
+    }
+  });
+
+  app.post("/api/marketpilot/execution/strategy-lifecycle/:strategyId/review", async (req, res) => {
+    const decision = z.enum(["approved", "rejected"]).safeParse(req.body?.decision);
+    const reviewedBy = typeof req.body?.reviewedBy === "string" ? req.body.reviewedBy : "";
+    if (!decision.success || !reviewedBy) {
+      res.status(400).json({ message: "decision and reviewedBy are required" });
+      return;
+    }
+    try {
+      res.status(201).json(strategyLifecycleMonitorService.review(req.params.strategyId, decision.data, reviewedBy));
+    } catch (error) {
+      res.status(409).json({ message: error instanceof Error ? error.message : "Lifecycle review failed" });
     }
   });
 
@@ -835,12 +1685,45 @@ export async function registerRoutes(
     });
     const workflow = controlledLiveWorkflowService.snapshot("demo-user");
     const permission = workflow.permission ?? liveTradingPermissionService.blockedDefault("demo-user");
+    const now = new Date();
+    const providerRecovery = providerRecoveryTelemetry.list();
+    const resilience = productionResilienceService.evaluate({
+      observabilityConfigured: eventLogService.persistenceHealth().configured && executionAuditLog.persistenceHealth().configured,
+      incidentResponseRunbookAcknowledged: process.env.MARKETPILOT_INCIDENT_RESPONSE_RUNBOOK_ACKNOWLEDGED === "true",
+      incidentResponseDrillComplete: process.env.MARKETPILOT_INCIDENT_RESPONSE_DRILL_COMPLETE === "true",
+      disasterRecoveryBackupConfigured: Boolean(process.env.MARKETPILOT_DISASTER_RECOVERY_DIR),
+      disasterRecoveryRestoreTestComplete: process.env.MARKETPILOT_DISASTER_RECOVERY_RESTORE_TEST_COMPLETE === "true",
+      providerRecoveryTelemetryVisible: providerRecovery.length > 0,
+      auditExportReplicationConfigured: Boolean(auditExportService.health().exportDirectoryConfigured && auditExportService.health().archiveDirectoryConfigured),
+      emergencyControlsAvailable: Boolean(emergencyControlService.snapshot()),
+    }, now);
     const liveReadinessReport = liveReadinessReportService.generate({
       permission,
       strategyReady: paperAutomationService.listStrategyValidations().some((item) => item.verdict === "supervised_live_candidate"),
       brokerReady: brokerReadiness.readyForPaper,
       riskPrecheckApproved: precheck.approved,
       riskLimitsConfigured: DEFAULT_AUTONOMY_POLICY.maxDailyLoss > 0 && DEFAULT_AUTONOMY_POLICY.maxRiskPerTradePct > 0,
+      marketRulesReady: [
+        marketSessionRulesService.evaluate({
+          assetClass: "forex",
+          accountEquity: account.equity,
+          currentMarginUsed: account.marginUsed,
+          projectedMarginUsed: account.marginUsed,
+          positionHeldOvernight: false,
+          financingAcknowledged: true,
+          now,
+        }),
+        marketSessionRulesService.evaluate({
+          assetClass: "commodity",
+          accountEquity: account.equity,
+          currentMarginUsed: account.marginUsed,
+          projectedMarginUsed: account.marginUsed,
+          positionHeldOvernight: false,
+          financingAcknowledged: true,
+          now,
+        }),
+      ].every((rule) => rule.allowed),
+      resilienceReady: resilience.ready,
       credentialsEncrypted: true,
       mfaVerified: false,
       complianceReady: false,
@@ -1023,4 +1906,22 @@ export async function registerRoutes(
   });
 
   return httpServer;
+}
+
+async function loadMetricsSnapshot() {
+  const overview = await storage.getMarketPilotOverview();
+  const verificationQuality = verificationQualityService.evaluate(overview);
+  return metricsService.snapshot({ overview, verificationQuality });
+}
+
+function sendSandboxError(res: Response, error: unknown) {
+  if (error instanceof SandboxBrokerError) {
+    res.status(error.status).json(error.toResponse());
+    return;
+  }
+  res.status(500).json({
+    code: "order_rejected",
+    message: error instanceof Error ? error.message : "Sandbox broker operation failed",
+    productionOrderSubmissionEnabled: false,
+  });
 }

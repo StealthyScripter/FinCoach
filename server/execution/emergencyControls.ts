@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import type { AutomationLevelService } from "./automationLevels";
 import type { ExecutionRiskService } from "./riskControls";
 import { executionAuditLog } from "./riskControls";
+import { publishTelegramLifecycleAlert } from "../telegramNotificationBus";
 
 export type EmergencyProvider = {
   id: string;
@@ -64,6 +65,41 @@ export class EmergencyControlService {
     executionAuditLog.append({
       action: "emergency.activate",
       outcome: "blocked",
+      correlationId,
+      detail: report,
+    });
+    void publishTelegramLifecycleAlert({
+      id: `kill-switch-${correlationId}`,
+      source: "risk",
+      eventType: "kill.switch_activated",
+      severity: "critical",
+      title: "Kill switch activated",
+      message: `${reason}. Automation level set to ${report.automationLevel}.`,
+      requiredActions: ["Stop all discretionary activity", "Review emergency controls and provider status"],
+      createdAt: now.toISOString(),
+    });
+    return report;
+  }
+
+  async release(actorId: string, reason: string, now = new Date()) {
+    const correlationId = randomUUID();
+    this.state.livePermissionRevoked = false;
+    this.state.signalsFrozen = false;
+    const report = {
+      id: randomUUID(),
+      correlationId,
+      actorId,
+      reason,
+      releasedAt: now.toISOString(),
+      livePermissionRevoked: this.state.livePermissionRevoked,
+      signalsFrozen: this.state.signalsFrozen,
+      killSwitchTriggered: this.risk.snapshot().globalKillSwitch,
+      automationLevel: this.automation.snapshot().level,
+      productionLiveSubmissionAllowed: false as const,
+    };
+    executionAuditLog.append({
+      action: "emergency.release",
+      outcome: "accepted",
       correlationId,
       detail: report,
     });

@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const migration = readFileSync("migrations/0001_marketpilot_core.sql", "utf-8");
+const reliabilityMigration = readFileSync("migrations/0002_execution_reliability.sql", "utf-8");
+const governanceMigration = readFileSync("migrations/0003_execution_governance.sql", "utf-8");
+const memoryMigration = readFileSync("migrations/0004_memory_persistence.sql", "utf-8");
+const vectorMigration = readFileSync("migrations/0005_vector_persistence.sql", "utf-8");
+const ragMigration = readFileSync("migrations/0006_rag_corpus_persistence.sql", "utf-8");
+const aiEvaluationMigration = readFileSync("migrations/0007_ai_evaluations_persistence.sql", "utf-8");
+const timeSeriesMigration = readFileSync("migrations/0009_time_series_persistence.sql", "utf-8");
 
 const requiredTables = [
   "users",
@@ -73,5 +80,113 @@ for (const column of [
 ]) {
   assert.match(migration, new RegExp(column.replaceAll(" ", "\\s+"), "i"));
 }
+
+for (const table of [
+  "execution_submission_idempotency",
+  "execution_strategy_leases",
+  "execution_reconciliation_reports",
+]) {
+  assert.match(reliabilityMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+
+for (const index of [
+  "idx_execution_submission_status",
+  "idx_execution_strategy_leases_expires_at",
+  "idx_execution_reconciliation_provider_time",
+]) {
+  assert.match(reliabilityMigration, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+
+assert.match(reliabilityMigration, /BEGIN;/i);
+assert.match(reliabilityMigration, /COMMIT;/i);
+
+for (const table of [
+  "semi_autonomous_approvals",
+  "execution_audit_exports",
+  "marketpilot_events",
+  "execution_audit_entries",
+]) {
+  assert.match(governanceMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+for (const index of [
+  "idx_semi_autonomous_approvals_status_expiry",
+  "idx_execution_audit_exports_generated_at",
+  "idx_marketpilot_events_created_at",
+  "idx_marketpilot_events_correlation",
+  "idx_execution_audit_entries_created_at",
+  "idx_execution_audit_entries_correlation",
+]) {
+  assert.match(governanceMigration, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+assert.match(governanceMigration, /archive_location\s+text/i);
+assert.match(governanceMigration, /BEGIN;/i);
+assert.match(governanceMigration, /COMMIT;/i);
+
+for (const table of [
+  "memory_records",
+]) {
+  assert.match(memoryMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+assert.match(memoryMigration, /idx_memory_records_user_scope_created_at/i);
+assert.match(memoryMigration, /BEGIN;/i);
+assert.match(memoryMigration, /COMMIT;/i);
+
+for (const table of [
+  "vector_records",
+]) {
+  assert.match(vectorMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+assert.match(vectorMigration, /idx_vector_records_text/i);
+assert.match(vectorMigration, /BEGIN;/i);
+assert.match(vectorMigration, /COMMIT;/i);
+
+for (const table of [
+  "rag_runs",
+  "rag_documents",
+]) {
+  assert.match(ragMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+for (const index of [
+  "idx_rag_runs_user_created_at",
+  "idx_rag_documents_run_id",
+  "idx_rag_documents_user_created_at",
+]) {
+  assert.match(ragMigration, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+assert.match(ragMigration, /BEGIN;/i);
+assert.match(ragMigration, /COMMIT;/i);
+
+for (const table of [
+  "ai_evaluations",
+]) {
+  assert.match(aiEvaluationMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+for (const index of [
+  "idx_ai_evaluations_user_generated_at",
+  "idx_ai_evaluations_artifact_id",
+]) {
+  assert.match(aiEvaluationMigration, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+assert.match(aiEvaluationMigration, /BEGIN;/i);
+assert.match(aiEvaluationMigration, /COMMIT;/i);
+
+for (const table of [
+  "time_series_price_bars",
+  "time_series_economic_observations",
+  "time_series_options_snapshots",
+  "time_series_ingestion_runs",
+]) {
+  assert.match(timeSeriesMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+for (const index of [
+  "idx_time_series_price_bars_symbol_timestamp",
+  "idx_time_series_economic_observations_series_timestamp",
+  "idx_time_series_options_snapshots_underlying_timestamp",
+  "idx_time_series_ingestion_runs_completed_at",
+]) {
+  assert.match(timeSeriesMigration, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+assert.match(timeSeriesMigration, /BEGIN;/i);
+assert.match(timeSeriesMigration, /COMMIT;/i);
 
 console.log("schema migration smoke tests passed");

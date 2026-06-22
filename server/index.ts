@@ -4,6 +4,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { createApiRateLimiter } from "./rateLimit";
 import { metricsService } from "./metricsService";
+import { strategyEvidenceStore } from "./execution/strategyEvidenceStore";
 
 const app = express();
 const httpServer = createServer(app);
@@ -64,6 +65,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await strategyEvidenceStore.bootstrap();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

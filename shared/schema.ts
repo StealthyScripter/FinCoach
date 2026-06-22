@@ -224,6 +224,83 @@ export const journalReviews = pgTable("journal_reviews", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+export const memoryRecords = pgTable("memory_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  scope: text("scope").notNull(),
+  kind: text("kind").notNull(),
+  text: text("text").notNull(),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const strategyEvidenceRecords = pgTable("strategy_evidence_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  strategyId: varchar("strategy_id").notNull(),
+  kind: text("kind").notNull(),
+  verdict: text("verdict"),
+  symbol: text("symbol"),
+  regime: text("regime"),
+  timeframe: text("timeframe"),
+  timestamp: timestamp("timestamp").notNull(),
+  source: text("source").notNull(),
+  title: text("title").notNull(),
+  summary: text("summary").notNull(),
+  outcome: text("outcome"),
+  relatedIds: jsonb("related_ids").$type<string[]>().notNull().default([]),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+});
+
+export const ragRuns = pgTable("rag_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  query: text("query").notNull(),
+  chunkCount: integer("chunk_count").notNull(),
+  confidence: integer("confidence").notNull(),
+  sourceFreshness: text("source_freshness").notNull(),
+  citationIds: jsonb("citation_ids").$type<string[]>().notNull().default([]),
+  chunkIds: jsonb("chunk_ids").$type<string[]>().notNull().default([]),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const ragDocuments = pgTable("rag_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  runId: varchar("run_id").notNull(),
+  kind: text("kind").notNull(),
+  text: text("text").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  timestamp: timestamp("timestamp").notNull(),
+  chunkIds: jsonb("chunk_ids").$type<string[]>().notNull().default([]),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const aiEvaluations = pgTable("ai_evaluations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  artifactId: varchar("artifact_id").notNull(),
+  artifactType: text("artifact_type").notNull(),
+  promptVersion: text("prompt_version").notNull(),
+  outputSummary: text("output_summary").notNull(),
+  overallScore: integer("overall_score").notNull(),
+  requiredActions: jsonb("required_actions").$type<string[]>().notNull().default([]),
+  generatedAt: timestamp("generated_at").notNull().defaultNow(),
+});
+
+export const ingestionRuns = pgTable("ingestion_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  providerId: text("provider_id").notNull(),
+  status: text("status").notNull(),
+  startedAt: timestamp("started_at").notNull(),
+  completedAt: timestamp("completed_at").notNull(),
+  records: integer("records").notNull(),
+  freshnessNewestTimestamp: timestamp("freshness_newest_timestamp"),
+  freshnessOldestTimestamp: timestamp("freshness_oldest_timestamp"),
+  errors: jsonb("errors").$type<string[]>().notNull().default([]),
+});
+
 export const auditLogs = pgTable("audit_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   actor: text("actor").notNull(),
@@ -1013,7 +1090,50 @@ export const marketPilotEventSchema = z.object({
     "security.posture_updated",
     "evaluation.completed",
     "market.explanation_generated",
+    "rag.context_built",
     "provider.ingestion_run",
+    "sandbox.account_synced",
+    "sandbox.order_completed",
+    "sandbox.reconciliation_completed",
+    "sandbox.idempotency_resolved",
+    "price.tick_received",
+    "market.candle_closed",
+    "strategy.signal_evaluated",
+    "knowledge.graph_built",
+    "analytics.snapshot_recorded",
+    "analytics.model_validation_recorded",
+    "paper.trade_closed",
+    "post_trade.review_completed",
+    "event_blackout.evaluated",
+    "strategy.lifecycle_evaluated",
+    "strategy.lease_changed",
+    "provider.recovery_attempted",
+    "provider.recovery_completed",
+    "automation.approval_requested",
+    "automation.approval_reviewed",
+    "automation.approval_revoked",
+    "production.resilience_recorded",
+    "audit.export_generated",
+    "controlled_live.quiz_recorded",
+    "controlled_live.permission_evaluated",
+    "controlled_live.preview_created",
+    "controlled_live.confirmation_recorded",
+    "controlled_live.sandbox_submitted",
+    "telegram.command_requested",
+    "telegram.command_confirmed",
+    "telegram.command_rejected",
+    "telegram.alert_sent",
+    "connector.action_requested",
+    "connector.action_completed",
+    "connector.health_checked",
+    "demo.run_started",
+    "demo.run_paused",
+    "demo.run_resumed",
+    "demo.run_stopped",
+    "demo.run_daily_evaluated",
+    "demo.run_adjusted",
+    "demo.run_report_generated",
+    "demo.screen_visited",
   ]),
   correlationId: z.string(),
   causationId: z.string().nullable(),
@@ -1077,6 +1197,18 @@ export const memoryRecordSchema = z.object({
   text: z.string(),
   tags: z.array(z.string()),
   metadata: z.record(z.unknown()),
+  createdAt: z.string(),
+});
+
+export const historicalAnalogueSchema = z.object({
+  id: z.string(),
+  kind: memoryRecordSchema.shape.kind,
+  title: z.string(),
+  summary: z.string(),
+  whySimilar: z.string(),
+  lesson: z.string(),
+  sourceTags: z.array(z.string()),
+  confidence: z.number().min(0).max(100),
   createdAt: z.string(),
 });
 
@@ -1639,6 +1771,7 @@ export const tradingAssistantResponseSchema = z.object({
   verificationStatus: verificationStatusSchema,
   learningNote: z.string(),
   predictionTrackingId: z.string(),
+  historicalAnalogues: z.array(historicalAnalogueSchema),
   signals: z.array(prioritizedSignalSchema),
 });
 
@@ -1766,6 +1899,7 @@ export type ProviderCapability = z.infer<typeof providerCapabilitySchema>;
 export type ProviderHealth = z.infer<typeof providerHealthSchema>;
 export type ProviderRegistrySnapshot = z.infer<typeof providerRegistrySnapshotSchema>;
 export type MemoryRecord = z.infer<typeof memoryRecordSchema>;
+export type HistoricalAnalogue = z.infer<typeof historicalAnalogueSchema>;
 export type MemoryHealth = z.infer<typeof memoryHealthSchema>;
 export type StorageHealth = z.infer<typeof storageHealthSchema>;
 export type MetricsSnapshot = z.infer<typeof metricsSnapshotSchema>;

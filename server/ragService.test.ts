@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { eventLogService } from "./eventLogService";
 import { createSeedOverview } from "./storage";
+import { storage } from "./storage";
 import { DemoCitationBuilder, DemoDocumentIngestor, DemoRAGContextBuilder, SimpleChunker } from "./ragService";
 
 const overview = createSeedOverview();
@@ -18,6 +20,11 @@ const context = await new DemoRAGContextBuilder().build(overview, "risk verifica
 assert.equal(context.query, "risk verification SPY");
 assert.ok(context.chunks.length > 0);
 assert.ok(context.citations.length > 0);
+assert.ok(context.similarMemory.length > 0);
 assert.ok(context.confidence >= 0);
+assert.notEqual(context.sourceFreshness, "stale");
+assert.ok(eventLogService.list(10).some((event) => event.type === "rag.context_built"));
+assert.ok((await storage.getRagRuns()).some((run) => run.query === "risk verification SPY"));
+assert.ok((await storage.getRagDocuments()).length > 0);
 
 console.log("ragService smoke tests passed");

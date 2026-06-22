@@ -1,5 +1,29 @@
 import { randomUUID } from "crypto";
 import type { PredictionRecord, PredictionReview, PredictionReviewSubmission } from "@shared/schema";
+import { agentMemoryService } from "./memoryService";
+
+export type PredictionInsightTheme = {
+  theme: string;
+  count: number;
+  latestPredictionId: string;
+  latestReviewId: string;
+  latestUpdatedLesson: string;
+  latestFutureRuleAdjustment: string;
+  exampleMissingEvidence: string[];
+};
+
+export type PredictionInsightReport = {
+  generatedAt: string;
+  reviewCount: number;
+  topThemes: PredictionInsightTheme[];
+  recentRules: Array<{
+    predictionId: string;
+    reviewedAt: string;
+    whatWasMissed: string;
+    updatedLesson: string;
+    futureRuleAdjustment: string;
+  }>;
+};
 
 export class PredictionReviewService {
   private readonly predictions = new Map<string, PredictionRecord>();
@@ -56,6 +80,7 @@ export class PredictionReviewService {
     };
     this.predictions.set(record.id, { ...record, actualOutcome: submission.actualOutcome, missingEvidence });
     this.reviews.unshift(review);
+    this.remember(review);
     return review;
   }
 
@@ -65,6 +90,52 @@ export class PredictionReviewService {
 
   listPredictions(): PredictionRecord[] {
     return Array.from(this.predictions.values());
+  }
+
+  clearForTest() {
+    this.predictions.clear();
+    this.reviews.length = 0;
+  }
+
+  insights(limit = 3, now = new Date()): PredictionInsightReport {
+    const reviews = [...this.reviews];
+    const grouped = new Map<string, PredictionReview[]>();
+
+    for (const review of reviews) {
+      const theme = review.updatedLesson;
+      const bucket = grouped.get(theme) ?? [];
+      bucket.push(review);
+      grouped.set(theme, bucket);
+    }
+
+    const topThemes = Array.from(grouped.entries())
+      .map(([theme, themeReviews]) => {
+        const latest = themeReviews.sort((left, right) => right.reviewedAt.localeCompare(left.reviewedAt))[0];
+        return {
+          theme,
+          count: themeReviews.length,
+          latestPredictionId: latest.predictionId,
+          latestReviewId: latest.id,
+          latestUpdatedLesson: latest.updatedLesson,
+          latestFutureRuleAdjustment: latest.futureRuleAdjustment,
+          exampleMissingEvidence: latest.whatWasMissed.slice(0, 3),
+        };
+      })
+      .sort((left, right) => right.count - left.count || right.latestReviewId.localeCompare(left.latestReviewId))
+      .slice(0, limit);
+
+    return {
+      generatedAt: now.toISOString(),
+      reviewCount: reviews.length,
+      topThemes,
+      recentRules: reviews.slice(0, limit).map((review) => ({
+        predictionId: review.predictionId,
+        reviewedAt: review.reviewedAt,
+        whatWasMissed: review.whatWasMissed[0] ?? "No missed evidence recorded.",
+        updatedLesson: review.updatedLesson,
+        futureRuleAdjustment: review.futureRuleAdjustment,
+      })),
+    };
   }
 
   private fallbackRecord(submission: PredictionReviewSubmission, now: Date): PredictionRecord {
@@ -83,6 +154,39 @@ export class PredictionReviewService {
     };
     this.predictions.set(record.id, record);
     return record;
+  }
+
+  private remember(review: PredictionReview) {
+    const reviewSummary = [
+      `Prediction ${review.predictionId}: ${review.originalThesis}`,
+      `Actual outcome: ${review.actualOutcome}`,
+      `Updated lesson: ${review.updatedLesson}`,
+      `Future rule: ${review.futureRuleAdjustment}`,
+    ].join(" ");
+
+    agentMemoryService.longTerm.store({
+      kind: "agent_decision",
+      text: reviewSummary,
+      tags: ["prediction_review", review.predictionId, review.whichAgentFailed],
+      metadata: {
+        predictionId: review.predictionId,
+        confidence: review.confidence,
+        shouldDowngrade: review.shouldStrategyBeDowngraded,
+        graphNodeId: `prediction-review-${review.predictionId}`,
+      },
+    });
+
+    agentMemoryService.semantic.store({
+      kind: "lesson_learned",
+      text: `${review.updatedLesson} ${review.futureRuleAdjustment}`,
+      tags: ["prediction_review", review.predictionId, "lesson"],
+      metadata: {
+        predictionId: review.predictionId,
+        whatWasWrong: review.whatWasWrong,
+        whatWasMissed: review.whatWasMissed,
+        graphNodeId: `prediction-review-${review.predictionId}`,
+      },
+    });
   }
 }
 

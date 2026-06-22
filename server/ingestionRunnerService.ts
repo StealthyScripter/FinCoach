@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { eventLogService } from "./eventLogService";
 import { publicProviderAdapters } from "./publicProviderAdapters";
+import { storage } from "./storage";
 import { timeSeriesStore, type ProviderIngestionRun } from "./timeSeriesStoreService";
 
 export type IngestionRunRequest = {
@@ -80,6 +81,17 @@ export class IngestionRunnerService {
       errors: providerReports.flatMap((item) => item.errors),
     };
     if (!request.dryRun) await timeSeriesStore.recordIngestionRun(run);
+    await storage.saveIngestionRun({
+      id: report.id,
+      userId: "user-demo",
+      providerId: run.providerId,
+      status: run.status,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+      records: run.records,
+      freshness: run.freshness,
+      errors: run.errors,
+    });
     eventLogService.append({
       type: "provider.ingestion_run",
       userId: "user-demo",

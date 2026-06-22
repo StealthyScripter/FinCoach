@@ -22,6 +22,10 @@ const bars = await store.queryPriceBars("SPY", "2026-01-15T13:00:00.000Z", "2026
 assert.equal(bars.length, 1);
 assert.equal(store.health().priceBars, 1);
 assert.equal(store.health().ingestionRuns, 1);
+assert.equal((await store.listPriceBars()).length, 1);
+assert.equal((await store.listEconomicObservations()).length, 1);
+assert.equal((await store.listOptionsSnapshots()).length, 1);
+assert.equal((await store.listIngestionRuns()).length, 1);
 
 const timescale = new TimescaleReadyStore();
 assert.ok(["disabled", "healthy"].includes(timescale.health().status));

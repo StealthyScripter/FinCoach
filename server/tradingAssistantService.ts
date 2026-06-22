@@ -1,15 +1,20 @@
 import { randomUUID } from "crypto";
 import type {
   DecisionCard,
+  HistoricalAnalogue,
   MarketMovementExplanation,
   MarketPilotOverview,
+  MemoryRecord,
   SignalPriorityInput,
   StrategySuggestion,
   TradingAssistantRequest,
   TradingAssistantResponse,
 } from "@shared/schema";
+import { agentMemoryService } from "./memoryService";
+import type { MemoryRecallItem } from "./memoryService";
 import { marketMoveInvestigationService } from "./marketMoveInvestigationService";
 import { predictionReviewService } from "./predictionReviewService";
+import { ragContextBuilder, type RetrievedContext } from "./ragService";
 import { researchService } from "./researchService";
 import { signalPriorityService } from "./signalPriorityService";
 import { strategySuggestionService } from "./strategySuggestionService";
@@ -19,6 +24,7 @@ export class TradingAssistantService {
   async respond(request: TradingAssistantRequest, overview: MarketPilotOverview): Promise<TradingAssistantResponse> {
     const prompt = request.prompt.trim();
     const classification = tradingAssistantIntentService.classify(prompt);
+    await agentMemoryService.hydrateFromOverview(overview);
     const asset = classification.assetCandidates[0] ?? fallbackAsset(classification);
     const investigation = await marketMoveInvestigationService.investigate(asset);
     const strategy = shouldBuildStrategy(classification.intent)
@@ -30,6 +36,26 @@ export class TradingAssistantService {
       : null;
 
     const decisionCard = buildCardForIntent({ classification, overview, investigation, strategy, prompt });
+    const memoryRecall = agentMemoryService.recall(
+      [prompt, classification.domain, decisionCard.mainConclusion, ...classification.requiredData].join(" "),
+      3,
+    );
+    const memoryCue = buildMemoryCue(memoryRecall);
+    if (memoryCue) {
+      decisionCard.details.advancedAnalytics = [...decisionCard.details.advancedAnalytics, memoryCue];
+      decisionCard.learningNote = `${decisionCard.learningNote} ${memoryCue}`;
+    }
+    const ragContext = await ragContextBuilder.build(overview, prompt);
+    const ragCue = buildRagCue(ragContext);
+    if (ragCue) {
+      decisionCard.details.advancedAnalytics = [...decisionCard.details.advancedAnalytics, ragCue];
+    }
+    const historicalAnalogues = buildHistoricalAnalogues({
+      prompt,
+      classification,
+      overview,
+      decisionCard,
+    });
     const prediction = predictionReviewService.record({
       originalThesis: decisionCard.mainConclusion,
       confidence: decisionCard.confidence,
@@ -41,7 +67,9 @@ export class TradingAssistantService {
       agent: classification.domain === "portfolio" ? "portfolio" : "verification",
       strategyDowngraded: strategy ? strategy.riskOfficerDecision !== "approve" : false,
     });
-    const signals = signalPriorityService.rank(buildSignals({ overview, investigation, strategy, prompt, classification, decisionCard }));
+    const signals = signalPriorityService.rank(buildSignals({ overview, investigation, strategy, prompt, classification, decisionCard }), 12, {
+      memoryLesson: memoryCue,
+    });
 
     return {
       id: `assistant-${randomUUID()}`,
@@ -49,7 +77,7 @@ export class TradingAssistantService {
       domain: classification.domain,
       intentClassification: classification,
       decisionCard,
-      researchSummary: decisionCard.why.slice(0, 5),
+      researchSummary: buildResearchSummary(decisionCard, ragContext),
       strategyOptions: strategy ? [strategy] : [],
       riskCheck: {
         decision: strategy?.riskOfficerDecision ?? "require_more_research",
@@ -63,6 +91,7 @@ export class TradingAssistantService {
       verificationStatus: decisionCard.verificationStatus,
       learningNote: decisionCard.learningNote,
       predictionTrackingId: prediction.id,
+      historicalAnalogues,
       signals,
     };
   }
@@ -106,6 +135,72 @@ function buildCardForIntent({
       ],
     },
   };
+}
+
+function buildHistoricalAnalogues({
+  prompt,
+  classification,
+  overview,
+  decisionCard,
+}: {
+  prompt: string;
+  classification: TradingAssistantIntentClassification;
+  overview: MarketPilotOverview;
+  decisionCard: DecisionCard;
+}): HistoricalAnalogue[] {
+  const query = [prompt, classification.domain, decisionCard.mainConclusion, ...classification.requiredData].join(" ");
+  const recallMatches = agentMemoryService.recall(query, 3).map((item) => item as MemoryRecord);
+  const semanticMatches = agentMemoryService.semantic.searchSimilar(query, 3);
+  const fallbackMatches = agentMemoryService.longTerm.recent(3);
+  const selected: MemoryRecord[] = recallMatches.length >= 2
+    ? dedupeMemoryRecords([...recallMatches, ...semanticMatches, ...fallbackMatches].slice(0, 3))
+    : semanticMatches.length >= 2
+      ? semanticMatches
+      : dedupeMemoryRecords([...semanticMatches, ...fallbackMatches].slice(0, 3));
+
+  return selected.map((record, index) => ({
+    id: `analogue-${record.id}-${index}`,
+    kind: record.kind,
+    title: titleFromMemoryRecord(record),
+    summary: record.text,
+    whySimilar: similarityReason(record, prompt, classification, overview),
+    lesson: lessonFromMemoryRecord(record),
+    sourceTags: record.tags,
+    confidence: confidenceFromMemoryRecord(record, index),
+    createdAt: record.createdAt,
+  }));
+}
+
+function buildResearchSummary(decisionCard: DecisionCard, ragContext: RetrievedContext) {
+  const summary = decisionCard.why.slice(0, 2);
+  const evidence = buildRagCue(ragContext);
+  return evidence ? [...summary, evidence] : decisionCard.why.slice(0, 3);
+}
+
+function buildMemoryCue(recallMatches: MemoryRecallItem[]) {
+  const predictionReview = recallMatches.find((item) => typeof item.metadata.predictionId === "string");
+  if (predictionReview) {
+    return `Memory recall: prior prediction review ${String(predictionReview.metadata.predictionId)} should lower confidence until the newer evidence is verified.`;
+  }
+
+  const lesson = recallMatches.find((item) => item.kind === "lesson_learned");
+  if (lesson) {
+    return `Memory recall: ${lesson.text}`;
+  }
+
+  return null;
+}
+
+function buildRagCue(ragContext: RetrievedContext) {
+  const topCitation = ragContext.citations[0];
+  if (!topCitation) return null;
+  const freshness = ragContext.sourceFreshness === "fresh"
+    ? "fresh"
+    : ragContext.sourceFreshness === "mixed"
+      ? "mixed freshness"
+      : "stale";
+  const contradiction = ragContext.contradictionHints[0] ? ` Contradiction hint: ${ragContext.contradictionHints[0]}` : "";
+  return `Retrieved evidence (${freshness}): ${topCitation.label}.${contradiction}`;
 }
 
 function strategyDecisionCard(
@@ -541,6 +636,52 @@ function nextLesson(domain: TradingAssistantIntentClassification["domain"]) {
   if (domain === "forex") return "Next lesson: interest-rate differentials and central-bank expectations.";
   if (domain === "options") return "Next lesson: defined-risk spreads and breakeven math.";
   return "Next lesson: confirmation signals and invalidation rules.";
+}
+
+function titleFromMemoryRecord(record: MemoryRecord) {
+  if (record.kind === "lesson_learned") return "Prior lesson learned";
+  if (record.kind === "trade_journal") return "Prior trade journal";
+  if (record.kind === "research_report") return "Prior research report";
+  if (record.kind === "market_explanation") return "Prior market explanation";
+  if (record.kind === "agent_decision") return "Prior agent decision";
+  return "Related memory";
+}
+
+function lessonFromMemoryRecord(record: MemoryRecord) {
+  if (record.kind === "lesson_learned") return record.text;
+  if (record.kind === "trade_journal") return record.text;
+  if (record.kind === "research_report") return "Use the same evidence discipline: summarize the main cause, contradictions, and risk factors.";
+  if (record.kind === "market_explanation") return "Separate the main cause from secondary causes before turning the move into a trade idea.";
+  return "Check whether the prior decision changed after new evidence arrived.";
+}
+
+function similarityReason(
+  record: MemoryRecord,
+  prompt: string,
+  classification: TradingAssistantIntentClassification,
+  overview: MarketPilotOverview,
+) {
+  const cues: string[] = [];
+  if (record.tags.includes(classification.domain)) cues.push(`matches the ${classification.domain} domain`);
+  if (classification.assetCandidates.some((asset) => record.tags.includes(asset) || record.text.includes(asset))) cues.push("mentions a related asset");
+  if (record.text.toLowerCase().includes(prompt.split(/\s+/)[0]?.toLowerCase() ?? "")) cues.push("shares wording with the current question");
+  if (overview.tradeTickets.length > 0 && record.kind === "trade_journal") cues.push("reflects a prior trade review");
+  if (cues.length === 0) cues.push("is one of the closest stored memories available");
+  return cues.join("; ");
+}
+
+function confidenceFromMemoryRecord(record: MemoryRecord, index: number) {
+  const base = record.kind === "lesson_learned" ? 78 : record.kind === "trade_journal" ? 74 : 70;
+  return Math.max(55, Math.min(92, base - index * 6 + Math.min(10, record.tags.length * 2)));
+}
+
+function dedupeMemoryRecords(records: MemoryRecord[]) {
+  const seen = new Set<string>();
+  return records.filter((record) => {
+    if (seen.has(record.id)) return false;
+    seen.add(record.id);
+    return true;
+  });
 }
 
 function titleCase(value: string) {

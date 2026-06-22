@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "test": "for file in server/*.test.ts; do tsx \"$file\" || exit 1; done && tsx ../marketpilot-execution.test.ts",
-    "test:execution": "tsx server/executionV2.test.ts && tsx server/executionV3.test.ts && tsx ../marketpilot-execution.test.ts",
+    "test:execution": "tsx server/executionV2.test.ts && tsx server/executionV3.test.ts && tsx server/executionV4.test.ts && tsx server/sandboxBrokerIntegration.test.ts && tsx ../marketpilot-execution.test.ts",
     "dev:client": "vite dev --port 5000",
     "dev": "NODE_ENV=development nodemon --watch server --ext ts,js --exec tsx server/index.ts",
     "build": "tsx script/build.ts",

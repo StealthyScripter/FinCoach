@@ -8,10 +8,13 @@ import { signalQualityFilter, type SignalQualityInput } from "./signalQuality";
 import { strategyValidationService, type StrategyValidationInput, type StrategyValidationScorecard } from "./strategyValidation";
 import { tradeLifecycleService } from "./tradeLifecycle";
 import { executionEmergencyState } from "./emergencyControls";
+import { strategyEvidenceStore } from "./strategyEvidenceStore";
+import { publishTelegramLifecycleAlert } from "../telegramNotificationBus";
 
 export class PaperAutomationService {
   private strategies = new Map<string, StrategyDefinition>();
   private validations = new Map<string, StrategyValidationScorecard>();
+  private validationInputs = new Map<string, StrategyValidationInput>();
   private journal: Array<Record<string, unknown>> = [];
 
   registerStrategy(input: StrategyDefinition) {
@@ -25,15 +28,73 @@ export class PaperAutomationService {
     return Array.from(this.strategies.values());
   }
 
+  getStrategy(strategyId: string) {
+    const strategy = this.strategies.get(strategyId);
+    return strategy ? { ...strategy, allowedInstruments: [...strategy.allowedInstruments] } : undefined;
+  }
+
+  updateStrategy(strategyId: string, input: Partial<Pick<StrategyDefinition, "enabled" | "riskPerTradePct" | "maxTradesPerDay">>) {
+    const strategy = this.strategies.get(strategyId);
+    if (!strategy) throw new Error("Strategy is not registered");
+    const before = { ...strategy, allowedInstruments: [...strategy.allowedInstruments] };
+    if (typeof input.enabled === "boolean") {
+      strategy.enabled = input.enabled;
+    }
+    if (typeof input.riskPerTradePct === "number") {
+      if (input.riskPerTradePct > strategy.riskPerTradePct) throw new Error("Demo adjustments cannot increase risk per trade");
+      strategy.riskPerTradePct = input.riskPerTradePct;
+    }
+    if (typeof input.maxTradesPerDay === "number") {
+      if (input.maxTradesPerDay > strategy.maxTradesPerDay) throw new Error("Demo adjustments cannot increase trade frequency");
+      strategy.maxTradesPerDay = input.maxTradesPerDay;
+    }
+    this.strategies.set(strategyId, strategy);
+    executionAuditLog.append({
+      action: "paper.strategy.adjusted",
+      outcome: "accepted",
+      correlationId: randomUUID(),
+      detail: {
+        strategyId,
+        before,
+        after: { ...strategy, allowedInstruments: [...strategy.allowedInstruments] },
+        productionLiveExecutionBlocked: true,
+      },
+    });
+    strategyEvidenceStore.recordUserOverride(strategyId, {
+      verdict: strategy.enabled ? "watch" : "pause",
+      summary: `Demo run adjustment applied: ${strategy.enabled ? "updated risk settings" : "strategy disabled"}.`,
+      source: "demo-run-service",
+      metadata: {
+        before,
+        after: { ...strategy, allowedInstruments: [...strategy.allowedInstruments] },
+        productionLiveExecutionBlocked: true,
+      },
+    });
+    return this.getStrategy(strategyId)!;
+  }
+
   validateStrategy(input: StrategyValidationInput) {
     const scorecard = strategyValidationService.evaluate(input);
     if (!this.strategies.has(scorecard.strategyId)) throw new Error("Strategy is not registered");
+    this.validationInputs.set(scorecard.strategyId, { ...input });
     this.validations.set(scorecard.strategyId, scorecard);
+    strategyEvidenceStore.recordValidationScorecard(scorecard, input);
     return scorecard;
   }
 
   listStrategyValidations() {
     return Array.from(this.validations.values());
+  }
+
+  listStrategyValidationInputs() {
+    return Array.from(this.validationInputs.values()).map((input) => ({
+      ...input,
+      backtest: { ...input.backtest },
+      walkForward: { ...input.walkForward },
+      monteCarlo: { ...input.monteCarlo },
+      regimePerformance: { ...input.regimePerformance },
+      symbolPerformance: { ...input.symbolPerformance },
+    }));
   }
 
   async processAutonomousSignal(input: unknown, strategyId: string, quality: SignalQualityInput) {
@@ -133,6 +194,28 @@ export class PaperAutomationService {
   }
 
   private reject(correlationId: string, reason: string) {
+    if (/stale/i.test(reason)) {
+      void publishTelegramLifecycleAlert({
+        id: `paper-automation-stale-${correlationId}`,
+        source: "risk",
+        eventType: "stale.data_blocked_strategy",
+        severity: "warning",
+        title: "Stale data blocked strategy",
+        message: reason,
+        requiredActions: ["Refresh the market data feed", "Check provider freshness and health"],
+      });
+    }
+    if (/daily loss/i.test(reason)) {
+      void publishTelegramLifecycleAlert({
+        id: `paper-automation-daily-loss-${correlationId}`,
+        source: "risk",
+        eventType: "daily.loss_limit_triggered",
+        severity: "critical",
+        title: "Daily loss limit triggered",
+        message: reason,
+        requiredActions: ["Stop new paper activity", "Review risk controls and daily loss limits"],
+      });
+    }
     executionAuditLog.append({ action: "paper.automation", outcome: "rejected", correlationId, detail: { reason } });
     return { status: "signal rejected" as const, reason, correlationId };
   }

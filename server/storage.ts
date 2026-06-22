@@ -4,17 +4,22 @@ import {
   type ComplianceAcknowledgementSubmission,
   type ComplianceProfile,
   complianceProfiles,
+  aiEvaluations,
+  ingestionRuns,
   type AuditLog,
   holdings,
   type InsertUser,
   type JournalEntry,
   journalEntries,
   journalReviews,
+  type JournalReview,
   type JournalReviewResult,
   type JournalReviewSubmission,
   learningModules,
   type LearningModule,
   type MarketPilotOverview,
+  ragDocuments,
+  ragRuns,
   orderPreviews,
   type OrderPreview,
   type PaperTradeFillRequest,
@@ -79,17 +84,84 @@ export interface IStorage {
   submitQuizResult(submission: QuizSubmission): Promise<ProficiencyAssessmentResult>;
   submitJournalReview(submission: JournalReviewSubmission): Promise<JournalReviewResult>;
   getJournalEntries(): Promise<JournalEntry[]>;
+  getJournalReviews(): Promise<JournalReview[]>;
+  getRagRuns(): Promise<RagRun[]>;
+  saveRagRun(run: RagRun): Promise<RagRun>;
+  getRagDocuments(): Promise<RagDocument[]>;
+  saveRagDocuments(documents: RagDocument[]): Promise<RagDocument[]>;
+  getAiEvaluations(): Promise<AIEvaluationRecord[]>;
+  saveAiEvaluation(record: AIEvaluationRecord): Promise<AIEvaluationRecord>;
+  getIngestionRuns(): Promise<IngestionRunRecord[]>;
+  saveIngestionRun(record: IngestionRunRecord): Promise<IngestionRunRecord>;
 }
+
+export type RagRun = {
+  id: string;
+  userId: string;
+  query: string;
+  chunkCount: number;
+  confidence: number;
+  sourceFreshness: "fresh" | "stale" | "mixed";
+  citationIds: string[];
+  chunkIds: string[];
+  createdAt: string;
+};
+
+export type RagDocument = {
+  id: string;
+  userId: string;
+  runId: string;
+  kind: string;
+  text: string;
+  metadata: Record<string, unknown>;
+  timestamp: string;
+  chunkIds: string[];
+  createdAt: string;
+};
+
+export type AIEvaluationRecord = {
+  id: string;
+  userId: string;
+  artifactId: string;
+  artifactType: string;
+  promptVersion: string;
+  outputSummary: string;
+  overallScore: number;
+  requiredActions: string[];
+  generatedAt: string;
+};
+
+export type IngestionRunRecord = {
+  id: string;
+  userId: string;
+  providerId: string;
+  status: "success" | "partial" | "failed" | "dry_run";
+  startedAt: string;
+  completedAt: string;
+  records: number;
+  freshness: { newestTimestamp: string | null; oldestTimestamp: string | null };
+  errors: string[];
+};
 
 export class MemStorage implements IStorage {
   private users: Map<string, User>;
   private overview: MarketPilotOverview;
   private orderPreviews: Map<string, OrderPreview>;
+  private ragRunRecords: RagRun[];
+  private ragDocumentRecords: RagDocument[];
+  private aiEvaluationRecords: AIEvaluationRecord[];
+  private ingestionRunRecords: IngestionRunRecord[];
+  private journalReviewRecords: JournalReview[];
 
   constructor() {
     this.users = new Map();
     this.overview = createSeedOverview();
     this.orderPreviews = new Map();
+    this.ragRunRecords = [];
+    this.ragDocumentRecords = [];
+    this.aiEvaluationRecords = [];
+    this.ingestionRunRecords = [];
+    this.journalReviewRecords = [];
   }
 
   async getUser(id: string): Promise<User | undefined> {
@@ -512,12 +584,55 @@ export class MemStorage implements IStorage {
       },
       ...this.overview.auditLogs,
     ];
+    this.journalReviewRecords = [review.review, ...this.journalReviewRecords.filter((item) => item.id !== review.review.id)];
 
     return review;
   }
 
   async getJournalEntries(): Promise<JournalEntry[]> {
     return this.overview.journalEntries;
+  }
+
+  async getJournalReviews(): Promise<JournalReview[]> {
+    return [...this.journalReviewRecords];
+  }
+
+  async getRagRuns(): Promise<RagRun[]> {
+    return [...this.ragRunRecords];
+  }
+
+  async saveRagRun(run: RagRun): Promise<RagRun> {
+    this.ragRunRecords = [run, ...this.ragRunRecords.filter((item) => item.id !== run.id)];
+    return run;
+  }
+
+  async getRagDocuments(): Promise<RagDocument[]> {
+    return [...this.ragDocumentRecords];
+  }
+
+  async saveRagDocuments(documents: RagDocument[]): Promise<RagDocument[]> {
+    for (const document of documents) {
+      this.ragDocumentRecords = [document, ...this.ragDocumentRecords.filter((item) => item.id !== document.id)];
+    }
+    return documents;
+  }
+
+  async getAiEvaluations(): Promise<AIEvaluationRecord[]> {
+    return [...this.aiEvaluationRecords];
+  }
+
+  async saveAiEvaluation(record: AIEvaluationRecord): Promise<AIEvaluationRecord> {
+    this.aiEvaluationRecords = [record, ...this.aiEvaluationRecords.filter((item) => item.id !== record.id)];
+    return record;
+  }
+
+  async getIngestionRuns(): Promise<IngestionRunRecord[]> {
+    return [...this.ingestionRunRecords];
+  }
+
+  async saveIngestionRun(record: IngestionRunRecord): Promise<IngestionRunRecord> {
+    this.ingestionRunRecords = [record, ...this.ingestionRunRecords.filter((item) => item.id !== record.id)];
+    return record;
   }
 }
 
@@ -1094,6 +1209,204 @@ export class PgStorage implements IStorage {
 
   async getJournalEntries(): Promise<JournalEntry[]> {
     return (await this.getMarketPilotOverview()).journalEntries;
+  }
+
+  async getJournalReviews(): Promise<JournalReview[]> {
+    await this.ensureSeeded();
+    const rows = await this.db.select().from(journalReviews).orderBy(desc(journalReviews.createdAt));
+    return rows.map((row) => ({
+      id: row.id,
+      journalEntryId: row.journalEntryId,
+      qualityScore: row.qualityScore,
+      mistakePatterns: row.mistakePatterns ?? [],
+      disciplineSignals: row.disciplineSignals ?? [],
+      feedback: row.feedback ?? [],
+      proficiencyCategory: row.proficiencyCategory as JournalReview["proficiencyCategory"],
+      proficiencyDelta: row.proficiencyDelta,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
+  async getRagRuns(): Promise<RagRun[]> {
+    const rows = await this.db.select().from(ragRuns).orderBy(desc(ragRuns.createdAt));
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      query: row.query,
+      chunkCount: row.chunkCount,
+      confidence: row.confidence,
+      sourceFreshness: row.sourceFreshness as RagRun["sourceFreshness"],
+      citationIds: row.citationIds,
+      chunkIds: row.chunkIds,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
+  async saveRagRun(run: RagRun): Promise<RagRun> {
+    await this.ensureSeeded();
+    await this.db.insert(ragRuns).values({
+      id: run.id,
+      userId: run.userId,
+      query: run.query,
+      chunkCount: run.chunkCount,
+      confidence: run.confidence,
+      sourceFreshness: run.sourceFreshness,
+      citationIds: run.citationIds,
+      chunkIds: run.chunkIds,
+      createdAt: new Date(run.createdAt),
+    }).onConflictDoUpdate({
+      target: ragRuns.id,
+      set: {
+        query: run.query,
+        chunkCount: run.chunkCount,
+        confidence: run.confidence,
+        sourceFreshness: run.sourceFreshness,
+        citationIds: run.citationIds,
+        chunkIds: run.chunkIds,
+        createdAt: new Date(run.createdAt),
+      },
+    });
+    return run;
+  }
+
+  async getRagDocuments(): Promise<RagDocument[]> {
+    await this.ensureSeeded();
+    const rows = await this.db.select().from(ragDocuments).orderBy(desc(ragDocuments.createdAt));
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      runId: row.runId,
+      kind: row.kind,
+      text: row.text,
+      metadata: row.metadata,
+      timestamp: row.timestamp.toISOString(),
+      chunkIds: row.chunkIds,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
+  async saveRagDocuments(documents: RagDocument[]): Promise<RagDocument[]> {
+    await this.ensureSeeded();
+    await this.db.transaction(async (tx) => {
+      for (const document of documents) {
+        await tx.insert(ragDocuments).values({
+          id: document.id,
+          userId: document.userId,
+          runId: document.runId,
+          kind: document.kind,
+          text: document.text,
+          metadata: document.metadata,
+          timestamp: new Date(document.timestamp),
+          chunkIds: document.chunkIds,
+          createdAt: new Date(document.createdAt),
+        }).onConflictDoUpdate({
+          target: ragDocuments.id,
+          set: {
+            runId: document.runId,
+            kind: document.kind,
+            text: document.text,
+            metadata: document.metadata,
+            timestamp: new Date(document.timestamp),
+            chunkIds: document.chunkIds,
+            createdAt: new Date(document.createdAt),
+          },
+        });
+      }
+    });
+    return documents;
+  }
+
+  async getAiEvaluations(): Promise<AIEvaluationRecord[]> {
+    await this.ensureSeeded();
+    const rows = await this.db.select().from(aiEvaluations).orderBy(desc(aiEvaluations.generatedAt));
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      artifactId: row.artifactId,
+      artifactType: row.artifactType,
+      promptVersion: row.promptVersion,
+      outputSummary: row.outputSummary,
+      overallScore: row.overallScore,
+      requiredActions: row.requiredActions,
+      generatedAt: row.generatedAt.toISOString(),
+    }));
+  }
+
+  async saveAiEvaluation(record: AIEvaluationRecord): Promise<AIEvaluationRecord> {
+    await this.ensureSeeded();
+    await this.db.insert(aiEvaluations).values({
+      id: record.id,
+      userId: record.userId,
+      artifactId: record.artifactId,
+      artifactType: record.artifactType,
+      promptVersion: record.promptVersion,
+      outputSummary: record.outputSummary,
+      overallScore: record.overallScore,
+      requiredActions: record.requiredActions,
+      generatedAt: new Date(record.generatedAt),
+    }).onConflictDoUpdate({
+      target: aiEvaluations.id,
+      set: {
+        userId: record.userId,
+        artifactId: record.artifactId,
+        artifactType: record.artifactType,
+        promptVersion: record.promptVersion,
+        outputSummary: record.outputSummary,
+        overallScore: record.overallScore,
+        requiredActions: record.requiredActions,
+        generatedAt: new Date(record.generatedAt),
+      },
+    });
+    return record;
+  }
+
+  async getIngestionRuns(): Promise<IngestionRunRecord[]> {
+    await this.ensureSeeded();
+    const rows = await this.db.select().from(ingestionRuns).orderBy(desc(ingestionRuns.completedAt));
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      providerId: row.providerId,
+      status: row.status as IngestionRunRecord["status"],
+      startedAt: row.startedAt.toISOString(),
+      completedAt: row.completedAt.toISOString(),
+      records: row.records,
+      freshness: {
+        newestTimestamp: row.freshnessNewestTimestamp?.toISOString() ?? null,
+        oldestTimestamp: row.freshnessOldestTimestamp?.toISOString() ?? null,
+      },
+      errors: row.errors,
+    }));
+  }
+
+  async saveIngestionRun(record: IngestionRunRecord): Promise<IngestionRunRecord> {
+    await this.ensureSeeded();
+    await this.db.insert(ingestionRuns).values({
+      id: record.id,
+      userId: record.userId,
+      providerId: record.providerId,
+      status: record.status,
+      startedAt: new Date(record.startedAt),
+      completedAt: new Date(record.completedAt),
+      records: record.records,
+      freshnessNewestTimestamp: record.freshness.newestTimestamp ? new Date(record.freshness.newestTimestamp) : null,
+      freshnessOldestTimestamp: record.freshness.oldestTimestamp ? new Date(record.freshness.oldestTimestamp) : null,
+      errors: record.errors,
+    }).onConflictDoUpdate({
+      target: ingestionRuns.id,
+      set: {
+        userId: record.userId,
+        providerId: record.providerId,
+        status: record.status,
+        startedAt: new Date(record.startedAt),
+        completedAt: new Date(record.completedAt),
+        records: record.records,
+        freshnessNewestTimestamp: record.freshness.newestTimestamp ? new Date(record.freshness.newestTimestamp) : null,
+        freshnessOldestTimestamp: record.freshness.oldestTimestamp ? new Date(record.freshness.oldestTimestamp) : null,
+        errors: record.errors,
+      },
+    });
+    return record;
   }
 
   private async ensureSeeded() {

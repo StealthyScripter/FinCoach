@@ -1,8 +1,11 @@
 import { randomUUID } from "crypto";
 import type { MarketPilotOverview, MemoryRecord } from "@shared/schema";
 import { aiProvider } from "./aiProviderService";
+import { eventLogService } from "./eventLogService";
 import { knowledgeGraphService } from "./knowledgeGraphService";
+import { agentMemoryService, type MemoryRecallItem } from "./memoryService";
 import { vectorStore } from "./vectorStoreService";
+import { storage } from "./storage";
 
 export type RAGDocument = { id: string; kind: MemoryRecord["kind"] | "economic_event" | "filing_placeholder" | "earnings_placeholder"; text: string; metadata: Record<string, unknown>; timestamp: string };
 export type RAGChunk = RAGDocument & { chunkId: string };
@@ -10,6 +13,7 @@ export type RetrievedContext = {
   query: string;
   chunks: Array<RAGChunk & { score: number }>;
   citations: Array<{ id: string; label: string; timestamp: string; source: string }>;
+  similarMemory: MemoryRecallItem[];
   confidence: number;
   sourceFreshness: "fresh" | "stale" | "mixed";
   contradictionHints: string[];
@@ -88,6 +92,7 @@ export class DemoRetrievalService implements RetrievalService {
       query,
       chunks,
       citations: new DemoCitationBuilder().build(chunks),
+      similarMemory: [],
       confidence: chunks.length ? Math.round(chunks.reduce((sum, item) => sum + Math.max(0, item.score), 0) / chunks.length * 100) : 0,
       sourceFreshness: "mixed",
       contradictionHints: chunks.some((chunk) => /contradict|risk|not live/i.test(chunk.text)) ? ["Retrieved context contains caution or contradiction language."] : [],
@@ -115,6 +120,8 @@ export class DemoRAGContextBuilder implements RAGContextBuilder {
   ) {}
 
   async build(overview: MarketPilotOverview, query: string): Promise<RetrievedContext> {
+    await agentMemoryService.hydrateFromOverview(overview);
+    const similarMemory = agentMemoryService.recall(query, 6);
     const graph = knowledgeGraphService.build(overview);
     const graphDocs: RAGDocument[] = graph.nodes.slice(0, 8).map((node) => ({
       id: `kg-${node.id}`,
@@ -123,15 +130,93 @@ export class DemoRAGContextBuilder implements RAGContextBuilder {
       metadata: { id: node.id, kind: node.type, timestamp: node.timestamp },
       timestamp: node.timestamp,
     }));
-    const chunks = [...this.ingestor.ingest(overview), ...graphDocs].flatMap((document) =>
+    const memoryDocs: RAGDocument[] = similarMemory.map((memory) => ({
+      id: `memory-${memory.id}`,
+      kind: memory.kind,
+      text: memory.text,
+      metadata: {
+        ...memory.metadata,
+        source: memory.source,
+        relevance: memory.relevance,
+        artifactLinks: memory.artifactLinks,
+        memoryId: memory.id,
+      },
+      timestamp: memory.createdAt,
+    }));
+    const sourceDocuments = [...this.ingestor.ingest(overview), ...graphDocs, ...memoryDocs];
+    const chunks = sourceDocuments.flatMap((document) =>
       this.chunker.chunk({ ...document, id: document.id || randomUUID() }),
     );
     await this.store.index(chunks.map((chunk) => ({
       ...chunk,
       metadata: { ...chunk.metadata, id: chunk.id, kind: chunk.kind, timestamp: chunk.timestamp },
     })));
-    return this.retrieval.retrieve(query);
+    const context = await this.retrieval.retrieve(query);
+    await storage.saveRagDocuments(sourceDocuments.map((document) => ({
+      id: document.id,
+      userId: overview.user.id,
+      runId: `rag-${hashQuery(query)}`,
+      kind: document.kind,
+      text: document.text,
+      metadata: document.metadata,
+      timestamp: document.timestamp,
+      chunkIds: chunks.filter((chunk) => chunk.id === document.id).map((chunk) => chunk.chunkId),
+      createdAt: new Date().toISOString(),
+    })));
+    await storage.saveRagRun({
+      id: `rag-${hashQuery(query)}`,
+      userId: overview.user.id,
+      query,
+      chunkCount: context.chunks.length,
+      confidence: context.confidence,
+      sourceFreshness: context.sourceFreshness,
+      citationIds: context.citations.map((citation) => citation.id),
+      chunkIds: context.chunks.map((chunk) => chunk.chunkId),
+      createdAt: new Date().toISOString(),
+    });
+    eventLogService.append({
+      type: "rag.context_built",
+      userId: overview.user.id,
+      sourceService: "rag-service",
+      correlationId: `rag-${randomUUID()}`,
+      payload: {
+        query,
+        chunkCount: context.chunks.length,
+        confidence: context.confidence,
+        sourceFreshness: context.sourceFreshness,
+        citationIds: context.citations.map((citation) => citation.id),
+        chunkIds: context.chunks.map((chunk) => chunk.chunkId),
+      },
+    });
+    return {
+      ...context,
+      similarMemory,
+      sourceFreshness: determineSourceFreshness([...context.chunks, ...memoryDocs.map((document) => ({
+        ...document,
+        chunkId: document.id,
+        score: 1,
+      }))]),
+      contradictionHints: [
+        ...context.contradictionHints,
+        ...similarMemory.filter((item) => /contradict|risk|mistake|loss|wrong/i.test(item.text)).map((item) => `Memory reminder: ${item.text.slice(0, 120)}`),
+      ].slice(0, 5),
+    };
   }
 }
 
 export const ragContextBuilder = new DemoRAGContextBuilder();
+
+function hashQuery(query: string) {
+  return query.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "query";
+}
+
+function determineSourceFreshness(chunks: Array<{ timestamp: string }>) {
+  if (chunks.length === 0) return "mixed" as const;
+  const timestamps = chunks.map((chunk) => Date.parse(chunk.timestamp)).filter((value) => Number.isFinite(value));
+  if (timestamps.length === 0) return "mixed" as const;
+  const newestAgeDays = (Date.now() - Math.max(...timestamps)) / (1000 * 60 * 60 * 24);
+  const oldestAgeDays = (Date.now() - Math.min(...timestamps)) / (1000 * 60 * 60 * 24);
+  if (newestAgeDays <= 30 && oldestAgeDays <= 120) return "fresh" as const;
+  if (oldestAgeDays > 365) return "stale" as const;
+  return "mixed" as const;
+}

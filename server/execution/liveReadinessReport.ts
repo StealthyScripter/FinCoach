@@ -8,6 +8,8 @@ export type LiveReadinessReportInput = {
   brokerReady: boolean;
   riskPrecheckApproved: boolean;
   riskLimitsConfigured: boolean;
+  marketRulesReady: boolean;
+  resilienceReady: boolean;
   credentialsEncrypted: boolean;
   mfaVerified: boolean;
   complianceReady: boolean;
@@ -35,7 +37,11 @@ export class LiveReadinessReportService {
       riskReadiness: section([
         check("risk_limits", input.riskLimitsConfigured, "Configure daily-loss and per-trade risk limits"),
         check("risk_precheck", input.riskPrecheckApproved, "Resolve the current execution risk precheck"),
+        check("market_rules", input.marketRulesReady, "Wait for market hours and satisfy holiday, rollover, financing, and liquidation rules"),
         check("kill_switch", input.killSwitchArmed, "Arm and test the kill switch"),
+      ]),
+      resilienceReadiness: section([
+        check("resilience", input.resilienceReady, "Configure observability, incident response, and disaster recovery controls"),
       ]),
       securityReadiness: section([
         check("encrypted_credentials", input.credentialsEncrypted, "Use an approved encrypted credential vault"),

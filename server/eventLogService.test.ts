@@ -25,4 +25,9 @@ eventLogSnapshotSchema.parse(snapshot);
 assert.equal(snapshot.eventCount, 1);
 assert.equal(snapshot.latestEventAt, "2026-01-15T14:00:00.000Z");
 
+const exported = eventLogService.exportJsonLines();
+assert.equal(exported.endsWith("\n"), true);
+assert.equal(exported.trim().split("\n").length, 1);
+assert.equal(JSON.parse(exported.trim()).id, event.id);
+
 console.log("eventLogService smoke tests passed");
