@@ -9,7 +9,7 @@ Execution v2 supports offline/demo paper automation and supervised-live readines
 - Every order, precheck, lifecycle transition, rejection, and simulated fill is audit logged with a correlation ID.
 - Broker credentials are represented only as readiness booleans. No plaintext credential storage was added.
 - A `supervised_live_candidate` verdict is research evidence, not execution authorization.
-- Automation Level 5 permits a supervised-live preview candidate only. Live submission remains disabled and explicit user confirmation remains mandatory.
+- Automation defaults to Level 0. Level 5 permits a supervised-live preview candidate, while Level 6 records bounded semi-autonomous eligibility requirements only. Production submission remains disabled and explicit user confirmation remains mandatory.
 
 ## Architecture
 
@@ -18,7 +18,7 @@ The execution domain remains under `server/execution/`.
 | Component | Responsibility |
 | --- | --- |
 | `strategyValidation.ts` | Produces backtest, walk-forward, Monte Carlo, drawdown, ruin, sample-size, overfitting, regime, and symbol scores with a final verdict. |
-| `automationLevels.ts` | Defines Levels 0–5 and their exact capabilities. Default is Level 1. |
+| `automationLevels.ts` | Defines Levels 0–6: disabled, signals, paper tracking, paper execution, sandbox execution, supervised-live candidate, and bounded semi-autonomous candidate. Default is Level 0. Level 6 cannot submit production orders. |
 | `tradeLifecycle.ts` | Enforces typed trade-state transitions, emits audit events, generates journal timelines, and flags prediction review. |
 | `riskPrecheck.ts` | Evaluates market, account, exposure, news, strategy, loss, and kill-switch conditions before provider placement. |
 | `positionSizing.ts` | Calculates risk-constrained forex and commodity sizes, leverage limits, and margin estimates. |
@@ -50,11 +50,14 @@ Verdicts are `reject`, `paper_only`, `watchlist`, and `supervised_live_candidate
 | 0 | Disabled |
 | 1 | Signal collection and scoring only |
 | 2 | Paper tracking without order placement |
-| 3 | Paper auto-entry |
-| 4 | Paper auto-entry and exit |
+| 3 | Paper execution with constrained entry and exit automation |
+| 4 | Practice/demo sandbox execution with confirmation |
 | 5 | Supervised-live preview candidacy; explicit user confirmation required |
+| 6 | Bounded semi-autonomous candidate; production submission remains disabled |
 
 Background signal processing must use the level-gated autonomous method. The existing paper signal endpoint is an explicit user/API invocation and remains paper-only.
+
+Upward transitions require a named actor, the exact acknowledgement, and one-level-at-a-time progression. Higher levels additionally require registered and validated strategies, configured constraints, continuous monitoring, kill-switch availability, sandbox readiness, and unexpired supervised permission. Level 6 remains blocked until independent semi-autonomous approval exists. Downgrades remain immediately available and emergency controls force Level 0.
 
 ## Trade lifecycle
 
@@ -112,8 +115,19 @@ Advanced tabs are Backtests, Strategy validation, Broker readiness, Audit log, a
 
 - Real encrypted credential-vault integration and rotation.
 - Provider-specific instrument metadata, conversion rates, margin rules, and market calendars.
+- Market-session rules now evaluate open/closed hours, holidays, rollover windows, financing acknowledgements, margin-call pressure, and liquidation thresholds before live-readiness can advance.
+- Production resilience now requires observability, incident-response drill evidence, disaster-recovery backup and restore proof, provider-recovery visibility, audit-export replication, and emergency controls before supervised-live readiness can advance.
+- The Execution Center exposes a production resilience tab and `/api/marketpilot/execution/resilience` endpoint so operators can inspect those requirements directly, plus `/api/marketpilot/execution/resilience/evidence` for recorded drill and recovery evidence.
 - Read-only broker synchronization with retry, reconciliation, and rate-limit telemetry.
 - Persistent lifecycle, validation, and audit storage with immutable retention.
+- Structured event-log export is available through the operator API for external log shipping and replay tooling.
+- A trace explorer endpoint combines event-log and execution-audit records by correlation ID for operator investigation.
+- A companion OTel-shaped trace export endpoint maps the same correlation timeline into span-like records for downstream observability tooling.
+- Knowledge-graph snapshots now emit append-only archive events so knowledge evidence can be replayed from the event log.
+- Institutional analytics snapshots now emit append-only archive events so regime, consensus, behavior, factor, stress, and Greeks evidence can be replayed from the event log.
+- Historical model-validation benchmarks now compare canonical allocations against deterministic crisis/recovery fixtures and archive the result for replay.
+- Semantic vector retrieval now persists to PostgreSQL when configured, while keeping the same similarity contract as the in-memory store.
+- The Intelligence Desk now charts Monte Carlo bands, stress scenarios, factor exposure, and Greeks payoff curves.
 - News-calendar provider integration and tested blackout policies.
 - Correlation models based on maintained historical datasets.
 - Administrative approval, device/MFA gates, final order preview, and per-order user confirmation.

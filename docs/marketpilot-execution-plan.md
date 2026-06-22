@@ -2,15 +2,26 @@
 
 ## Execution v2 checkpoint
 
-The forex/commodity execution foundation now includes strategy validation scorecards, Level 0–5 paper autonomy controls, a typed trade lifecycle, risk precheck v2, forex and commodity sizing, signal-quality filtering, broker connection readiness, and a reduced Execution Center projection. The detailed architecture and remaining controlled-live gaps are documented in [execution-v2-architecture.md](./execution-v2-architecture.md).
+The forex/commodity execution foundation now includes strategy validation scorecards, Level 0–6 autonomy eligibility controls with a Level 0 default, a typed trade lifecycle, risk precheck v2, forex and commodity sizing, signal-quality filtering, broker connection readiness, and a reduced Execution Center projection. The detailed architecture and remaining controlled-live gaps are documented in [execution-v2-architecture.md](./execution-v2-architecture.md).
 
-Live order placement and unrestricted autonomous live trading remain disabled. Strategy verdicts and Level 5 status never authorize submission without the later supervised-live approval and explicit user-confirmation workflow.
+Live order placement and unrestricted autonomous live trading remain disabled. Strategy verdicts and Levels 5–6 never authorize production submission.
 
 ## Controlled live readiness v3 checkpoint
 
 The final pre-production readiness layer is documented in [controlled-live-readiness-v3.md](./controlled-live-readiness-v3.md). It adds expiring live permission gates, an 11-topic safety quiz, risk-hashed order previews, exact single-use final confirmation, sandbox-only OANDA/MetaTrader/generic REST adapter contracts, atomic emergency controls, seven-section readiness reporting, and a reduced Live Readiness panel.
 
 Production broker submission remains absent. The running application can reach `sandbox_only` at most because its production feature boundary is hard-coded off.
+
+## Sandbox execution reliability v4.1 checkpoint
+
+Practice/demo execution now adds cross-process PostgreSQL idempotency reservations, expiring strategy leases, durable reconciliation reports, partial-fill normalization, bounded read-only retry, provider recovery telemetry, and explicit `in_doubt` operator resolution. Order submission is never automatically retried.
+
+The Level 0–6 ladder is enforced at candle evaluation and paper/sandbox routing. Upgrades require one-level-at-a-time acknowledgement and server-side readiness evidence; Level 6 remains blocked pending independent semi-autonomous approval. Production submission remains disabled.
+
+## Limited autonomy governance v5 checkpoint
+
+Level 6 now requires scoped, expiring approval from distinct Risk Officer and Compliance Officer reviewers, with requester separation, row-locked concurrent review protection, immediate revocation, and continuous scope checks. Signed hash-chained audit exports link MarketPilot events, execution audit entries, and prior export digests. Details are documented in [limited-autonomy-governance-v5.md](./limited-autonomy-governance-v5.md).
+The Execution Center now exposes operator actions for requesting approvals, recording independent reviews, revoking approvals, generating exports, and verifying a stored export artifact by ID.
 
 ## Current Baseline
 
@@ -49,6 +60,35 @@ Implemented checkpoints:
 - Learn page includes an assessment form that submits quiz results and shows score deltas plus resulting stage.
 - Journal review endpoint scores plan adherence, stop discipline, sizing discipline, emotional state, and lessons learned into trading-psychology proficiency evidence.
 - Risk Officer now consumes journal quality and emotional mistake-pattern evidence to require cooling-off before new tickets after revenge, impulsive, overconfident, ignored-stop, or weak-sizing patterns.
+- Ask MarketPilot now surfaces historical analogues from semantic and long-term memory so prior lessons and trade reviews are recalled alongside the main answer.
+- Ask MarketPilot now defaults to a concise top-signal view with a three-item at-a-glance summary and progressive disclosure for strategy, risk, learning, analogue, and signal detail so the main response stays within the 3–5-item operator limit.
+- Decision cards now default to three top-level highlights, with learning note, why, next step, and deeper evidence moved behind disclosure so the shared assistant card stays compact across surfaces.
+- Ask MarketPilot now keeps retrieval evidence, RAG history, and signal drill-down behind disclosure so the default response stays focused on the main conclusion, next step, and immediate research cues.
+- Ask MarketPilot no longer repeats the same summary in a separate at-a-glance card, keeping the primary answer focused on one compact decision card plus supporting analysis.
+- Dashboard market-move summaries now use a compact headline preview so the landing page avoids wrapping long conclusions into extra visual noise.
+- Ask MarketPilot now surfaces a top memory influence cue directly in the answer pane so prior prediction reviews and lessons visibly shape the next decision instead of remaining hidden in recall data.
+- Journal now surfaces a compact memory-reuse cue so repeated prediction lessons are turned into a next-step reminder before the review history is expanded.
+- Trade Desk now surfaces the same memory-reuse cue before a paper ticket is submitted so the active decision workflow inherits the latest lesson instead of only showing historical rule summaries.
+- Memory cues now keep multiple replay paths visible, including the originating journal review and the associated intelligence graph node, so lessons are easier to audit and navigate.
+- Intelligence Desk now shows lesson trails inside the graph traversal view so operators can jump from a remembered lesson to the underlying review and back into the graph.
+- Intelligence Desk now promotes the most relevant lesson trail as a top priority cue, so the graph surface uses memory to decide what gets highlighted first.
+- Signal ranking now accepts the latest lesson cue, so the same memory loop can influence assistant recommendations and the Opportunities page ordering.
+- Opportunities now surfaces the active lesson cue above the ranked signal sections so the ordering rationale is visible where the user chooses among signals.
+- Trade Desk now converts the active lesson cue into a short pre-submit checklist, so the remembered lesson changes how a ticket is prepared rather than only how it is displayed.
+- Execution Center now shows the active lesson cue as a preflight lesson and checklist before the live-readiness and autonomy gates, so safety memory is visible at the highest-risk approval surface.
+- Prediction reviews now write lessons back into semantic and long-term memory so prior mistakes influence later assistant responses.
+- Journal now shows aggregated learning insights with a compact three-item summary and collapsible review/rule history so repeated missed evidence and rule changes are visible at a glance without overload.
+- Dashboard now surfaces the top repeated lesson and most recent rule update so the learning loop is visible from the landing page.
+- Dashboard now opens with three summary tiles for the current market move, portfolio coach, and learning loop, with the rest of the assistant surfaces and primary signals behind disclosure to reduce landing-page overload.
+- Intelligence Desk now opens with three summary tiles for operator readiness, institutional posture, and AI stack health, with the detailed analytics, trace explorer, ingestion snapshot, supervisor workflow, and agent council hidden behind disclosure.
+- Portfolio Coach now opens with three summary tiles for largest risk, portfolio risk, and cash, while model portfolios, holdings, and factor analytics stay behind disclosure.
+- Trade Desk now shows the top repeated lesson and latest rule update at decision time before new paper tickets are submitted.
+- System now surfaces agent council consensus and dissent so no single agent view dominates operator visibility.
+- Simulation Lab now builds a strategy research scorecard with walk-forward, Monte Carlo, regime, and symbol-suitability evidence on top of the backtest result.
+- Portfolio Coach now ranks model portfolios and highlights the least disruptive improvement path before any rebalance.
+- Knowledge-graph builds now append a durable `knowledge.graph_built` archive event so graph snapshots can be replayed from the event log.
+- Institutional analytics snapshots now append a durable `analytics.snapshot_recorded` archive event so regime, consensus, behavior, factor, stress, and Greek evidence can be replayed from the event log.
+- Historical model-validation benchmarks now compare canonical allocations against deterministic 2008-2026 return fixtures and archive the result as `analytics.model_validation_recorded`.
 
 ## Phase 2: Research, Verification, and Paper Trading
 
@@ -77,6 +117,17 @@ Implemented checkpoints:
 - Scheduled-style market briefing workflow generates multi-symbol research reports with citation freshness checks, verification counts, required actions, and storage/audit persistence through the research report path.
 - User-configurable risk settings now drive Risk Officer reduce/reject thresholds, loss-limit display rules, options premium caps, concentration limits, event windows, audit logging, and Trade Desk controls.
 - Paper trade lifecycle now supports monitored paper-filled tickets, paper close requests, realized PnL/return calculation, post-close journal creation, close audit events, and Trade Desk close controls.
+- Ask MarketPilot now exposes an explicit prompt-driven memory recall panel backed by semantic and long-term memory, with artifact links and graph node references for stored prediction reviews and related memories so the user can jump from a remembered lesson back to the originating review or open the intelligence graph at that node before deciding.
+- Ask MarketPilot also folds recalled review lessons back into the decision card itself so prior mistakes visibly lower confidence and show up in the advanced analytics cue for the next response.
+- Ask MarketPilot now also retrieves RAG evidence for the submitted prompt and surfaces the top citation, freshness, and contradiction hint so the response is grounded in retrievable supporting context instead of memory alone.
+- AI research drafts now persist through the normal research-report path and emit an immutable research-report event so draft artifacts can be replayed from storage and the event log instead of remaining transient responses.
+- RAG builds now emit immutable retrieval events and the Ask MarketPilot page surfaces a small retrieval history so supporting context is replayable instead of transient.
+- RAG documents and retrieval runs now persist in PostgreSQL-ready corpus tables so retrieval history can be replayed independently of vector search and event logs.
+- AI evaluations now persist alongside research drafts so scoring, required actions, and artifact replay can survive process restarts and database-backed deployments.
+- Provider ingestion runs now persist as replayable history with archive access, closing the gap between ingestion execution and durable review.
+- Vector store records now have a list/archive surface, making the semantic corpus inspectable instead of only searchable.
+- Time-series ingestion runs, price bars, economic observations, and options snapshots now have a replayable archive surface and PostgreSQL-backed persistence path.
+- The Intelligence Desk now surfaces a compact ingestion archive so replayable provider history is visible to operators alongside the current ingestion snapshot.
 
 ## Phase 3: Multi-Agent Intelligence and Simulation
 
@@ -105,6 +156,13 @@ Implemented checkpoints:
 - Market movement explanations now separate facts, interpretations, predictions, contradiction evidence, invalidation criteria, affected assets, source timestamps, and risk factors while preserving the existing explanation API shape.
 - Verification-quality reporting now scores source freshness, evidence weighting, contradiction handling, and hallucination-risk controls across research reports and trade tickets.
 - Central supervisor workflow now enforces idea -> verification -> risk -> portfolio impact -> compliance -> human approval -> execution sequencing with no autonomous execution capability.
+- Strategy Lab now aggregates memory-graph traversal, recurring mistake detection, confidence calibration, regret analysis, counterfactual simulation, performance decay, cross-strategy comparison, and learning priorities behind a compact 3–5 item summary view.
+- Strategy validation inputs are retained alongside scorecards so the analytics layer can use the original regime and symbol evidence when recommending, never modifying, strategies.
+- Strategy evidence now persists as a dedicated evidence store covering validation scorecards, backtests, walk-forward and Monte Carlo results, paper and sandbox trades, post-trade reviews, regret and counterfactual reports, regime labels, symbol suitability, user overrides, and rejected signals.
+- Closed paper and sandbox trades now retain their original inputs, signal features, regime/volatility context, spread and blackout state, risk precheck, sizing decision, lifecycle timeline, and exit reason so the Strategy Lab can explain evidence instead of only summarizing outcomes.
+- Sample-depth scoring now distinguishes insufficient, developing, acceptable, and robust evidence, and Strategy Lab rankings and verdict explanations now account for evidence depth, decay, regret, calibration quality, and coverage before surfacing top candidates.
+- Rejected signals are retained as learning artifacts so later outcomes can classify correct rejections, missed opportunities, and avoided losses without rewriting the original decision.
+- Remaining gap: the current evidence store is in-memory and recommendation-only; persistence, cross-process queryability, and broader historical backfill remain future work.
 
 ## Phase 4: Broker Readiness Without Live Execution
 
@@ -129,6 +187,9 @@ Implemented checkpoints:
 - Versioned compliance disclosure profiles now persist acknowledgement status, audit the user's acceptance statement, surface required disclosures in Trade Desk, and feed the supervised-live policy gate.
 - Security posture endpoint now assesses MFA, credential vault, RBAC, session timeout, device verification, audit logs, rate limits, environment separation, and paper/live separation. Missing production controls are surfaced as warnings or failures with required actions.
 - Dependency-free API rate limiting now protects `/api/*` in the current single-process app and records rate-limit events for metrics; Redis counters remain a v2 scaling task.
+- Live-readiness reporting now includes market-session checks for hours, holidays, rollover, financing, margin-call pressure, and liquidation thresholds so operators see actual session state before previewing live execution.
+- Live-readiness reporting also includes a resilience gate for observability, incident response, disaster recovery, provider-recovery visibility, and mirrored audit-export replication before supervised-live readiness can advance.
+- The Execution Center surfaces resilience checks and required actions in an operator tab backed by `/api/marketpilot/execution/resilience`, and operators can submit drill and recovery evidence through `/api/marketpilot/execution/resilience/evidence`.
 
 ## v1.0 Architecture Checkpoint
 
@@ -139,17 +200,17 @@ Implemented foundations:
 - Storage readiness: centralized memory/postgres selection, `DATABASE_URL` validation, storage health reporting, idempotent demo seed strategy, and rollback-safe migration notes.
 - Event log: typed versioned internal events with correlation ID, causation ID, user ID, source service, timestamp, payload hash, append-only service API, query helpers, and tests.
 - Provider abstraction: demo market, economic, news, filing, options, and broker provider interfaces plus provider health/capability registry for future Polygon, FRED, SEC EDGAR, Trading Economics, Reuters, and IBKR adapters.
-- Agent memory: short-term, long-term, and semantic memory interfaces with dependency-free in-memory implementations and health reporting. Redis, PostgreSQL, and Qdrant can replace these behind the same contracts later.
-- Observability: `/api/health`, `/api/health/storage`, `/api/health/providers`, `/api/health/security`, `/api/health/supervisor`, `/api/metrics`, `/api/marketpilot/event-log`, and `/api/marketpilot/memory/health`.
-- Operator UI: Intelligence Desk now surfaces storage mode, provider readiness, event log count, memory counts, request metrics, verification quality, security posture, and supervisor workflow status.
+- Agent memory: short-term, long-term, and semantic memory interfaces with dependency-free in-memory implementations and health reporting. Long-term and semantic memory now persist to PostgreSQL when `DATABASE_URL` is configured; Redis and Qdrant remain future adapter work.
+- Strategy evidence: validation scorecards, backtests, walk-forward results, Monte Carlo results, paper and sandbox trades, post-trade reviews, regret analysis, counterfactuals, regime labels, symbol suitability, user overrides, and rejected signals now persist to PostgreSQL when available, with replay/export helpers and startup bootstrap for durability across restarts.
+- Observability: `/api/health`, `/api/health/storage`, `/api/health/providers`, `/api/health/security`, `/api/health/supervisor`, `/api/metrics`, `/api/metrics/prometheus`, `/api/marketpilot/event-log`, `/api/marketpilot/event-log/export`, and `/api/marketpilot/memory/health`.
+- Operator UI: Intelligence Desk now surfaces storage mode, provider readiness, event log count, memory counts, request metrics, verification quality, Prometheus export visibility, structured event-log export visibility, trace explorer lookup, OTel-shaped span export lookup, security posture, and supervisor workflow status.
 
 Remaining v2.0 gaps:
 
 - Redis-backed distributed rate limits and short-term memory.
 - Real external provider adapters and credential vault integration.
-- PostgreSQL-backed event log and long-term memory persistence.
-- Qdrant semantic memory.
-- OpenTelemetry tracing, Prometheus exporter, Grafana dashboard, Loki logs, and Sentry.
+- Qdrant networked semantic memory.
+- OpenTelemetry tracing still needs native collector wiring, but the UI now exposes an OTel-shaped trace export for correlation investigation. Grafana dashboard, Loki logs, and Sentry remain open.
 - Real Interactive Brokers paper adapter remains blocked behind execution-service isolation and human approval.
 
 ## v1.5 Institutional Analytics and AI Intelligence Foundation
@@ -173,9 +234,7 @@ Implemented foundations:
 Remaining v2.0 gaps:
 
 - Replace deterministic demo analytics with provider-backed histories once paid/free external providers are configured.
-- Persist knowledge graph and analytics snapshots to PostgreSQL/event log.
-- Add charted analytics views for Monte Carlo bands, stress scenarios, factor exposure, and payoff curves.
-- Add model validation benchmarks against historical datasets.
+- Add richer external provider-backed historical datasets for benchmarking.
 - Add OpenAI/LangGraph agent execution behind the supervisor boundary, still without autonomous trading.
 
 ## v2.0 Real Intelligence Infrastructure Foundation
@@ -184,10 +243,10 @@ Goal: move from dependency-free architecture to real AI/data infrastructure adap
 
 Implemented foundations:
 
-- AI provider layer: `AIProvider`, chat completion, embedding, and structured reasoning contracts with `DemoAIProvider` and environment-gated `OpenAIProvider`. Missing `OPENAI_API_KEY` falls back without hard failure. Responses carry prompt version, token usage, estimated cost, and safety metadata.
+- AI provider layer: `AIProvider`, chat completion, embedding, and structured reasoning contracts with `DemoAIProvider` and environment-gated `OpenAIProvider`. Missing `OPENAI_API_KEY` falls back without hard failure. Responses carry prompt version, model metadata, token usage, estimated cost, structured JSON validation, and safety metadata.
 - Supervisor runtime layer: LangGraph-ready `SupervisorRuntime`, node, transition, state, and human approval gate contracts. The existing supervisor is adapted into graph snapshots for idea -> verification -> risk -> portfolio impact -> compliance -> human approval -> blocked execution.
-- RAG foundation: document ingestion, chunking, embedding store, retrieval, citation building, and context building over existing memory and knowledge graph data. Demo retrieval returns citations, confidence, source freshness, and contradiction hints.
-- Semantic memory adapter: `VectorStore`, `VectorRecord`, and `VectorSearchResult` contracts with in-memory vector search plus Qdrant-ready health/capability stub behind environment configuration.
+- RAG foundation: document ingestion, chunking, embedding store, retrieval, citation building, and context building over existing memory and knowledge graph data. Demo retrieval now also folds in semantic-memory analogues, returns citations, confidence, source freshness, contradiction hints, and similar-memory references.
+- Semantic memory adapter: `VectorStore`, `VectorRecord`, and `VectorSearchResult` contracts with in-memory vector search plus PostgreSQL persistence fallback and a Qdrant-ready networked path behind environment configuration.
 - Cache adapter: `CacheStore`, `RateLimitStore`, and `SessionMemoryStore` contracts with in-memory cache/rate-limit/session behavior plus Redis-ready health/capability stub behind `REDIS_URL`.
 - Time-series adapter: `TimeSeriesStore` for OHLCV bars, economic observations, options snapshots, ingestion metadata, freshness reporting, and range queries. Timescale-ready adapter remains disabled unless configured.
 - Public provider adapters: FRED, SEC EDGAR, public market demo, and public economic calendar adapter structures with demo fallback data, freshness metadata, and capability health.
@@ -207,10 +266,26 @@ Safety and security implications:
 Remaining v2.5/v3.0 gaps:
 
 - Replace provider stubs with real network clients, retry/backoff telemetry, provider quotas, and persistent ingestion job history.
-- Add real OpenAI SDK calls with response validation, structured-output parsing, model policy configuration, and secured prompt/version registry.
+- Add broader provider telemetry, quota handling, and secured prompt/version registry.
+- Add richer retrieval ranking and fresh/stale citation weighting across larger corpora.
+
+## Phase 9–16 audit status
+
+Current repository state indicates the following phases are complete in their practical, test-covered form:
+
+- Phase 9: multi-agent supervisor, agent outputs, consensus, dissent visibility, and human override are implemented and covered by tests and UI surfaces.
+- Phase 10: provider-abstracted data layer is present with OANDA-style practice flows, FRED/SEC/public demo adapters, webhook ingestion, freshness scoring, and stale-data blocking in the execution path.
+- Phase 11: real-time operations surfaces exist for briefings, alerts, watchlists, trade timelines, and daily debrief-style summaries with compact operator views.
+- Phase 12: portfolio management includes tactical allocation, risk parity, volatility targeting, hedge and drawdown controls, plus concise portfolio-risk cards and learning notes.
+- Phase 13: controlled live execution gates, safety quiz, previews, confirmations, kill switches, emergency controls, and audit logs are present while production live execution remains disabled.
+- Phase 14: autonomy enforcement, default low autonomy, paper/sandbox automation, supervised-live candidate mode, kill switches, and expiry-style approval controls are present.
+- Phase 15: calibration, regret, counterfactual, decay, retirement, benchmark, and learning-priority loops exist as recommendation-only services.
+- Phase 16: health, metrics, audit/event query helpers, provider/execution health views, and strategy-lab visibility are available across API and UI surfaces.
+
+Remaining optional enhancements are limited to deeper external provider coverage, richer operational telemetry, and further UI refinement. None of these are required to preserve the current safe operating model.
 - Add LangGraph runtime implementation behind the supervisor contracts.
 - Add Qdrant, Redis, TimescaleDB, and PostgreSQL event-log implementations with migrations and integration tests.
-- Add OpenTelemetry tracing, Prometheus exporter, Grafana dashboards, Loki logs, and Sentry reporting.
+- Add OpenTelemetry tracing, Grafana dashboards, Loki logs, and Sentry reporting.
 - Persist RAG documents, vector IDs, ingestion runs, AI evaluations, and generated research drafts to PostgreSQL with immutable audit links.
 - Add richer charted operator views for ingestion freshness, retrieval quality, AI cost, and evaluation drift.
 
