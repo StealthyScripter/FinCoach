@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { StrategyMachineCoreService, createEvent, toEventReference, validateEventReferences, InMemoryEventRepository } from "./strategy-machine/core";
+import { MarketDataService, normalizeInstrument, type Candle } from "./strategy-machine/market-data";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -37,3 +38,49 @@ assert.throws(() => core.assertBoundary({ caller: "hypothesis", target: "market-
 assert.equal(core.assertBoundary({ caller: "hypothesis", target: "market-data", access: "contract" }), true);
 
 console.log("strategy machine core tests passed");
+
+const marketData = new MarketDataService();
+assert.equal(normalizeInstrument("EUR/USD"), "EUR_USD");
+assert.equal(marketData.assertSupported("xau/usd").symbol, "XAU_USD");
+assert.throws(() => marketData.assertSupported("BTC/USD"), /Unsupported instrument/);
+
+const marketSnapshot = marketData.createSnapshot({
+  instrument: "EUR/USD",
+  bid: 1.1,
+  ask: 1.1002,
+  provider: "mock",
+  observedAt: new Date("2026-01-01T08:00:00.000Z"),
+});
+assert.equal(marketSnapshot.type, "MarketSnapshotCreated");
+assert.equal(marketSnapshot.payload.mid, 1.1001);
+
+const spread = marketData.detectSpread(marketSnapshot);
+assert.equal(spread.type, "SpreadStateDetected");
+assert.equal(spread.sourceEventRefs[0].eventId, marketSnapshot.id);
+
+const candles: Candle[] = Array.from({ length: 20 }, (_, index) => ({
+  instrument: "EUR_USD",
+  timeframe: "15m",
+  timestamp: new Date(Date.UTC(2026, 0, 1, 7, index * 15)).toISOString(),
+  open: 1.1 + index * 0.0001,
+  high: 1.1002 + index * 0.0001,
+  low: 1.0999 + index * 0.0001,
+  close: 1.1001 + index * 0.0001,
+  volume: 100 + index,
+}));
+const candleSeries = marketData.createCandleSeries(candles);
+assert.equal(candleSeries.type, "CandleSeriesCreated");
+assert.equal((candleSeries.payload.candles as Candle[]).length, 20);
+
+const session = marketData.detectSession("EUR_USD", new Date("2026-01-01T08:00:00.000Z"));
+assert.equal(session.payload.session, "london");
+
+const volatility = marketData.detectVolatility(candles);
+assert.equal(volatility.type, "VolatilityStateDetected");
+assert.equal(volatility.sourceEventRefs.length, 1);
+
+const economic = marketData.attachEconomicContext("EUR_USD", new Date("2026-01-01T12:30:00.000Z"), [toEventReference(marketSnapshot)]);
+assert.equal(economic.payload.blackout, true);
+assert.equal(economic.sourceEventRefs[0].eventId, marketSnapshot.id);
+
+console.log("strategy machine market-data tests passed");
