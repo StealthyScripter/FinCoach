@@ -3,6 +3,7 @@ import { StrategyMachineCoreService, createEvent, toEventReference, validateEven
 import { MarketDataService, normalizeInstrument, type Candle } from "./strategy-machine/market-data";
 import { PatternDiscoveryService } from "./strategy-machine/pattern-discovery";
 import { HypothesisService } from "./strategy-machine/hypothesis";
+import { RuleBuilderService, validateObjective, type RuleSet } from "./strategy-machine/rule-builder";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -152,3 +153,18 @@ const weakHypothesis = hypothesisService.fromPatterns(insufficientPatterns);
 assert.equal(weakHypothesis.type, "HypothesisRejected");
 
 console.log("strategy machine hypothesis tests passed");
+
+const ruleBuilder = new RuleBuilderService();
+const ruleSetEvent = ruleBuilder.createFromHypothesis(hypothesis);
+assert.equal(ruleSetEvent.type, "RuleSetCreated");
+const ruleSet = ruleSetEvent.payload as unknown as RuleSet;
+assert.equal(validateObjective(ruleSet), true);
+assert.equal(ruleSet.version, 1);
+assert.equal(ruleSet.instrumentConstraints[0], "EUR_USD");
+assert.equal(ruleSet.sourceHypothesisRefs[0].eventId, hypothesis.id);
+assert.throws(() => validateObjective({ ...ruleSet, entryCondition: [{ field: "setupQuality", operator: "==", value: "looks strong" }] }), /Subjective/);
+const versionedRuleSet = ruleBuilder.version(ruleSet, { takeProfitRule: [{ field: "targetR", operator: ">=", value: 2 }] }, [toEventReference(ruleSetEvent)]);
+assert.equal(versionedRuleSet.type, "RuleSetVersioned");
+assert.equal((versionedRuleSet.payload as unknown as RuleSet).version, 2);
+
+console.log("strategy machine rule-builder tests passed");
