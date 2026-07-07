@@ -4,6 +4,7 @@ import { MarketDataService, normalizeInstrument, type Candle } from "./strategy-
 import { PatternDiscoveryService } from "./strategy-machine/pattern-discovery";
 import { HypothesisService } from "./strategy-machine/hypothesis";
 import { RuleBuilderService, validateObjective, type RuleSet } from "./strategy-machine/rule-builder";
+import { ExperimentManagerService } from "./strategy-machine/experiment-manager";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -168,3 +169,28 @@ assert.equal(versionedRuleSet.type, "RuleSetVersioned");
 assert.equal((versionedRuleSet.payload as unknown as RuleSet).version, 2);
 
 console.log("strategy machine rule-builder tests passed");
+
+const experimentManager = new ExperimentManagerService();
+const experimentCreated = experimentManager.create({
+  name: "EUR/USD London breakout research",
+  refs: {
+    observationRefs: [toEventReference(marketSnapshot)],
+    patternRefs: patternEvents.filter((event) => event.type === "PatternDetected").map(toEventReference),
+    hypothesisRefs: [toEventReference(hypothesis)],
+    ruleSetRefs: [toEventReference(ruleSetEvent)],
+  },
+  now: new Date("2026-01-01T09:00:00.000Z"),
+});
+assert.equal(experimentCreated.type, "ExperimentCreated");
+const experimentId = String((experimentCreated.payload.experiment as never) ?? experimentCreated.payload.experimentId);
+const parsedExperimentId = (experimentCreated.payload as { experimentId: string }).experimentId;
+assert.ok(parsedExperimentId || experimentId);
+const activeExperimentId = parsedExperimentId || experimentId;
+const collecting = experimentManager.transition(activeExperimentId, "collecting_data", [toEventReference(ruleSetEvent)]);
+assert.equal(collecting.type, "ExperimentStateChanged");
+const backtesting = experimentManager.transition(activeExperimentId, "backtesting");
+assert.equal((backtesting.payload as { nextState: string }).nextState, "backtesting");
+assert.throws(() => experimentManager.transition(activeExperimentId, "forward_testing"), /Invalid experiment transition/);
+assert.equal(experimentManager.get(activeExperimentId).strategyDecisionRefs.length, 1);
+
+console.log("strategy machine experiment-manager tests passed");
