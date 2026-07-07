@@ -12,6 +12,7 @@ import { DemoOnlyPolicyError, DemoOnlyPolicyService } from "./execution/demoOnly
 import { TradeJournalService } from "./strategy-machine/journal";
 import { StrategyRankingService } from "./strategy-machine/strategy-ranking";
 import { MlSupportService } from "./strategy-machine/ml-support";
+import { TelemetryService } from "./strategy-machine/telemetry";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -347,3 +348,27 @@ const priority = mlSupport.prioritizeExperiment({ experimentId: activeExperiment
 assert.equal(priority.payload.priority, "high");
 
 console.log("strategy machine ml-support tests passed");
+
+const telemetryService = new TelemetryService();
+const telemetry = telemetryService.snapshot([
+  marketSnapshot,
+  candleSeries,
+  ...patternEvents,
+  hypothesis,
+  ruleSetEvent,
+  experimentCreated,
+  backtest,
+  validation,
+  forwardTest,
+  demoTrade,
+  journalCreated,
+  journalReviewEvents[0],
+  ranked,
+], new Date("2026-01-03T09:00:00.000Z"));
+assert.equal(telemetry.type, "TelemetrySnapshotCreated");
+assert.ok(Number(telemetry.payload.patternDetectorThroughput) > 0);
+assert.equal(telemetry.payload.journalCompletionRate, 1);
+const health = telemetryService.healthChanged(telemetry);
+assert.equal(health.type, "ResearchPipelineHealthChanged");
+
+console.log("strategy machine telemetry tests passed");
