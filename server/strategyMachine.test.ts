@@ -7,6 +7,8 @@ import { RuleBuilderService, validateObjective, type RuleSet } from "./strategy-
 import { ExperimentManagerService } from "./strategy-machine/experiment-manager";
 import { BacktestService } from "./strategy-machine/backtesting";
 import { ValidationService } from "./strategy-machine/validation";
+import { ForwardTestService } from "./strategy-machine/forward-testing";
+import { DemoOnlyPolicyError, DemoOnlyPolicyService } from "./execution/demoOnlyPolicy";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -236,3 +238,33 @@ const needsMoreData = validationService.validate(insufficientBacktest);
 assert.equal(needsMoreData.type, "ExperimentNeedsMoreData");
 
 console.log("strategy machine validation tests passed");
+
+const forwardTestService = new ForwardTestService(undefined, new DemoOnlyPolicyService({ MARKETPILOT_DEMO_ONLY: "true" }));
+const forwardTest = forwardTestService.start({
+  experimentId: activeExperimentId,
+  provider: "paper_provider",
+  accountMode: "paper",
+  mode: "paper",
+  allowedInstruments: ["EUR_USD"],
+  riskLimitPct: 0.25,
+  refs: [toEventReference(validation)],
+});
+assert.equal(forwardTest.type, "ForwardTestStarted");
+const forwardTestId = String(forwardTest.payload.forwardTestId);
+const demoTrade = forwardTestService.openDemoTrade(forwardTestId, { instrument: "EUR_USD", side: "buy", quantity: 1, refs: [toEventReference(forwardTest)], now: new Date("2026-01-03T08:00:00.000Z") });
+assert.equal(demoTrade.type, "DemoTradeOpened");
+assert.equal(demoTrade.payload.demoOnly, true);
+assert.throws(() => forwardTestService.openDemoTrade(forwardTestId, { instrument: "BTC_USD", side: "buy", quantity: 1, refs: [toEventReference(forwardTest)] }), /Instrument not allowed/);
+const pausedForwardTest = forwardTestService.pause(forwardTestId, [toEventReference(demoTrade)]);
+assert.equal(pausedForwardTest.type, "ForwardTestPaused");
+assert.throws(() => new ForwardTestService(undefined, new DemoOnlyPolicyService({ MARKETPILOT_DEMO_ONLY: "true" })).start({
+  experimentId: activeExperimentId,
+  provider: "oanda_practice",
+  accountMode: "live",
+  mode: "practice",
+  allowedInstruments: ["EUR_USD"],
+  riskLimitPct: 0.25,
+  refs: [toEventReference(validation)],
+}), DemoOnlyPolicyError);
+
+console.log("strategy machine forward-testing tests passed");
