@@ -2,7 +2,7 @@
 
 Live data and candle-driven paper operations are documented in [live-data-paper-strategy-ops-v4.md](./live-data-paper-strategy-ops-v4.md).
 
-MarketPilot supports real broker practice/demo environments for forex and commodities. Production live order submission remains hard-disabled in every adapter, API response, workflow, metric, and UI projection.
+MarketPilot supports broker practice/demo environments for forex and commodities. Live account order submission is disabled by the MarketPilot demo-only policy in every adapter, API response, workflow, metric, and UI projection.
 
 ## OANDA practice setup
 
@@ -91,6 +91,6 @@ The primary panel exposes only connection status, account mode, equity, margin a
 
 No adapter implements a production endpoint or environment. OANDA accepts practice only; MetaTrader accepts demo only. Every contract exposes `productionOrderSubmissionEnabled: false`, and production submission metrics remain zero.
 
-## Remaining supervised-live work
+## Remaining demo-readiness work
 
 A future production implementation requires a separate security-reviewed path with isolated credentials, deployment controls, legal/compliance approval, MFA/session binding, durable cross-process replay protection, independent risk authorization, supervised rollout limits, incident-response exercises, and external audit evidence. None is enabled here.

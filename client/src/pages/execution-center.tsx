@@ -736,7 +736,7 @@ export default function ExecutionCenter() {
         <Card className={!workflow?.permission?.allowed ? "border-amber-500/40" : ""}>
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <CardTitle>Live Permission & Confirmation</CardTitle>
+              <CardTitle>Practice Permission & Confirmation</CardTitle>
               <Badge variant={workflow?.permission?.allowed ? "outline" : "destructive"}>
                 {workflow?.permission?.allowed ? "permission allowed" : "permission blocked"}
               </Badge>
@@ -744,7 +744,7 @@ export default function ExecutionCenter() {
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
             <p className="text-muted-foreground">
-              Controlled-live orders stay in a four-step chain: current quiz pass, current permission, current preview, then one-time final confirmation. Production submission remains disabled.
+              Practice-account actions stay in a four-step chain: current quiz pass, current permission, current preview, then one-time final confirmation. Live account submission remains disabled by demo-only policy.
             </p>
             <div className="grid gap-3 md:grid-cols-3">
               <Summary
@@ -1644,7 +1644,7 @@ function buildAutonomyRoadmap(
     { level: 2, name: "paper_tracking", description: "Signals may be tracked without orders.", blockers: ["Register at least one strategy.", "Move one level at a time."], status: "available" },
     { level: 3, name: "paper_execution", description: "Approved paper entries and exits may be automated.", blockers: ["Validate at least one strategy.", "Configure constraints, monitoring, and kill switch."], status: "available" },
     { level: 4, name: "sandbox_execution", description: "Practice/demo execution requires explicit confirmation.", blockers: ["Configure a sandbox-capable broker.", "Keep explicit user confirmation available."], status: "available" },
-    { level: 5, name: "supervised_live_candidate", description: "Live previews are allowed, but every order requires user confirmation.", blockers: readinessVerdict === "supervised_live_ready" ? [] : blockers.length > 0 ? blockers : ["Complete live readiness assessment."], status: "candidate" },
+    { level: 5, name: "supervised_live_candidate", description: "Practice-account previews are allowed, but every action requires user confirmation.", blockers: readinessVerdict === "supervised_live_ready" ? [] : blockers.length > 0 ? blockers : ["Complete demo readiness assessment."], status: "candidate" },
     { level: 6, name: "bounded_semi_autonomous_candidate", description: "Bounded semi-autonomous eligibility only; production submission remains disabled.", blockers: ["Independent semi-autonomous approval is required.", "Production submission remains disabled."], status: "eligibility only" },
   ].map((level) => ({
     ...level,

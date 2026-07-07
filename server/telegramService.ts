@@ -27,6 +27,7 @@ import { redactSensitive } from "./execution/credentialVault";
 import { signalPriorityService } from "./signalPriorityService";
 import { registerTelegramLifecycleListener, type TelegramLifecycleAlert } from "./telegramNotificationBus";
 import { publishTelegramLifecycleAlert } from "./telegramNotificationBus";
+import { demoOnlyPolicyService } from "./execution/demoOnlyPolicy";
 
 export type TelegramCommandIntent =
   | { kind: "start" }
@@ -172,7 +173,7 @@ export class TelegramAuthGuard {
     if (!secretHeader || secretHeader !== this.env.TELEGRAM_WEBHOOK_SECRET.trim()) {
       return this.reject(actorId, chatId, updateId, text, isGroup, "Invalid Telegram webhook secret");
     }
-    const allowedUserId = this.env.TELEGRAM_ALLOWED_USER_ID?.trim() ?? "";
+    const allowedUserId = getTelegramAllowedUserId(this.env);
     if (!allowedUserId) {
       return this.reject(actorId, chatId, updateId, text, isGroup, "Telegram allowed user ID is not configured");
     }
@@ -482,14 +483,15 @@ export class TelegramBotService {
   }
 
   status(): TelegramSystemStatus {
+    const allowedUserId = getTelegramAllowedUserId(this.env);
     return {
-      configured: Boolean(this.env.TELEGRAM_BOT_TOKEN?.trim() && this.env.TELEGRAM_ALLOWED_USER_ID?.trim() && this.env.TELEGRAM_WEBHOOK_SECRET?.trim()),
+      configured: Boolean(this.env.TELEGRAM_BOT_TOKEN?.trim() && allowedUserId && this.env.TELEGRAM_WEBHOOK_SECRET?.trim()),
       botTokenConfigured: Boolean(this.env.TELEGRAM_BOT_TOKEN?.trim()),
-      allowedUserIdConfigured: Boolean(this.env.TELEGRAM_ALLOWED_USER_ID?.trim()),
+      allowedUserIdConfigured: Boolean(allowedUserId),
       webhookConfigured: Boolean(this.env.TELEGRAM_WEBHOOK_URL?.trim()),
       webhookSecretConfigured: Boolean(this.env.TELEGRAM_WEBHOOK_SECRET?.trim()),
       webhookUrlConfigured: Boolean(this.env.TELEGRAM_WEBHOOK_URL?.trim()),
-      allowedUserId: this.env.TELEGRAM_ALLOWED_USER_ID?.trim() ?? null,
+      allowedUserId: allowedUserId ? "[REDACTED]" : null,
       lastCommand: this.audit.snapshot()?.command ?? null,
       lastCommandAt: this.audit.snapshot()?.at ?? null,
       pendingConfirmations: this.pendingConfirmations.size,
@@ -557,9 +559,10 @@ export class TelegramBotService {
   }
 
   async notifyAlert(alert: TelegramLifecycleAlert | Alert) {
-    if (!this.env.TELEGRAM_BOT_TOKEN?.trim() || !this.env.TELEGRAM_ALLOWED_USER_ID?.trim()) return { sent: false as const, reason: "Telegram is not configured" };
+    const allowedUserId = getTelegramAllowedUserId(this.env);
+    if (!this.env.TELEGRAM_BOT_TOKEN?.trim() || !allowedUserId) return { sent: false as const, reason: "Telegram is not configured" };
     if (this.notifiedAlertIds.has(alert.id)) return { sent: false as const, reason: "Alert already sent" };
-    const chatId = Number(this.env.TELEGRAM_ALLOWED_USER_ID);
+    const chatId = Number(allowedUserId);
     if (!Number.isFinite(chatId)) return { sent: false as const, reason: "Telegram allowed user ID is invalid" };
     const priority = new AlertPriorityRouter().route(alert.severity);
     const message = this.formatter.format({ text: this.describeAlert(alert) });
@@ -651,12 +654,12 @@ export class TelegramBotService {
         if (confirmed) {
           await this.emergency.release(actorId, "Telegram unfreeze confirmed");
           return this.formatter.statusCard([
-            "Signals and live-permission revocation cleared.",
+            "Signals restored for demo-only monitoring.",
             "Kill switch remains authoritative.",
-            "Production live execution remains blocked.",
+            "MarketPilot is demo-only. Live trading is disabled.",
           ], ["/status", "/system"]);
         }
-        return this.requestConfirmation(intent, actorId, chatId, "Unfreeze signals and live permission revocation", "high");
+        return this.requestConfirmation(intent, actorId, chatId, "Unfreeze demo-only signals", "high");
       case "stop_strategy":
         return confirmed ? this.stopStrategy(intent.target) : this.requestConfirmation(intent, actorId, chatId, `Stop strategy ${intent.target || "(latest)"}`, "medium");
       case "start_strategy":
@@ -704,10 +707,21 @@ export class TelegramBotService {
         return confirmed ? this.changeAutonomyLevel(intent.level, actorId) : this.requestConfirmation(intent, actorId, chatId, `Set autonomy level to ${intent.level}`, "high");
       case "unknown":
       default:
+        if (intent.kind === "unknown" && isLiveControlRequest(intent.text)) {
+          demoOnlyPolicyService.recordBlocked({
+            provider: "telegram",
+            accountMode: "live",
+            verificationSource: "telegram.command_text",
+            attemptedAction: intent.text,
+            actor: actorId,
+            source: "telegram-service",
+          });
+          return this.auditReply("unknown", actorId, chatId, blockedLiveTelegramReply(), "critical", "rejected");
+        }
         return this.auditReply("unknown", actorId, chatId, this.formatter.statusCard([
           "Unknown command.",
           "Send /help for the command list.",
-          "Live execution remains blocked.",
+          "MarketPilot is demo-only. Live trading is disabled.",
         ], ["/help", "/status", "/system"]), "low", "rejected");
     }
   }
@@ -732,7 +746,7 @@ export class TelegramBotService {
         "*System*",
         "/system /help",
         "Confirmation required: /enable_paper /enable_sandbox /start_strategy /stop_strategy /close_paper /close_sandbox /unfreeze /autonomy /disable_automation /demo_start /demo_resume /demo_stop",
-        "Live production trading remains disabled by default.",
+        "MarketPilot is demo-only. Live trading is disabled.",
       ].join("\n"),
       reply_markup: {
         inline_keyboard: [[
@@ -1242,7 +1256,7 @@ export class TelegramBotService {
     return this.formatter.statusCard([
       "Confirmation cancelled.",
       "No action executed.",
-      "Live execution remains blocked.",
+      "MarketPilot is demo-only. Live trading is disabled.",
     ], ["/help", "/system"]);
   }
 
@@ -1268,7 +1282,7 @@ export class TelegramBotService {
     return this.formatter.statusCard([
       "Automation disabled.",
       "Paper strategies are now enforced off.",
-      "Production live execution remains blocked.",
+      "MarketPilot is demo-only. Live trading is disabled.",
     ], ["/status", "/system"]);
   }
 
@@ -1295,12 +1309,12 @@ export class TelegramBotService {
       ? this.formatter.statusCard([
           `Automation level set to ${level}.`,
           "All safety gates remain active.",
-          "Production live execution remains blocked.",
+          "MarketPilot is demo-only. Live trading is disabled.",
         ], ["/status", "/system"])
       : this.formatter.statusCard([
           `Automation transition rejected: ${target.reasons[0] ?? "unspecified reason"}`,
           "Keep reviewing the safety gates.",
-          "Production live execution remains blocked.",
+          "MarketPilot is demo-only. Live trading is disabled.",
         ], ["/system", "/status"]);
   }
 
@@ -1343,6 +1357,28 @@ export class TelegramBotService {
     const provider = providers.metaTraderDemo ? "metatrader_demo" : providers.oandaPractice ? "oanda_practice" : null;
     if (!provider) return this.formatter.rejection("No sandbox provider is configured.");
     const adapter = sandboxBrokerRuntime.adapter(provider);
+    const account = await adapter.getAccountSummary();
+    const policy = demoOnlyPolicyService.check({
+      provider,
+      accountMode: account.mode,
+      verificationSource: `${provider}.getAccountSummary`,
+      attemptedAction: "telegram.close_sandbox",
+      actor: "telegram-user",
+      source: "telegram-service",
+      metadata: { accountId: account.accountId },
+    });
+    if (policy.blocked) {
+      demoOnlyPolicyService.recordBlocked({
+        provider,
+        accountMode: account.mode,
+        verificationSource: `${provider}.getAccountSummary`,
+        attemptedAction: "telegram.close_sandbox",
+        actor: "telegram-user",
+        source: "telegram-service",
+        metadata: { accountId: account.accountId },
+      }, policy);
+      return this.formatter.rejection("Blocked: MarketPilot is demo-only and cannot control live accounts.");
+    }
     const positions = await adapter.getOpenPositions();
     const match = this.resolveSandboxPositionTarget(positions, target);
     if (!match) return this.formatter.rejection("Sandbox trade not found.");
@@ -1406,12 +1442,12 @@ export class TelegramBotService {
     return transition.changed
       ? this.formatter.statusCard([
           `Autonomy level set to ${level}.`,
-          "Live execution remains blocked.",
+          "MarketPilot is demo-only. Live trading is disabled.",
           "Safety gates remain active.",
         ], ["/system", "/status"])
       : this.formatter.statusCard([
           `Autonomy transition rejected: ${transition.reasons[0] ?? "unspecified reason"}`,
-          "Live execution remains blocked.",
+          "MarketPilot is demo-only. Live trading is disabled.",
           "Review the safety gates first.",
         ], ["/system", "/status"]);
   }
@@ -1540,6 +1576,21 @@ const telegramUpdateSchema = z.object({
     }).optional(),
   }).optional(),
 }).refine((value) => Boolean(value.message || value.callback_query), { message: "Telegram update must include a message or callback query" });
+
+function getTelegramAllowedUserId(env: NodeJS.ProcessEnv) {
+  return env.TELEGRAM_ALLOWED_USER_ID?.trim() || env.TELEGRAM_CHAT_ID?.trim() || "";
+}
+
+function isLiveControlRequest(text: string) {
+  return /\b(live|real|production|margin[_ -]?live|cash[_ -]?live)\b/i.test(text)
+    && /\b(order|trade|close|automation|broker|account|enable|connect|submit|buy|sell)\b/i.test(text);
+}
+
+function blockedLiveTelegramReply(): TelegramOutboundMessage {
+  return {
+    text: "Blocked: MarketPilot is demo-only and cannot control live accounts.",
+  };
+}
 
 function randomConfirmationCode() {
   return randomUUID().replaceAll("-", "").slice(0, 6).toUpperCase();

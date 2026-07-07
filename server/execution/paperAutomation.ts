@@ -10,6 +10,7 @@ import { tradeLifecycleService } from "./tradeLifecycle";
 import { executionEmergencyState } from "./emergencyControls";
 import { strategyEvidenceStore } from "./strategyEvidenceStore";
 import { publishTelegramLifecycleAlert } from "../telegramNotificationBus";
+import { demoOnlyPolicyService } from "./demoOnlyPolicy";
 
 export class PaperAutomationService {
   private strategies = new Map<string, StrategyDefinition>();
@@ -121,6 +122,15 @@ export class PaperAutomationService {
     const correlationId = randomUUID();
     if (!parsedSignal.success) return this.reject(correlationId, "Signal verification failed");
     const signal = parsedSignal.data;
+    demoOnlyPolicyService.assertAllowed({
+      provider: "paper_provider",
+      accountMode: "paper",
+      verificationSource: "paperExecutionProvider.metadata",
+      attemptedAction: "paper.automation.execute_signal",
+      actor: "system",
+      source: "paper-automation-service",
+      metadata: { strategyId, symbol: signal.symbol },
+    });
     const lifecycle = tradeLifecycleService.create({
       strategyId,
       instrument: signal.symbol,

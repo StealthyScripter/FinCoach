@@ -1,7 +1,7 @@
 # MarketPilot 7-Day Demo Run
 
 This run mode is for paper, sandbox, demo, and practice accounts only.
-Production live execution remains disabled by default.
+MarketPilot is demo-only. Live account execution is disabled by policy and cannot be enabled from UI, Telegram, confirmation flows, or live-like environment flags.
 
 ## Setup
 
@@ -36,7 +36,7 @@ Never commit tokens, account IDs, webhook secrets, or API keys.
 
 `MARKETPILOT_RUN_MODE=demo_observation` enables the demo observation flow:
 
-- production live execution stays blocked
+- live account execution stays blocked
 - paper automation remains allowed
 - sandbox/demo broker flows remain allowed
 - OANDA practice remains allowed
@@ -100,7 +100,7 @@ Not allowed automatically:
 
 - increasing risk
 - increasing leverage
-- live trading
+- live account control
 - credential changes
 - withdrawals or transfers
 - disabling kill switches

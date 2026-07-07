@@ -9,6 +9,7 @@ import { executionRiskPrecheckService } from "./riskPrecheck";
 import { executionAuditLog, executionRiskService, type ExecutionAuditLog, type ExecutionRiskService } from "./riskControls";
 import { sandboxExecutionMetrics, type SandboxExecutionMetrics } from "./sandboxMetrics";
 import { strategyEvidenceStore } from "./strategyEvidenceStore";
+import { demoOnlyPolicyService } from "./demoOnlyPolicy";
 
 type Confirmation = ReturnType<FinalConfirmationService["confirm"]>;
 
@@ -68,6 +69,17 @@ export class SandboxOrderFlowService {
         if (precheck.checks.some((check) => check.id === "kill_switch" && !check.passed)) throw new SandboxBrokerError("kill_switch_active");
         throw new SandboxBrokerError("order_rejected", precheck.reasons.join("; "));
       }
+
+      const account = await input.adapter.getAccountSummary();
+      demoOnlyPolicyService.assertAllowed({
+        provider: input.adapter.id,
+        accountMode: account.mode,
+        verificationSource: `${input.adapter.id}.getAccountSummary`,
+        attemptedAction: "sandbox.flow.execute",
+        actor: input.userId,
+        source: "sandbox-order-flow",
+        metadata: { accountId: account.accountId, productionOrderSubmissionEnabled: input.adapter.productionOrderSubmissionEnabled },
+      });
 
       preview = await input.adapter.previewOrder(input.request);
       this.stage(stages, "order_preview", "created", null, correlationId, {

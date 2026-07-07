@@ -57,15 +57,28 @@ export default function PortfolioCoach() {
   );
   const bestModel = rankedModels[0];
   const topModels = rankedModels.slice(0, 3);
+  const diversification = data.portfolio.holdings.length >= 3 && largest.allocation < 35
+    ? "Reasonably diversified"
+    : `Concentrated in ${largest.symbol}`;
+  const riskAnswer = data.portfolio.riskScore > 70
+    ? "Risk is high"
+    : data.portfolio.riskScore > 45 ? "Risk is moderate" : "Risk is controlled";
+  const rebalanceAnswer = bestModel
+    ? `${bestModel.name}: drift ${bestModel.maxDriftPct.toFixed(1)}%`
+    : "Model comparison loading";
+  const performanceAnswer = risk
+    ? `Sharpe ${risk.sharpeRatio} · drawdown ${risk.maxDrawdownPct}%`
+    : "Performance analytics loading";
 
   return (
     <Layout>
       <div className="space-y-6 animate-in fade-in duration-500">
         <DecisionCard card={card} />
-        <div className="grid gap-4 md:grid-cols-3">
-          <SummaryStat label="Largest risk" value={`${largest.symbol} · ${largest.riskContribution.toFixed(1)}%`} />
-          <SummaryStat label="Portfolio risk" value={`${data.portfolio.riskScore}/100`} />
-          <SummaryStat label="Cash" value={`$${data.portfolio.cash.toLocaleString()}`} />
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <SummaryStat label="Am I diversified?" value={diversification} />
+          <SummaryStat label="Too much risk?" value={`${riskAnswer} · ${data.portfolio.riskScore}/100`} />
+          <SummaryStat label="Should I rebalance?" value={rebalanceAnswer} />
+          <SummaryStat label="How am I performing?" value={performanceAnswer} />
         </div>
 
         <Collapsible>

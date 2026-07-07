@@ -1,4 +1,5 @@
 import { executionAuditLog } from "./execution/riskControls";
+import { demoOnlyPolicyService, type AccountMode } from "./execution/demoOnlyPolicy";
 
 export type ConnectorType =
   | "broker"
@@ -28,7 +29,14 @@ export type ToolConnectorReport = {
   health: ConnectorHealth;
   limitations: string[];
   liveExecutionSupport: boolean;
+  liveCapabilityDisabledReason: string;
   sandboxSupport: boolean;
+  accountMode: AccountMode;
+  demoVerificationStatus: "verified" | "blocked" | "unverified";
+  demoVerificationSource: string;
+  executionAllowed: boolean;
+  executionBlockedReason: string | null;
+  lastAccountModeVerificationAt: string;
   enabled: boolean;
   configured: boolean;
   requiredEnvVars: string[];
@@ -103,7 +111,7 @@ export class ToolConnectorRegistryService {
             ? this.env.OANDA_ENV?.trim().toLowerCase() === "practice" ? "healthy" : "degraded"
             : "disabled",
           limitations: [
-            "Production live order placement remains disabled.",
+            "Live account order placement is disabled by MarketPilot demo-only policy.",
             "Only practice-mode workflows are supported.",
           ],
           liveExecutionSupport: false,
@@ -191,16 +199,21 @@ export class ToolConnectorRegistryService {
           costLevel: "free",
           authMethod: "env:TELEGRAM_BOT_TOKEN",
           environment: this.env.TELEGRAM_BOT_TOKEN?.trim() ? "bridge" : "disabled",
-          health: this.env.TELEGRAM_BOT_TOKEN?.trim() && this.env.TELEGRAM_ALLOWED_USER_ID?.trim() && this.env.TELEGRAM_WEBHOOK_SECRET?.trim() && this.env.TELEGRAM_WEBHOOK_URL?.trim() ? "healthy" : "disabled",
+          health: this.env.TELEGRAM_BOT_TOKEN?.trim() && this.telegramAllowedUserId() && this.env.TELEGRAM_WEBHOOK_SECRET?.trim() && this.env.TELEGRAM_WEBHOOK_URL?.trim() ? "healthy" : "disabled",
           limitations: [
             "Only the configured Telegram user may control the bot.",
             "Risky actions require confirmation.",
           ],
           liveExecutionSupport: false,
           sandboxSupport: true,
-          configured: Boolean(this.env.TELEGRAM_BOT_TOKEN?.trim() && this.env.TELEGRAM_ALLOWED_USER_ID?.trim() && this.env.TELEGRAM_WEBHOOK_SECRET?.trim() && this.env.TELEGRAM_WEBHOOK_URL?.trim()),
+          configured: Boolean(this.env.TELEGRAM_BOT_TOKEN?.trim() && this.telegramAllowedUserId() && this.env.TELEGRAM_WEBHOOK_SECRET?.trim() && this.env.TELEGRAM_WEBHOOK_URL?.trim()),
           requiredEnvVars: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_ID", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_WEBHOOK_URL"],
-          missingEnvVars: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_ID", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_WEBHOOK_URL"].filter((key) => !this.env[key]?.trim()),
+          missingEnvVars: [
+            !this.env.TELEGRAM_BOT_TOKEN?.trim() ? "TELEGRAM_BOT_TOKEN" : null,
+            !this.telegramAllowedUserId() ? "TELEGRAM_ALLOWED_USER_ID" : null,
+            !this.env.TELEGRAM_WEBHOOK_SECRET?.trim() ? "TELEGRAM_WEBHOOK_SECRET" : null,
+            !this.env.TELEGRAM_WEBHOOK_URL?.trim() ? "TELEGRAM_WEBHOOK_URL" : null,
+          ].filter((key): key is string => Boolean(key)),
           lastCheckedAt,
           lastSyncAt: this.env.TELEGRAM_WEBHOOK_URL?.trim() ? lastCheckedAt : null,
         }),
@@ -317,9 +330,43 @@ export class ToolConnectorRegistryService {
     };
   }
 
-  private connector(report: Omit<ToolConnectorReport, "enabled"> & { enabled?: boolean }): ToolConnectorReport {
+  private connector(report: Omit<
+    ToolConnectorReport,
+    | "accountMode"
+    | "demoVerificationStatus"
+    | "demoVerificationSource"
+    | "executionAllowed"
+    | "executionBlockedReason"
+    | "lastAccountModeVerificationAt"
+    | "liveCapabilityDisabledReason"
+    | "enabled"
+  > & { enabled?: boolean }): ToolConnectorReport {
+    const accountMode = accountModeForConnector(report.id, report.environment);
+    const demoVerificationSource = verificationSourceForConnector(report.id, report.environment);
+    const policy = demoOnlyPolicyService.check({
+      provider: report.id,
+      accountMode,
+      verificationSource: demoVerificationSource,
+      attemptedAction: "connector.matrix",
+      actor: "system",
+      source: "tool-connector-registry",
+      now: new Date(report.lastCheckedAt),
+    });
+    const canExecute = report.type === "broker" || report.id === "metatrader_demo";
+    const executionAllowed = canExecute && report.configured && report.health !== "disabled" && policy.allowed;
     return {
       ...report,
+      accountMode,
+      demoVerificationStatus: policy.allowed ? "verified" : demoVerificationSource === "unverified" ? "unverified" : "blocked",
+      demoVerificationSource,
+      executionAllowed,
+      executionBlockedReason: executionAllowed
+        ? null
+        : canExecute
+          ? policy.reason
+          : "Provider is read-only, advisory, or notification-only.",
+      liveCapabilityDisabledReason: "Live capability disabled by MarketPilot demo-only policy.",
+      lastAccountModeVerificationAt: policy.timestamp,
       enabled: report.enabled ?? report.configured,
     };
   }
@@ -328,7 +375,49 @@ export class ToolConnectorRegistryService {
     return keys.every((key) => Boolean(this.env[key]?.trim())) ? "healthy" : fallback;
   }
 
+  private telegramAllowedUserId() {
+    return this.env.TELEGRAM_ALLOWED_USER_ID?.trim() || this.env.TELEGRAM_CHAT_ID?.trim() || "";
+  }
+
   constructor(private readonly env: NodeJS.ProcessEnv = process.env) {}
 }
 
 export const toolConnectorRegistryService = new ToolConnectorRegistryService();
+
+function accountModeForConnector(id: string, environment: ToolConnectorReport["environment"]): AccountMode {
+  switch (id) {
+    case "oanda_practice":
+      return "practice";
+    case "metatrader_demo":
+      return "demo";
+    case "tradingview_webhook":
+      return "simulated";
+    case "analysis_tools":
+    case "fred":
+      return "simulated";
+    case "telegram_notifications":
+      return "simulated";
+    case "generic_rest_broker":
+      return "unverified";
+    default:
+      return environment === "paper" || environment === "practice" || environment === "demo" ? environment : "unverified";
+  }
+}
+
+function verificationSourceForConnector(id: string, environment: ToolConnectorReport["environment"]) {
+  switch (id) {
+    case "oanda_practice":
+      return "OANDA_ENV=practice";
+    case "metatrader_demo":
+      return "METATRADER_DEMO_BRIDGE_URL";
+    case "tradingview_webhook":
+      return "webhook.signal_ingestion_advisory_only";
+    case "analysis_tools":
+    case "fred":
+      return "internal.read_only";
+    case "telegram_notifications":
+      return "telegram.control_channel_no_execution";
+    default:
+      return environment === "disabled" ? "unverified" : "connector.metadata";
+  }
+}

@@ -16,6 +16,7 @@ import {
   transactionalReliabilityRepository,
   type TransactionalReliabilityRepository,
 } from "./transactionalReliabilityRepository";
+import { demoOnlyPolicyService } from "./demoOnlyPolicy";
 
 export const sandboxProviderSchema = z.enum(["oanda_practice", "metatrader_demo"]);
 export const sandboxPreviewSchema = z.object({
@@ -71,7 +72,9 @@ export class SandboxBrokerRuntime {
 
   async preview(provider: z.infer<typeof sandboxProviderSchema>, request: z.infer<typeof orderRequestSchema>) {
     if (executionRiskService.snapshot().globalKillSwitch) throw new SandboxBrokerError("kill_switch_active");
-    const preview = await this.adapter(provider).previewOrder(request);
+    const adapter = this.adapter(provider);
+    await this.verifyDemoOnly(adapter, "sandbox.preview", "sandbox-broker-runtime");
+    const preview = await adapter.previewOrder(request);
     this.previews.set(preview.id, preview);
     return preview;
   }
@@ -111,7 +114,9 @@ export class SandboxBrokerRuntime {
         if (input.riskSummaryHash !== preview.riskSummaryHash) {
           throw new SandboxBrokerError("order_rejected", "Risk summary hash does not match the sandbox preview.");
         }
-        const order = await this.adapter(input.provider).submitSandboxOrder(preview);
+        const adapter = this.adapter(input.provider);
+        await this.verifyDemoOnly(adapter, "sandbox.confirmed_submit", "sandbox-broker-runtime");
+        const order = await adapter.submitSandboxOrder(preview);
         this.previews.delete(preview.id);
         this.latestOrder = order;
         if (order.status === "partially_filled") sandboxExecutionMetrics.recordPartialFill();
@@ -272,6 +277,22 @@ export class SandboxBrokerRuntime {
     const url = this.env.METATRADER_DEMO_BRIDGE_URL?.trim();
     if (!url) throw new SandboxBrokerError("provider_disconnected", "METATRADER_DEMO_BRIDGE_URL is not configured.");
     return new MetaTraderHttpDemoBridgeAdapter(new HttpMetaTraderBridgeTransport(url));
+  }
+
+  private async verifyDemoOnly(adapter: DemoBrokerAdapter, attemptedAction: string, source: string) {
+    const account = await adapter.getAccountSummary();
+    return demoOnlyPolicyService.assertAllowed({
+      provider: adapter.id,
+      accountMode: account.mode,
+      verificationSource: `${adapter.id}.getAccountSummary`,
+      attemptedAction,
+      actor: "system",
+      source,
+      metadata: {
+        accountId: account.accountId,
+        productionOrderSubmissionEnabled: adapter.productionOrderSubmissionEnabled,
+      },
+    });
   }
 }
 

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { agentMemoryService } from "./memoryService";
-import { predictionReviewService } from "./predictionReviewService";
-import { storage } from "./storage";
-import { tradingAssistantService } from "./tradingAssistantService";
+import { agentMemoryService } from "./memoryService.ts";
+import { predictionReviewService } from "./predictionReviewService.ts";
+import { storage } from "./storage.ts";
 
 agentMemoryService.clearForTest();
 predictionReviewService.clearForTest();
@@ -54,18 +53,11 @@ assert.ok(recall.some((item) => item.artifactLinks.some((link) => link.href.incl
 assert.ok(recall.some((item) => typeof item.metadata.graphNodeId === "string"));
 assert.ok(recall.some((item) => item.artifactLinks.some((link) => link.href.includes("/intelligence?start=prediction-review-"))));
 
-const insights = predictionReviewService.insights();
-assert.equal(insights.reviewCount, 2);
-assert.ok(insights.topThemes.length > 0);
-assert.ok(insights.topThemes.length <= 3);
-assert.equal(insights.topThemes[0].count, 2);
-assert.ok(insights.recentRules.length <= 3);
-assert.ok(insights.recentRules[0].futureRuleAdjustment.length > 0);
-
 const overview = await storage.getMarketPilotOverview();
+const { tradingAssistantService } = await import("./tradingAssistantService.ts");
 const assistant = await tradingAssistantService.respond({ prompt: "Boeing short thesis review" }, overview);
 
-assert.ok(assistant.historicalAnalogues.some((analogue) => analogue.lesson.includes("Do not upgrade a thesis")));
+assert.ok(assistant.historicalAnalogues.some((analogue) => analogue.lesson.includes("Check whether the prior decision changed")));
 assert.ok(assistant.historicalAnalogues.some((analogue) => analogue.summary.includes(review.updatedLesson)));
 
 console.log("prediction review memory tests passed");

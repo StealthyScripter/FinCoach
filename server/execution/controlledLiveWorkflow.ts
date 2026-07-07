@@ -9,6 +9,7 @@ import { reliabilityStateStore, type ReliabilityStateStore } from "./reliability
 import type { SandboxBrokerAdapter } from "./sandboxAdapters";
 import { sandboxBrokerAdapters } from "./sandboxAdapters";
 import { executionRiskService } from "./riskControls";
+import { demoOnlyPolicyService, type AccountMode } from "./demoOnlyPolicy";
 
 export const livePermissionRequestSchema = z.object({
   userId: z.string().min(1),
@@ -128,6 +129,15 @@ export class ControlledLiveWorkflowService {
 
   evaluatePermission(input: z.infer<typeof livePermissionRequestSchema>, now = new Date()) {
     const parsed = livePermissionRequestSchema.parse(input);
+    demoOnlyPolicyService.assertAllowed({
+      provider: "controlled_live_workflow",
+      accountMode: parsed.accountMode,
+      verificationSource: "controlledLiveWorkflow.permissionRequest",
+      attemptedAction: "controlled_live.permission",
+      actor: parsed.userId,
+      source: "controlled-live-workflow",
+      now,
+    });
     const quiz = this.getQuiz(parsed.userId);
     const quizPassed = Boolean(quiz?.passed && Date.parse(quiz.expiresAt) >= now.getTime());
     const permission = liveTradingPermissionService.evaluate({
@@ -158,6 +168,15 @@ export class ControlledLiveWorkflowService {
 
   createPreview(input: z.infer<typeof controlledPreviewRequestSchema>, now = new Date()) {
     const parsed = controlledPreviewRequestSchema.parse(input);
+    demoOnlyPolicyService.assertAllowed({
+      provider: parsed.provider,
+      accountMode: accountModeForPreviewProvider(parsed.provider),
+      verificationSource: `${parsed.provider}.controlledPreviewRequest`,
+      attemptedAction: "controlled_live.order_preview",
+      actor: "controlled-live-workflow",
+      source: "controlled-live-workflow",
+      now,
+    });
     const preview = orderPreviewService.create({ ...parsed, environment: "sandbox" }, now);
     this.previews.set(preview.id, { preview, request: parsed.request });
     this.stateStore.set<WorkflowStoreEntry>("controlled_live_workflow", previewKey(preview.id), {
@@ -187,6 +206,16 @@ export class ControlledLiveWorkflowService {
     const parsed = finalConfirmationRequestSchema.parse(input);
     const stored = this.getPreviewRecord(parsed.orderPreviewId);
     if (!stored) throw new Error("Order preview not found");
+    demoOnlyPolicyService.assertAllowed({
+      provider: "controlled_live_workflow",
+      accountMode: "unverified",
+      verificationSource: "controlledLiveWorkflow.finalConfirmation",
+      attemptedAction: "controlled_live.final_confirmation",
+      actor: parsed.userId,
+      source: "controlled-live-workflow",
+      metadata: { orderPreviewId: parsed.orderPreviewId, brokerAccountId: parsed.brokerAccountId },
+      now,
+    });
     const confirmation = finalConfirmationService.confirm({
       ...parsed,
       previewExpiresAt: stored.preview.expiresAt,
@@ -412,4 +441,14 @@ function quizCorrelationId(userId: string) {
 
 function permissionCorrelationId(userId: string) {
   return `controlled-live-permission:${userId}`;
+}
+
+function accountModeForPreviewProvider(provider: z.infer<typeof controlledPreviewRequestSchema>["provider"]): AccountMode {
+  switch (provider) {
+    case "oanda_sandbox":
+    case "generic_rest_sandbox":
+      return "sandbox";
+    case "metatrader_demo":
+      return "demo";
+  }
 }

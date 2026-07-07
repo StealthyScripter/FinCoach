@@ -49,39 +49,30 @@ export default function StrategyLab() {
 
         {lab && (
           <>
-            <div className="grid gap-4 md:grid-cols-3">
-              <SummaryCard label="Top strategies" value={lab.topStrategies.length} />
-              <SummaryCard label="Weak strategies" value={lab.weakStrategies.length} />
-              <SummaryCard label="Learning priorities" value={lab.learningPriorities.items.length} />
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              <TopListCard
-                title="Top strategies"
-                description="Highest evidence-backed scores."
-                items={lab.topStrategies.slice(0, 3).map((item) => `${item.strategyName} · ${item.overallScore}/100 · ${item.verdict}`)}
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              <FocusCard
+                title="Top Strategy"
+                value={lab.topStrategies[0]
+                  ? `${lab.topStrategies[0].strategyName} · ${lab.topStrategies[0].overallScore}/100 · ${lab.topStrategies[0].verdict}`
+                  : "No strategy has enough evidence yet."}
               />
-              <TopListCard
-                title="Weak strategies"
-                description="Lowest scores and most fragile evidence."
-                items={lab.weakStrategies.slice(0, 3).map((item) => `${item.strategyName} · ${item.overallScore}/100 · ${item.verdict}`)}
+              <FocusCard
+                title="Weak Strategy"
+                value={lab.weakStrategies[0]
+                  ? `${lab.weakStrategies[0].strategyName} · ${lab.weakStrategies[0].overallScore}/100 · ${lab.weakStrategies[0].verdict}`
+                  : "No weak strategy is flagged right now."}
               />
-              <TopListCard
-                title="Retirement candidates"
-                description="Pause or retire for review."
-                items={lab.retirementCandidates.length > 0
-                  ? lab.retirementCandidates.slice(0, 3).map((item) => `${item.strategyName} · ${item.verdict}`)
-                  : ["No retirement candidate crossed the threshold."]}
+              <FocusCard
+                title="Latest Lesson"
+                value={lab.latestLessons[0]?.lesson ?? lab.learningPriorities.items[0]?.explanation ?? "Keep collecting paper evidence before changing behavior."}
               />
-              <TopListCard
-                title="Adaptation suggestions"
-                description="Human-reviewed adjustments only."
-                items={lab.adaptationSuggestions.slice(0, 3).map((item) => `${item.strategyId} · ${item.type} · ${item.reason}`)}
+              <FocusCard
+                title="Latest Regret"
+                value={lab.regretAnalysis.learningNotes[0] ?? "No regret pattern has enough evidence yet."}
               />
-              <TopListCard
-                title="Latest lessons"
-                description="Newest learning items."
-                items={lab.latestLessons.slice(0, 3).map((item) => `${item.source} · ${item.lesson}`)}
+              <FocusCard
+                title="Latest Improvement"
+                value={lab.adaptationSuggestions[0]?.reason ?? lab.learningPriorities.items[0]?.explanation ?? "Review one strategy and define the next paper-only test."}
               />
             </div>
 
@@ -303,12 +294,12 @@ export default function StrategyLab() {
   );
 }
 
-function SummaryCard({ label, value }: { label: string; value: number }) {
+function FocusCard({ title, value }: { title: string; value: string }) {
   return (
     <Card className="border-border/50 bg-card/70">
       <CardContent className="p-4">
-        <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-        <div className="mt-2 text-3xl font-bold text-white">{value}</div>
+        <div className="text-xs uppercase tracking-wide text-muted-foreground">{title}</div>
+        <div className="mt-2 text-sm font-medium text-white">{value}</div>
       </CardContent>
     </Card>
   );

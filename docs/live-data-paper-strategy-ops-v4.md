@@ -1,6 +1,6 @@
 # MarketPilot Live Data and Paper Strategy Ops v4
 
-This release adds practice/demo market data, candle-driven paper strategy operations, event risk gates, and post-trade learning. Production live order placement remains impossible.
+This release adds practice/demo market data, candle-driven paper strategy operations, event risk gates, and post-trade learning. Live account order placement remains impossible under the MarketPilot demo-only policy.
 
 ## Price feed architecture
 

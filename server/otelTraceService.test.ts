@@ -5,25 +5,29 @@ import { otelTraceService } from "./otelTraceService";
 
 eventLogService.clearForTest();
 executionAuditLog.clearForTest();
+const correlationId = `trace-otel-${Date.now()}`;
+const eventCreatedAt = new Date(Date.now() - 1_000).toISOString();
 
 eventLogService.append({
   type: "risk.check_completed",
   userId: "trace-user",
   sourceService: "risk-service",
-  correlationId: "trace-otel",
+  correlationId,
   payload: { approved: true },
-  createdAt: "2026-01-15T14:00:00.000Z",
+  createdAt: eventCreatedAt,
 });
 executionAuditLog.append({
   action: "risk.check",
   outcome: "accepted",
-  correlationId: "trace-otel",
+  correlationId,
   detail: { approved: true },
 });
+await eventLogService.flushPersistence();
+await executionAuditLog.flushPersistence();
 
-const exportReport = await otelTraceService.build("trace-otel");
+const exportReport = await otelTraceService.build(correlationId);
 
-assert.equal(exportReport.correlationId, "trace-otel");
+assert.equal(exportReport.correlationId, correlationId);
 assert.equal(exportReport.spanCount, 2);
 assert.equal(exportReport.traceId.length, 32);
 assert.ok(exportReport.spans.every((span) => span.traceId === exportReport.traceId));

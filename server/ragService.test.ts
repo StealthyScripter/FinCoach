@@ -3,6 +3,9 @@ import { eventLogService } from "./eventLogService";
 import { createSeedOverview } from "./storage";
 import { storage } from "./storage";
 import { DemoCitationBuilder, DemoDocumentIngestor, DemoRAGContextBuilder, SimpleChunker } from "./ragService";
+import { bootstrapTestDatabase } from "./testDatabase";
+
+await bootstrapTestDatabase();
 
 const overview = createSeedOverview();
 const documents = new DemoDocumentIngestor().ingest(overview);

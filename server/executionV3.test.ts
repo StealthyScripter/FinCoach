@@ -15,6 +15,7 @@ import { ProductionResilienceService } from "./execution/productionResilience";
 import { ExecutionRiskService } from "./execution/riskControls";
 import { JsonFileReliabilityStateStore } from "./execution/reliabilityStateStore";
 import { OandaSandboxAdapter } from "./execution/sandboxAdapters";
+import { DemoOnlyPolicyError } from "./execution/demoOnlyPolicy";
 import { eventLogService } from "./eventLogService";
 import { buildControlledLiveSequence } from "../shared/controlledLiveWorkflow";
 
@@ -112,22 +113,21 @@ const confirmation = confirmationService.confirm({
   confirmationPhrase: LIVE_CONFIRMATION_PHRASE,
   currentTimestamp: now.toISOString(),
 }, now);
-const workflowConfirmation = workflowService.confirm({
+assert.throws(() => workflowService.confirm({
   orderPreviewId: workflowPreview.id,
   userId: "user-v3",
   brokerAccountId: "oanda-sandbox-account",
   riskSummaryHash: workflowPreview.riskSummaryHash,
   confirmationPhrase: LIVE_CONFIRMATION_PHRASE,
   currentTimestamp: now.toISOString(),
-}, now);
+}, now), DemoOnlyPolicyError);
 assert.equal(confirmation.accepted, true);
 assert.equal(confirmation.singleUse, true);
-assert.equal(workflowConfirmation.accepted, true);
 const workflowSnapshot = workflowService.snapshot("user-v3");
 assert.equal(workflowSnapshot.quizPassed, true);
 assert.equal(workflowSnapshot.permission?.allowed, true);
 assert.equal(workflowSnapshot.previewCount, 1);
-assert.equal(workflowSnapshot.confirmationCount, 1);
+assert.equal(workflowSnapshot.confirmationCount, 0);
 assert.equal(workflowSnapshot.productionLiveSubmissionAllowed, false);
 assert.equal(workflowSnapshot.requiredConfirmationPhrase, LIVE_CONFIRMATION_PHRASE);
 const workflowHistory = await workflowService.history({
@@ -139,16 +139,15 @@ const expectedDurability = Boolean(eventLogService.persistenceHealth().configure
 assert.ok(workflowHistory.some((entry) => entry.type === "controlled_live.quiz_recorded"));
 assert.ok(workflowHistory.some((entry) => entry.type === "controlled_live.permission_evaluated"));
 assert.ok(workflowHistory.some((entry) => entry.type === "controlled_live.preview_created"));
-assert.ok(workflowHistory.some((entry) => entry.type === "controlled_live.confirmation_recorded"));
+assert.equal(workflowHistory.some((entry) => entry.type === "controlled_live.confirmation_recorded"), false);
 assert.ok(workflowHistory.every((entry) => entry.durable === expectedDurability));
 const liveSequence = buildControlledLiveSequence(workflowHistory);
 assert.equal(liveSequence.steps[0].completed, true);
 assert.equal(liveSequence.steps[1].completed, true);
 assert.equal(liveSequence.steps[2].completed, true);
-assert.equal(liveSequence.steps[3].completed, true);
-assert.equal(liveSequence.currentStepLabel, "Workflow complete");
-assert.equal(liveSequence.workflowComplete, true);
-assert.equal(liveSequence.completedStepCount, 4);
+assert.equal(liveSequence.steps[3].completed, false);
+assert.equal(liveSequence.workflowComplete, false);
+assert.equal(liveSequence.completedStepCount, 3);
 assert.equal(liveSequence.totalStepCount, 4);
 assert.equal(liveSequence.latestTransitionAt, workflowHistory[0]?.createdAt ?? null);
 const workflowStateDir = mkdtempSync(join(tmpdir(), "marketpilot-controlled-live-"));
@@ -168,22 +167,22 @@ try {
     invalidationRule: "Close below the London range low",
     provider: "oanda_sandbox",
   }, now);
-  const persistedConfirmation = persistentWorkflow.confirm({
+  assert.throws(() => persistentWorkflow.confirm({
     orderPreviewId: persistedPreview.id,
     userId: "persisted-user",
     brokerAccountId: "oanda-sandbox-account",
     riskSummaryHash: persistedPreview.riskSummaryHash,
     confirmationPhrase: LIVE_CONFIRMATION_PHRASE,
     currentTimestamp: now.toISOString(),
-  }, now);
+  }, now), DemoOnlyPolicyError);
   const reloadedWorkflow = new ControlledLiveWorkflowService(new JsonFileReliabilityStateStore(workflowStateFile));
   const reloadedSnapshot = reloadedWorkflow.snapshot("persisted-user");
   assert.equal(reloadedSnapshot.quizPassed, true);
   assert.equal(reloadedSnapshot.permission?.allowed, true);
   assert.equal(reloadedSnapshot.previewCount, 1);
-  assert.equal(reloadedSnapshot.confirmationCount, 1);
+  assert.equal(reloadedSnapshot.confirmationCount, 0);
   assert.equal(reloadedSnapshot.latestPreview?.id, persistedPreview.id);
-  assert.equal(reloadedSnapshot.latestConfirmation?.id, persistedConfirmation.id);
+  assert.equal(reloadedSnapshot.latestConfirmation, null);
 } finally {
   rmSync(workflowStateDir, { recursive: true, force: true });
 }

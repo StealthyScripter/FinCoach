@@ -16,12 +16,11 @@ import { Link } from "wouter";
 
 const examples = [
   "Why did Microsoft drop?",
-  "Should I short Boeing?",
-  "Find forex setups.",
-  "Is this crypto move real?",
-  "Review my portfolio risk.",
-  "Teach me credit scores.",
-  "Explain today's Fed impact.",
+  "Explain today's EUR/USD move.",
+  "Should I trade before CPI?",
+  "Explain this TradingView signal.",
+  "Why did my paper trade lose?",
+  "What lesson should I study next?",
 ];
 
 export default function AskMarketPilot() {
@@ -59,7 +58,10 @@ export default function AskMarketPilot() {
             <BrainCircuit className="h-5 w-5" />
             <span className="text-xs uppercase tracking-widest">Ask MarketPilot</span>
           </div>
-          <h1 className="mt-2 text-3xl font-bold text-white">What do you want to understand or trade?</h1>
+          <h1 className="mt-2 text-3xl font-bold text-white">Ask one clear market question.</h1>
+          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+            MarketPilot answers with a concise decision card, evidence, competing explanations, risk, a lesson, and paper-only next steps when appropriate.
+          </p>
           <form className="mt-4 space-y-3" onSubmit={handleSubmit}>
             <Textarea
               value={prompt}
@@ -84,6 +86,19 @@ export default function AskMarketPilot() {
           <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
             <div className="space-y-5">
               <DecisionCard card={ask.data.decisionCard} />
+              <div className="grid gap-3 md:grid-cols-2">
+                <AnswerTile title="Summary" value={ask.data.decisionCard.mainConclusion} />
+                <AnswerTile title="Evidence" value={ask.data.researchSummary[0] ?? ask.data.decisionCard.why[0] ?? "Evidence is still being gathered."} />
+                <AnswerTile title="Alternative explanation" value={ask.data.decisionCard.whatCouldProveWrong[0] ?? "A different macro or positioning driver could explain the move."} />
+                <AnswerTile title="Risk" value={ask.data.riskCheck.reasons[0] ?? ask.data.decisionCard.details.risks[0] ?? "Treat this as research until risk is defined."} />
+                <AnswerTile title="Suggested lesson" value={ask.data.learningNote} />
+                <AnswerTile
+                  title="Paper trade suggestion"
+                  value={ask.data.strategyOptions[0]
+                    ? `${ask.data.strategyOptions[0].possibleStrategy} on ${ask.data.strategyOptions[0].bestInstrument}; paper/sandbox only.`
+                    : "No paper setup is appropriate from this answer yet."}
+                />
+              </div>
             </div>
             <div className="space-y-4">
                   <Card className="border-border/60 bg-card/70">
@@ -128,7 +143,7 @@ export default function AskMarketPilot() {
                   </Card>
                   <Card className="border-border/60 bg-card/70">
                     <CardHeader>
-                      <CardTitle className="text-white">What matters now</CardTitle>
+                      <CardTitle className="text-white">Evidence to check</CardTitle>
                     </CardHeader>
                 <CardContent className="space-y-3 text-sm">
                   <div className="rounded-lg border border-border/60 bg-background/35 p-3">
@@ -152,7 +167,7 @@ export default function AskMarketPilot() {
                   <Collapsible>
                 <CollapsibleTrigger asChild>
                   <Button variant="outline" className="w-full justify-between border-border/60">
-                    Show strategy and supporting analysis
+                    Show advanced evidence and memory
                     <ChevronDown className="h-4 w-4" />
                   </Button>
                   </CollapsibleTrigger>
@@ -379,6 +394,15 @@ function Info({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border/60 bg-background/35 p-3">
       <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+      <p className="mt-1 text-sm text-slate-200">{value}</p>
+    </div>
+  );
+}
+
+function AnswerTile({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{title}</div>
       <p className="mt-1 text-sm text-slate-200">{value}</p>
     </div>
   );

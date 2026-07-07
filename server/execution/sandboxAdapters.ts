@@ -5,6 +5,7 @@ import type { FinalConfirmationService } from "./finalConfirmation";
 import type { LiveTradingPermissionService } from "./liveTradingPermission";
 import { orderPreviewService, type ControlledOrderPreviewInput } from "./orderPreview";
 import { executionAuditLog, executionRiskService } from "./riskControls";
+import { demoOnlyPolicyService } from "./demoOnlyPolicy";
 
 type Permission = ReturnType<LiveTradingPermissionService["evaluate"]>;
 type Confirmation = ReturnType<FinalConfirmationService["confirm"]>;
@@ -76,10 +77,30 @@ abstract class BaseSandboxBrokerAdapter implements SandboxBrokerAdapter {
   async previewOrder(input: ControlledOrderPreviewInput) {
     if (!this.connected) throw new Error(`${this.id} sandbox is disconnected`);
     if (input.provider !== this.id || input.environment !== "sandbox") throw new Error("Sandbox preview environment mismatch");
+    const account = await this.syncAccount();
+    demoOnlyPolicyService.assertAllowed({
+      provider: this.id,
+      accountMode: account.mode,
+      verificationSource: `${this.id}.syncAccount`,
+      attemptedAction: "sandbox.adapter.preview",
+      actor: "system",
+      source: "sandbox-adapter",
+      metadata: { accountId: account.id, productionSubmitEnabled: this.productionSubmitEnabled },
+    });
     return orderPreviewService.create(input);
   }
 
   async submitSandboxOrder({ request, preview, permission, confirmation }: { request: OrderRequest; preview: Preview; permission: Permission; confirmation: Confirmation }) {
+    const account = await this.syncAccount();
+    demoOnlyPolicyService.assertAllowed({
+      provider: this.id,
+      accountMode: account.mode,
+      verificationSource: `${this.id}.syncAccount`,
+      attemptedAction: "sandbox.adapter.submit",
+      actor: "system",
+      source: "sandbox-adapter",
+      metadata: { accountId: account.id, productionSubmitEnabled: this.productionSubmitEnabled },
+    });
     const reasons = [
       !this.connected ? "Sandbox provider is disconnected" : null,
       executionRiskService.snapshot().globalKillSwitch ? "Global kill switch is triggered" : null,

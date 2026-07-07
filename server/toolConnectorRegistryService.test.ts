@@ -26,6 +26,11 @@ assert.equal(snapshot.connectors.find((connector) => connector.id === "cash_app_
 assert.equal(snapshot.connectors.find((connector) => connector.id === "tradingview_webhook")?.recentSignals, 0);
 assert.deepEqual(snapshot.connectors.find((connector) => connector.id === "oanda_practice")?.requiredEnvVars, ["OANDA_API_TOKEN", "OANDA_ACCOUNT_ID", "OANDA_ENV"]);
 assert.deepEqual(snapshot.connectors.find((connector) => connector.id === "oanda_practice")?.missingEnvVars, []);
+assert.equal(snapshot.connectors.find((connector) => connector.id === "oanda_practice")?.accountMode, "practice");
+assert.equal(snapshot.connectors.find((connector) => connector.id === "oanda_practice")?.demoVerificationStatus, "verified");
+assert.equal(snapshot.connectors.find((connector) => connector.id === "oanda_practice")?.executionAllowed, true);
+assert.equal(snapshot.connectors.find((connector) => connector.id === "tradingview_webhook")?.executionAllowed, false);
+assert.equal(snapshot.connectors.find((connector) => connector.id === "generic_rest_broker")?.executionBlockedReason, "Provider is not supported for demo-only execution.");
 assert.ok((snapshot.connectors.find((connector) => connector.id === "telegram_notifications")?.supportedActions ?? []).includes("kill_switch_control"));
 assert.ok((snapshot.connectors.find((connector) => connector.id === "generic_rest_broker")?.safetyConstraints ?? []).some((item) => item.includes("Sandbox")));
 

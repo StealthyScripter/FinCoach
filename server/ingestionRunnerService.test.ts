@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { eventLogService } from "./eventLogService";
 import { IngestionRunnerService } from "./ingestionRunnerService";
 import { storage } from "./storage";
+import { bootstrapTestDatabase } from "./testDatabase";
+
+await bootstrapTestDatabase();
 
 eventLogService.clearForTest();
 const service = new IngestionRunnerService();

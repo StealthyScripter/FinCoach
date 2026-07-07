@@ -1054,7 +1054,7 @@ function LivePolicyPanel({ policy }: { policy: LiveAssistancePolicy }) {
         <div>
           <div className="font-medium text-white">{policy.status.replaceAll("_", " ")}</div>
           <div className="mt-1 text-xs text-muted-foreground">
-            Live preview: {policy.canRequestLivePreview ? "available" : "blocked"} / live order: {policy.canPlaceLiveOrder ? "available" : "blocked"}
+            Practice preview: {policy.canRequestLivePreview ? "available" : "blocked"} / account control: {policy.canPlaceLiveOrder ? "available" : "blocked"}
           </div>
         </div>
         <Badge variant="outline" className="border-rose-500/40 text-rose-300">

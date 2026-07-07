@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { strategyEvidenceStore, sampleDepthService } from "./execution/strategyEvidenceStore";
 import type { StrategyValidationInput, StrategyValidationScorecard } from "./execution/strategyValidation";
+import { bootstrapTestDatabase } from "./testDatabase";
 
+await bootstrapTestDatabase();
 strategyEvidenceStore.clearForTest();
 
 const validationInput: StrategyValidationInput = {

@@ -5,30 +5,32 @@ import { traceService } from "./traceService";
 
 eventLogService.clearForTest();
 executionAuditLog.clearForTest();
+const correlationId = `trace-1-${Date.now()}`;
+const eventCreatedAt = new Date(Date.now() - 1_000).toISOString();
 
 eventLogService.append({
   type: "risk.check_completed",
   userId: "trace-user",
   sourceService: "risk-service",
-  correlationId: "trace-1",
+  correlationId,
   payload: { approved: true },
-  createdAt: "2026-01-15T14:00:00.000Z",
+  createdAt: eventCreatedAt,
 });
 executionAuditLog.append({
   action: "risk.check",
   outcome: "accepted",
-  correlationId: "trace-1",
+  correlationId,
   detail: { approved: true },
 });
 
-const report = await traceService.build("trace-1");
+const report = await traceService.build(correlationId);
 
-assert.equal(report.correlationId, "trace-1");
+assert.equal(report.correlationId, correlationId);
 assert.equal(report.eventCount, 1);
 assert.equal(report.auditCount, 1);
 assert.equal(report.entryCount, 2);
 assert.ok(report.entries.some((entry) => entry.source === "event_log"));
 assert.ok(report.entries.some((entry) => entry.source === "execution_audit"));
-assert.equal(report.firstSeenAt, "2026-01-15T14:00:00.000Z");
+assert.equal(report.firstSeenAt, eventCreatedAt);
 
 console.log("traceService smoke tests passed");

@@ -70,11 +70,14 @@ try {
   assert.deepEqual(router.parse("CANCEL ABC123"), { kind: "cancel", code: "ABC123" });
 
   const bot = new TelegramBotService(env, fakeFetch);
+  assert.equal(bot.status().allowedUserId, "[REDACTED]");
   const helpReply = await bot.handleCommand("/help", "42", 42);
   assert.match(helpReply.text, /\*View\*/);
   assert.match(helpReply.text, /Confirmation required:/);
-  assert.match(helpReply.text, /Live production trading remains disabled by default\./);
+  assert.match(helpReply.text, /MarketPilot is demo-only\. Live trading is disabled\./);
   assert.ok(helpReply.reply_markup?.inline_keyboard?.[0]?.some((button) => button.callback_data === "/demo_status"));
+  const liveCommand = await bot.handleCommand("/enable live order EUR_USD", "42", 42);
+  assert.equal(liveCommand.text, "Blocked: MarketPilot is demo-only and cannot control live accounts.");
   const statusReply = await bot.handleCommand("/status", "42", 42);
   assert.match(statusReply.text, /Telegram/);
   assert.match(statusReply.text, /Kill switch/);
@@ -123,7 +126,7 @@ try {
   const code = confirmation.text.match(/CONFIRM ([A-Z0-9]+)/)?.[1];
   assert.ok(code);
   const confirmed = await bot.handleCommand(`CONFIRM ${code}`, "42", 42);
-  assert.match(confirmed.text, /Signals and live-permission revocation cleared/);
+  assert.match(confirmed.text, /Signals restored for demo-only monitoring/);
   assert.equal(executionEmergencyState.signalsFrozen, false);
 
   automationLevelService.setLevel(3);
@@ -241,7 +244,20 @@ try {
 
   const sandboxPositions: Array<{ id: string; instrument: string }> = [{ id: "sandbox-pos-1", instrument: "EUR_USD" }];
   let sandboxRejectMode = false;
+  const sandboxSubmitIdempotencyKey = `sandbox-idempotency-${Date.now()}`;
+  const sandboxRejectIdempotencyKey = `sandbox-idempotency-reject-${Date.now()}`;
   const sandboxAdapter = {
+    id: "metatrader_demo",
+    productionOrderSubmissionEnabled: false,
+    async getAccountSummary() {
+      return {
+        id: "metatrader-demo-account",
+        mode: "demo" as const,
+        equity: 100_000,
+        currency: "USD",
+        lastSyncAt: new Date().toISOString(),
+      };
+    },
     async previewOrder(request: { instrument: string }) {
       return {
         id: "preview-1",
@@ -317,7 +333,7 @@ try {
     previewId: runtimePreview.id,
     riskSummaryHash: runtimePreview.riskSummaryHash,
     confirmationPhrase: "I understand this is a live trade and I accept the risk.",
-    idempotencyKey: "sandbox-idempotency-1",
+    idempotencyKey: sandboxSubmitIdempotencyKey,
   });
   assert.equal(sandboxResult.status, "filled");
 
@@ -338,7 +354,7 @@ try {
     previewId: runtimeRejectPreview.id,
     riskSummaryHash: runtimeRejectPreview.riskSummaryHash,
     confirmationPhrase: "I understand this is a live trade and I accept the risk.",
-    idempotencyKey: "sandbox-idempotency-2",
+    idempotencyKey: sandboxRejectIdempotencyKey,
   });
   assert.equal(sandboxRejectedResult.status, "rejected");
   sandboxRejectMode = false;
@@ -353,7 +369,9 @@ try {
   assert.match(supportedCloseConfirmed.text, /Status: closed/);
 
   delete process.env.METATRADER_DEMO_BRIDGE_URL;
-  const unsupportedClose = await bot.handleCommand("/close_sandbox", "42", 42);
+  sandboxPositions.push({ id: "sandbox-pos-unsupported", instrument: "GBP_USD" });
+  delete (sandboxAdapter as any).closePosition;
+  const unsupportedClose = await bot.handleCommand("/close_sandbox GBP_USD", "42", 42);
   assert.match(unsupportedClose.text, /CONFIRM/);
   const unsupportedCloseCode = unsupportedClose.text.match(/CONFIRM ([A-Z0-9]+)/)?.[1];
   assert.ok(unsupportedCloseCode);
@@ -424,6 +442,8 @@ try {
   else process.env.OANDA_ENV = restoreOanda.environment;
   if (restoreOanda.metaTrader === undefined) delete process.env.METATRADER_DEMO_BRIDGE_URL;
   else process.env.METATRADER_DEMO_BRIDGE_URL = restoreOanda.metaTrader;
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.ok(lifecycleAlerts.includes("paper.trade_opened"));
   assert.ok(lifecycleAlerts.includes("paper.trade_closed"));

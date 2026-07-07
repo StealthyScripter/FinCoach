@@ -76,6 +76,7 @@ import { EmergencyControlService } from "./execution/emergencyControls";
 import { sandboxBrokerAdapters } from "./execution/sandboxAdapters";
 import { sandboxBrokerRuntime, sandboxConfirmedSubmitSchema, sandboxIdempotencyResolutionSchema, sandboxPreviewSchema, sandboxProviderSchema } from "./execution/sandboxBrokerRuntime";
 import { SandboxBrokerError } from "./execution/brokerFailures";
+import { demoOnlyPolicyService, DemoOnlyPolicyError } from "./execution/demoOnlyPolicy";
 import { accountSyncService } from "./execution/accountSyncService";
 import { selectSandboxExecutionCenterData } from "./execution/sandboxExecutionCenter";
 import { sandboxExecutionMetrics } from "./execution/sandboxMetrics";
@@ -1149,7 +1150,27 @@ export async function registerRoutes(
   app.post("/api/marketpilot/execution/live-permission", async (req, res) => {
     const parsed = livePermissionRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ message: "Invalid live permission evidence", issues: parsed.error.flatten() });
+      res.status(400).json({ message: "Invalid demo readiness evidence", issues: parsed.error.flatten() });
+      return;
+    }
+    const policy = demoOnlyPolicyService.check({
+      provider: "controlled_live_workflow",
+      accountMode: parsed.data.accountMode,
+      verificationSource: "controlledLiveWorkflow.permissionRequest",
+      attemptedAction: "controlled_live.permission",
+      actor: parsed.data.userId,
+      source: "routes",
+    });
+    if (policy.blocked) {
+      demoOnlyPolicyService.recordBlocked({
+        provider: "controlled_live_workflow",
+        accountMode: parsed.data.accountMode,
+        verificationSource: "controlledLiveWorkflow.permissionRequest",
+        attemptedAction: "controlled_live.permission",
+        actor: parsed.data.userId,
+        source: "routes",
+      }, policy);
+      res.status(403).json(policy);
       return;
     }
     const permission = controlledLiveWorkflowService.evaluatePermission(parsed.data);
@@ -1177,12 +1198,24 @@ export async function registerRoutes(
   app.post("/api/marketpilot/execution/live-order-preview", async (req, res) => {
     const parsed = controlledPreviewRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ message: "Invalid controlled-live order preview", issues: parsed.error.flatten() });
+      res.status(400).json({ message: "Invalid demo readiness order preview", issues: parsed.error.flatten() });
       return;
     }
     try {
+      demoOnlyPolicyService.assertAllowed({
+        provider: parsed.data.provider,
+        accountMode: "unverified",
+        verificationSource: "controlledLiveWorkflow.previewRequest",
+        attemptedAction: "controlled_live.order_preview",
+        actor: "demo-user",
+        source: "routes",
+      });
       res.status(201).json(controlledLiveWorkflowService.createPreview(parsed.data));
     } catch (error) {
+      if (error instanceof DemoOnlyPolicyError) {
+        res.status(403).json(error.result);
+        return;
+      }
       res.status(400).json({ message: error instanceof Error ? error.message : "Preview creation failed" });
     }
   });
@@ -1194,9 +1227,21 @@ export async function registerRoutes(
       return;
     }
     try {
+      demoOnlyPolicyService.assertAllowed({
+        provider: "controlled_live_workflow",
+        accountMode: "unverified",
+        verificationSource: "controlledLiveWorkflow.finalConfirmation",
+        attemptedAction: "controlled_live.final_confirmation",
+        actor: parsed.data.userId,
+        source: "routes",
+      });
       const confirmation = controlledLiveWorkflowService.confirm(parsed.data);
       res.status(confirmation.accepted ? 201 : 409).json(confirmation);
     } catch (error) {
+      if (error instanceof DemoOnlyPolicyError) {
+        res.status(403).json(error.result);
+        return;
+      }
       res.status(404).json({ message: error instanceof Error ? error.message : "Confirmation failed" });
     }
   });
@@ -1821,8 +1866,21 @@ export async function registerRoutes(
 
   app.post("/api/marketpilot/trade-tickets/:id/order-preview", async (req, res, next) => {
     try {
+      demoOnlyPolicyService.assertAllowed({
+        provider: "paper_provider",
+        accountMode: "paper",
+        verificationSource: "tradeTicket.paper_preview",
+        attemptedAction: "paper.order_preview",
+        actor: "demo-user",
+        source: "routes",
+        metadata: { ticketId: req.params.id },
+      });
       res.status(201).json(await storage.createOrderPreview(req.params.id));
     } catch (error) {
+      if (error instanceof DemoOnlyPolicyError) {
+        res.status(403).json(error.result);
+        return;
+      }
       if (error instanceof Error && "status" in error && typeof error.status === "number") {
         res.status(error.status).json({ message: error.message });
         return;
@@ -1844,8 +1902,21 @@ export async function registerRoutes(
     }
 
     try {
+      demoOnlyPolicyService.assertAllowed({
+        provider: "paper_provider",
+        accountMode: "paper",
+        verificationSource: "tradeTicket.paper_fill",
+        attemptedAction: "paper.fill",
+        actor: "demo-user",
+        source: "routes",
+        metadata: { ticketId: req.params.id },
+      });
       res.status(201).json(await storage.fillPaperTrade(req.params.id, parsed.data));
     } catch (error) {
+      if (error instanceof DemoOnlyPolicyError) {
+        res.status(403).json(error.result);
+        return;
+      }
       if (error instanceof Error && "status" in error && typeof error.status === "number") {
         res.status(error.status).json({ message: error.message });
         return;
@@ -1867,8 +1938,21 @@ export async function registerRoutes(
     }
 
     try {
+      demoOnlyPolicyService.assertAllowed({
+        provider: "paper_provider",
+        accountMode: "paper",
+        verificationSource: "tradeTicket.paper_close",
+        attemptedAction: "paper.close",
+        actor: "demo-user",
+        source: "routes",
+        metadata: { ticketId: req.params.id },
+      });
       res.status(201).json(await storage.closePaperTrade(req.params.id, parsed.data));
     } catch (error) {
+      if (error instanceof DemoOnlyPolicyError) {
+        res.status(403).json(error.result);
+        return;
+      }
       if (error instanceof Error && "status" in error && typeof error.status === "number") {
         res.status(error.status).json({ message: error.message });
         return;

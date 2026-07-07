@@ -9,6 +9,7 @@ const vectorMigration = readFileSync("migrations/0005_vector_persistence.sql", "
 const ragMigration = readFileSync("migrations/0006_rag_corpus_persistence.sql", "utf-8");
 const aiEvaluationMigration = readFileSync("migrations/0007_ai_evaluations_persistence.sql", "utf-8");
 const timeSeriesMigration = readFileSync("migrations/0009_time_series_persistence.sql", "utf-8");
+const strategyEvidenceMigration = readFileSync("migrations/0010_strategy_evidence_persistence.sql", "utf-8");
 
 const requiredTables = [
   "users",
@@ -188,5 +189,14 @@ for (const index of [
 }
 assert.match(timeSeriesMigration, /BEGIN;/i);
 assert.match(timeSeriesMigration, /COMMIT;/i);
+
+for (const table of [
+  "strategy_evidence_records",
+]) {
+  assert.match(strategyEvidenceMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+assert.match(strategyEvidenceMigration, /idx_strategy_evidence_records_strategy_timestamp/i);
+assert.match(strategyEvidenceMigration, /BEGIN;/i);
+assert.match(strategyEvidenceMigration, /COMMIT;/i);
 
 console.log("schema migration smoke tests passed");

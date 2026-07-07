@@ -2,6 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import type { TradingViewSignal } from "./domain";
 import { normalizeSymbol, tradingViewSignalSchema } from "./domain";
 import { executionAuditLog } from "./riskControls";
+import { demoOnlyPolicyService } from "./demoOnlyPolicy";
 
 export type WebhookResult = {
   status: "signal accepted" | "signal rejected" | "paper strategy created" | "risk review required";
@@ -52,6 +53,26 @@ export class TradingViewWebhookSignalProvider {
     if (!instrument) {
       return this.reject(correlationId, "Unsupported forex or commodity instrument");
     }
+    const policy = demoOnlyPolicyService.check({
+      provider: "tradingview_webhook",
+      accountMode: "simulated",
+      verificationSource: "webhook.signal_ingestion_advisory_only",
+      attemptedAction: "tradingview.signal_ingestion",
+      actor: "tradingview",
+      source: "tradingview-webhook",
+      metadata: { strategyName: signal.strategyName, symbol: instrument.symbol },
+    });
+    if (policy.blocked) {
+      demoOnlyPolicyService.recordBlocked({
+        provider: "tradingview_webhook",
+        accountMode: "simulated",
+        verificationSource: "webhook.signal_ingestion_advisory_only",
+        attemptedAction: "tradingview.signal_ingestion",
+        actor: "tradingview",
+        source: "tradingview-webhook",
+      }, policy);
+      return this.reject(correlationId, policy.reason);
+    }
     this.replayKeys.set(replayKey, this.now() + this.maxAgeMs);
 
     const stopDistance = Math.abs(signal.price - signal.stopLoss);
@@ -63,7 +84,7 @@ export class TradingViewWebhookSignalProvider {
       action: "tradingview.signal",
       outcome: status === "signal accepted" ? "accepted" : "blocked",
       correlationId,
-      detail: { instrument: instrument.symbol, strategyName: signal.strategyName, status },
+      detail: { instrument: instrument.symbol, strategyName: signal.strategyName, status, demoOnly: true, executionAllowed: false },
     });
     return { status, accepted: true, signal: { ...signal, symbol: instrument.symbol }, correlationId };
   }

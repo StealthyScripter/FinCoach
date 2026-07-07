@@ -1,7 +1,10 @@
 import Layout from "@/components/layout";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAgentOutputs, useAgentSupervisor, useConnectorRegistry, useDemoRunReport, useDemoRunStatus, useDemoRunTelemetry, useInstitutionalAnalytics, useProviderHealth, useTelegramStatus, useVerificationQuality } from "@/lib/marketpilot";
 import { selectDemoRunPrimaryItems } from "@/lib/demoRunDisplay";
+import { ChevronDown } from "lucide-react";
 
 export default function System() {
   const { data: analytics } = useInstitutionalAnalytics();
@@ -27,13 +30,16 @@ export default function System() {
   const topSharedRecommendations = Object.entries(recommendationCounts)
     .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .slice(0, 3);
+  const supportedConnectorIds = new Set(["oanda_practice", "metatrader_demo", "tradingview_webhook", "telegram_notifications", "fred"]);
+  const supportedConnectors = (connectors?.connectors ?? []).filter((connector) => supportedConnectorIds.has(connector.id));
+  const primaryTelegramCommands = ["/status", "/market", "/portfolio", "/signals", "/debrief", "/lessons", "/demo_status", "/demo_report", "/disable_automation", "/kill"];
 
   return (
     <Layout>
       <div className="space-y-6 animate-in fade-in duration-500">
         <div>
           <h1 className="text-3xl font-bold text-white">System</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Advanced diagnostics and institutional analytics live here, away from default decision screens.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Run health, demo monitoring, Telegram control, and supported integrations.</p>
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Metric title="Verification" value={verification ? `${verification.score}/100` : "..."} />
@@ -114,15 +120,23 @@ export default function System() {
               <div>Webhook: {telegram?.webhookConfigured ? "configured" : "missing"}</div>
               <div>Last command: {telegram?.lastCommand ?? "none"}</div>
               <div>Pending confirmations: {telegram?.pendingConfirmations ?? 0}</div>
-              <div>Live trading: disabled by default</div>
+              <div>Mode: demo-only learning and sandbox control</div>
+              <div className="pt-2">
+                <div className="text-xs uppercase tracking-wide text-muted-foreground">Primary commands</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {primaryTelegramCommands.map((command) => (
+                    <span key={command} className="rounded-md border border-border/60 bg-background/35 px-2 py-1 text-xs text-slate-200">{command}</span>
+                  ))}
+                </div>
+              </div>
             </CardContent>
           </Card>
           <Card className="border-border/60 bg-card/60">
             <CardHeader>
-              <CardTitle className="text-white">Connector Registry</CardTitle>
+              <CardTitle className="text-white">Supported Integrations</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-slate-200">
-              {(connectors?.connectors ?? []).slice(0, 3).map((connector) => (
+              {supportedConnectors.map((connector) => (
                 <details key={connector.id} className="rounded-lg border border-border/60 bg-background/35 p-3">
                   <summary className="cursor-pointer list-none">
                     <div className="flex items-center justify-between gap-3">
@@ -133,6 +147,10 @@ export default function System() {
                   </summary>
                   <div className="mt-3 space-y-1 text-xs text-slate-300">
                     <div>Environment: {connector.environmentLabel}</div>
+                    <div>Account mode: {connector.accountMode}</div>
+                    <div>Demo verification: {connector.demoVerificationStatus} via {connector.demoVerificationSource}</div>
+                    <div>Execution allowed: {connector.executionAllowed ? "yes" : "no"}</div>
+                    {!connector.executionAllowed && <div>Reason: {connector.executionBlockedReason ?? connector.liveCapabilityDisabledReason}</div>}
                     <div>Assets: {connector.supportedAssetClasses.join(", ") || "none"}</div>
                     <div>Actions: {connector.supportedActions.join(", ") || "none"}</div>
                     <div>Disabled: {connector.disabledActions.join(", ") || "none"}</div>
@@ -143,10 +161,23 @@ export default function System() {
                   </div>
                 </details>
               ))}
+              {supportedConnectors.length === 0 && (
+                <div className="rounded-lg border border-border/60 bg-background/35 p-3 text-muted-foreground">
+                  Loading supported integrations...
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
-        <div className="grid gap-4 lg:grid-cols-2">
+
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button variant="outline" className="w-full justify-between border-border/60">
+              Show admin and developer diagnostics
+              <ChevronDown className="h-4 w-4" />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-4 grid gap-4 lg:grid-cols-2">
           <Card className="border-border/60 bg-card/60">
             <CardHeader>
               <CardTitle className="text-white">Agent Council</CardTitle>
@@ -211,7 +242,8 @@ export default function System() {
               </Card>
             </>
           )}
-        </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </Layout>
   );

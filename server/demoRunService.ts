@@ -14,6 +14,7 @@ import { verificationQualityService } from "./verificationQualityService";
 import { ToolConnectorRegistryService } from "./toolConnectorRegistryService";
 import { predictionReviewService } from "./predictionReviewService";
 import { portfolioRiskAnalyticsService } from "./portfolioRiskAnalyticsService";
+import { demoRunRecordStore, type PersistedDemoRunRecord } from "./demoRunRecordStore";
 import type {
   DemoRunAdjustment,
   DemoRunDailyReport,
@@ -65,10 +66,13 @@ type DemoRunContext = {
 
 export class DemoRunService {
   private record: DemoRunRecord | null = null;
+  private hydrated = false;
+  private hydratePromise: Promise<void> | null = null;
 
   constructor(private readonly env: NodeJS.ProcessEnv = process.env) {}
 
   async start(now = new Date()) {
+    await this.hydrateFromPersistence();
     if (this.record && (this.record.state === "running" || this.record.state === "paused")) {
       return this.status(now);
     }
@@ -94,6 +98,7 @@ export class DemoRunService {
       screenVisits: new Map<string, number>(),
       finalReport: null,
     };
+    await this.persistRecord();
     this.appendEvent("demo.run_started", {
       runId: this.record.runId,
       mode: this.record.mode,
@@ -106,10 +111,12 @@ export class DemoRunService {
   }
 
   async pause(reason = "manual pause", now = new Date()) {
+    await this.hydrateFromPersistence();
     const record = this.requireActive();
     if (record.state === "paused") return this.status(now);
     record.state = "paused";
     record.pausedAt = now.toISOString();
+    await this.persistRecord();
     this.appendEvent("demo.run_paused", {
       runId: record.runId,
       reason,
@@ -119,10 +126,12 @@ export class DemoRunService {
   }
 
   async resume(reason = "manual resume", now = new Date()) {
+    await this.hydrateFromPersistence();
     const record = this.requireActive();
     if (record.state === "running") return this.status(now);
     record.state = "running";
     record.pausedAt = null;
+    await this.persistRecord();
     this.appendEvent("demo.run_resumed", {
       runId: record.runId,
       reason,
@@ -132,11 +141,13 @@ export class DemoRunService {
   }
 
   async stop(reason = "manual stop", now = new Date()) {
+    await this.hydrateFromPersistence();
     const record = this.requireActive();
     record.state = "stopped";
     record.endTime = now.toISOString();
     const finalReport = await this.generateFinalReport(now, reason);
     record.finalReport = finalReport;
+    await this.persistRecord();
     this.appendEvent("demo.run_stopped", {
       runId: record.runId,
       reason,
@@ -146,10 +157,12 @@ export class DemoRunService {
   }
 
   async recordScreenVisit(screen: string, now = new Date()) {
+    await this.hydrateFromPersistence();
     const record = this.record;
     if (!record || record.state === "stopped" || record.state === "completed") return;
     const normalized = normalizeScreen(screen);
     record.screenVisits.set(normalized, (record.screenVisits.get(normalized) ?? 0) + 1);
+    await this.persistRecord();
     eventLogService.append({
       type: "demo.screen_visited",
       userId: "system",
@@ -165,14 +178,13 @@ export class DemoRunService {
   }
 
   async triggerDailyEvaluation(now = new Date()) {
+    await this.hydrateFromPersistence();
     const record = this.requireActive();
     const report = await this.dailyEvaluation(now);
     record.dailyReports = upsertDailyReport(record.dailyReports, report);
     if (record.dailyReports.length > MAX_DAILY_REPORTS) record.dailyReports = record.dailyReports.slice(-MAX_DAILY_REPORTS);
     const adjustments = await this.applyAutoAdjustments(report, now);
-    if (adjustments.length > 0) {
-      record.adjustments = [...adjustments, ...record.adjustments].slice(0, 25);
-    }
+    await this.persistRecord();
     this.appendEvent("demo.run_daily_evaluated", {
       runId: record.runId,
       day: report.day,
@@ -189,6 +201,7 @@ export class DemoRunService {
   }
 
   async dailyEvaluation(now = new Date()): Promise<DemoRunDailyReport> {
+    await this.hydrateFromPersistence();
     const context = await this.collectContext(now);
     const telemetry = context.telemetry;
     const day = this.dayNumber(now);
@@ -209,31 +222,29 @@ export class DemoRunService {
     const record = this.record;
     if (record) {
       record.dailyReports = upsertDailyReport(record.dailyReports, report);
+      await this.persistRecord();
     }
     return report;
   }
 
   async report(now = new Date()) {
+    await this.hydrateFromPersistence();
     const record = this.record;
     if (!record) {
       return this.generateEmptyReport(now);
     }
-    if (this.isComplete(now)) {
-      record.state = "completed";
-      record.endTime = record.endTime ?? now.toISOString();
-      record.finalReport = await this.generateFinalReport(now, "7-day demo run completed");
-    }
     if (!record.finalReport && record.state === "stopped") {
       record.finalReport = await this.generateFinalReport(now, "Stopped before completion");
+      await this.persistRecord();
     }
     await this.ensureDailyEvaluation(now);
     return record.finalReport ?? this.generatePreliminaryReport(now);
   }
 
   async export(now = new Date()): Promise<DemoRunExportPayload> {
+    const finalReport = await this.report(now);
     const status = await this.status(now);
     const telemetry = await this.telemetry(now);
-    const finalReport = await this.report(now);
     return {
       generatedAt: now.toISOString(),
       status,
@@ -243,11 +254,13 @@ export class DemoRunService {
   }
 
   async telemetry(now = new Date()): Promise<DemoRunTelemetry> {
+    await this.hydrateFromPersistence();
     const context = await this.collectContext(now);
     return context.telemetry;
   }
 
   async status(now = new Date()): Promise<DemoRunStatus> {
+    await this.hydrateFromPersistence();
     const context = await this.collectContext(now);
     const record = this.record;
     const latestDailyReport = record?.dailyReports[record.dailyReports.length - 1] ?? null;
@@ -298,15 +311,21 @@ export class DemoRunService {
   private async ensureDailyEvaluation(now: Date) {
     const record = this.record;
     if (!record || record.state === "idle" || record.state === "stopped" || record.state === "completed") return;
-    const today = now.toISOString().slice(0, 10);
-    const existing = record.dailyReports.find((report) => report.date === today);
-    if (!existing) {
+    const normalizedDailyReports = normalizeDailyReports(record.dailyReports);
+    if (normalizedDailyReports.length !== record.dailyReports.length) {
+      record.dailyReports = normalizedDailyReports;
+      await this.persistRecord();
+    }
+    const day = this.dayNumber(now);
+    const existing = record.dailyReports.find((report) => report.day === day);
+    if (!existing && record.dailyReports.length < MAX_DAILY_REPORTS) {
       await this.triggerDailyEvaluation(now);
     }
     if (this.isComplete(now)) {
       record.state = "completed";
       record.endTime = record.endTime ?? now.toISOString();
       record.finalReport = await this.generateFinalReport(now, "7-day demo run completed");
+      await this.persistRecord();
       this.appendEvent("demo.run_stopped", {
         runId: record.runId,
         reason: "7-day demo run completed",
@@ -327,7 +346,7 @@ export class DemoRunService {
       dayCount: dailyReports.length,
       whatWorked: [
         ...context.lab.topStrategies.map((item) => `${item.strategyName}: ${item.verdict}`),
-        context.telemetry.tradingPerformance.pl >= 0 ? "Risk controls kept the run profitable or near-flat." : "Losses were constrained without production execution.",
+        context.telemetry.tradingPerformance.pl >= 0 ? "Risk controls kept the run profitable or near-flat." : "Losses were constrained in demo-only execution.",
       ].slice(0, 5),
       whatFailed: [
         ...context.lab.weakStrategies.map((item) => `${item.strategyName}: ${item.verdict}`),
@@ -543,11 +562,14 @@ export class DemoRunService {
         adjustments.push(this.makeAdjustment(strategy.id, "reduce_position_size", `Reduced demo risk after ${candidate.verdict} evidence.`, before, after, now));
       }
     }
-    if (report.usabilityScore < 70 && this.record) {
+    const shouldReduceAlertNoise = report.usabilityScore < 70
+      && report.recommendedChanges.some((change) => /telegram|alert/i.test(change));
+    if (shouldReduceAlertNoise && this.record) {
       adjustments.push(this.makeAdjustment(null, "mark_watch_candidate", "Telegram alert or command noise is elevated. Prefer the digest path.", {}, { alertPolicy: "digest-first" }, now));
     }
     if (this.record) {
       this.record.adjustments = [...adjustments, ...this.record.adjustments].slice(0, 25);
+      await this.persistRecord();
     }
     for (const adjustment of adjustments) {
       this.appendEvent("demo.run_adjusted", {
@@ -616,7 +638,7 @@ export class DemoRunService {
       context.telemetry.safety.dailyLossBlocks > 0 ? "new trades after daily loss limits" : null,
       context.telemetry.usability.alertOverloadCount > 0 ? "non-critical Telegram pushes during alert overload" : null,
     ].filter((item): item is string => Boolean(item));
-    return blocked.length > 0 ? blocked : ["production live execution"];
+    return blocked.length > 0 ? blocked : ["live account execution"];
   }
 
   private recommendChanges(context: DemoRunContext) {
@@ -662,11 +684,45 @@ export class DemoRunService {
 
   private dayNumber(now: Date) {
     if (!this.record) return 0;
-    return Math.max(1, Math.ceil((now.getTime() - Date.parse(this.record.startTime)) / (24 * 60 * 60 * 1000)));
+    return Math.min(
+      MAX_DAILY_REPORTS,
+      Math.max(1, Math.floor((now.getTime() - Date.parse(this.record.startTime)) / (24 * 60 * 60 * 1000)) + 1),
+    );
   }
 
   private findAuditEntries(action: string, outcome?: string) {
     return executionAuditLog.list().filter((entry) => entry.action === action && (!outcome || entry.outcome === outcome));
+  }
+
+  private async hydrateFromPersistence() {
+    if (this.hydrated || this.record) return;
+    if (!this.hydratePromise) {
+      this.hydratePromise = (async () => {
+        const persisted = await demoRunRecordStore.loadLatest();
+        if (persisted && !this.record) {
+          this.record = {
+            ...persisted,
+            dailyReports: normalizeDailyReports(persisted.dailyReports as DemoRunDailyReport[]),
+            adjustments: persisted.adjustments as DemoRunAdjustment[],
+            screenVisits: new Map(persisted.screenVisits),
+            finalReport: persisted.finalReport as DemoRunFinalReport | null,
+          };
+        }
+        this.hydrated = true;
+      })().finally(() => {
+        this.hydratePromise = null;
+      });
+    }
+    await this.hydratePromise;
+  }
+
+  private async persistRecord() {
+    if (!this.record) return;
+    const payload: PersistedDemoRunRecord = {
+      ...this.record,
+      screenVisits: Array.from(this.record.screenVisits.entries()),
+    };
+    await demoRunRecordStore.save(payload);
   }
 }
 
@@ -807,7 +863,16 @@ function summarizeTelemetry(telemetry: DemoRunTelemetry) {
 }
 
 function upsertDailyReport(dailyReports: DemoRunDailyReport[], report: DemoRunDailyReport) {
-  return [...dailyReports.filter((item) => item.date !== report.date), report].sort((left, right) => left.day - right.day);
+  return normalizeDailyReports([...dailyReports.filter((item) => item.day !== report.day), report]);
+}
+
+function normalizeDailyReports(dailyReports: DemoRunDailyReport[]) {
+  return Array.from(
+    dailyReports
+      .sort((left, right) => left.day - right.day || left.date.localeCompare(right.date))
+      .reduce((byDay, report) => byDay.set(report.day, report), new Map<number, DemoRunDailyReport>())
+      .values(),
+  ).sort((left, right) => left.day - right.day).slice(-MAX_DAILY_REPORTS);
 }
 
 function normalizeScreen(screen: string) {

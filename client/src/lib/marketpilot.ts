@@ -46,7 +46,14 @@ export type ToolConnectorRegistrySnapshot = {
     health: "healthy" | "degraded" | "disabled";
     limitations: string[];
     liveExecutionSupport: boolean;
+    liveCapabilityDisabledReason: string;
     sandboxSupport: boolean;
+    accountMode: string;
+    demoVerificationStatus: "verified" | "blocked" | "unverified";
+    demoVerificationSource: string;
+    executionAllowed: boolean;
+    executionBlockedReason: string | null;
+    lastAccountModeVerificationAt: string;
     enabled: boolean;
     configured: boolean;
     requiredEnvVars: string[];

@@ -2,13 +2,13 @@
 
 ## Safety boundary
 
-Execution v2 supports offline/demo paper automation and supervised-live readiness assessment. It does not enable unrestricted autonomous live trading.
+Execution v2 supports offline/demo paper automation and practice-account readiness assessment. It does not enable live account trading.
 
 - Every provider order path runs risk precheck v2 and the existing circuit-breaker check.
 - Every strategy definition requires stop logic.
 - Every order, precheck, lifecycle transition, rejection, and simulated fill is audit logged with a correlation ID.
 - Broker credentials are represented only as readiness booleans. No plaintext credential storage was added.
-- A `supervised_live_candidate` verdict is research evidence, not execution authorization.
+- A `supervised_live_candidate` verdict is legacy research evidence, not execution authorization.
 - Automation defaults to Level 0. Level 5 permits a supervised-live preview candidate, while Level 6 records bounded semi-autonomous eligibility requirements only. Production submission remains disabled and explicit user confirmation remains mandatory.
 
 ## Architecture

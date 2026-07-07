@@ -5,6 +5,8 @@ import { createServer } from "http";
 import { createApiRateLimiter } from "./rateLimit";
 import { metricsService } from "./metricsService";
 import { strategyEvidenceStore } from "./execution/strategyEvidenceStore";
+import { startDemoRunScheduler } from "./demoRunScheduler";
+import { demoOnlyPolicyService } from "./execution/demoOnlyPolicy";
 
 const app = express();
 const httpServer = createServer(app);
@@ -65,8 +67,13 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  const demoOnlyEnvironment = demoOnlyPolicyService.validateEnvironment();
+  if (!demoOnlyEnvironment.safe) {
+    throw new Error(`MarketPilot demo-only safety check failed: ${demoOnlyEnvironment.violations.join(", ") || "demo-only mode disabled"}`);
+  }
   await strategyEvidenceStore.bootstrap();
   await registerRoutes(httpServer, app);
+  startDemoRunScheduler();
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

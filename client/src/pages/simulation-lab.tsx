@@ -464,7 +464,7 @@ export default function SimulationLab() {
                     <ListBlock
                       title="Validation guidance"
                       items={strategyValidation.data.verdict === "supervised_live_candidate"
-                        ? ["Validated for supervised-live consideration only, not authorization."]
+                        ? ["Validated for demo-readiness consideration only, not account-control authorization."]
                         : ["Review the weaker scores, especially walk-forward and Monte Carlo robustness."]}
                     />
                   </div>

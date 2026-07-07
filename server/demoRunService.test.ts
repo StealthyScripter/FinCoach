@@ -4,6 +4,8 @@ import { DemoRunService } from "./demoRunService";
 import { paperAutomationService } from "./execution/paperAutomation";
 import { redactSensitive } from "./execution/credentialVault";
 import { selectDemoRunPrimaryItems } from "../client/src/lib/demoRunDisplay";
+import { validateDemoRunEnvironment } from "./demoRunEnvironmentService";
+import { startDemoRunScheduler } from "./demoRunScheduler";
 
 const demo = new DemoRunService({
   MARKETPILOT_RUN_MODE: "demo_observation",
@@ -112,6 +114,65 @@ try {
   assert.match(primaryItems[0] ?? "", /Run:/);
   assert.match(primaryItems[1] ?? "", /Uptime:/);
   assert.match(primaryItems[2] ?? "", /Safety:/);
+
+  const envChecks = validateDemoRunEnvironment({
+    DATABASE_URL: "postgresql://user:password@example/db",
+    MARKETPILOT_RUN_MODE: "demo_observation",
+    TELEGRAM_ALLOWED_USER_ID: "42",
+    TELEGRAM_BOT_TOKEN: "123456789:abcdefghijklmnopqrstuvwxyz",
+    TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+    OANDA_API_TOKEN: "oanda-token",
+    OANDA_ACCOUNT_ID: "account",
+    OANDA_ENV: "practice",
+    METATRADER_DEMO_BRIDGE_URL: "https://bridge.example",
+  });
+  assert.equal(envChecks.find((item) => item.key === "DATABASE_URL")?.status, "redacted");
+  assert.equal(envChecks.find((item) => item.key === "OANDA_ENV")?.status, "configured");
+  assert.ok(envChecks.every((item) => item.status !== "invalid"));
+  assert.equal(
+    validateDemoRunEnvironment({ MARKETPILOT_RUN_MODE: "live", OANDA_ENV: "live" })
+      .some((item) => item.status === "invalid"),
+    true,
+  );
+  assert.equal(
+    validateDemoRunEnvironment({
+      DATABASE_URL: "postgresql://user:password@example/db",
+      MARKETPILOT_RUN_MODE: "demo_observation",
+      TELEGRAM_CHAT_ID: "42",
+      TELEGRAM_BOT_TOKEN: "123456789:abcdefghijklmnopqrstuvwxyz",
+      TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+    }).find((item) => item.key === "TELEGRAM_ALLOWED_USER_ID")?.status,
+    "configured",
+  );
+
+  const completionDemo = new DemoRunService({
+    MARKETPILOT_RUN_MODE: "demo_observation",
+  });
+  await completionDemo.start(new Date("2026-06-01T12:00:00.000Z"));
+  const completionReport = await completionDemo.report(new Date("2026-06-08T12:00:01.000Z"));
+  assert.equal(completionReport.state, "completed");
+  assert.ok(completionReport.dailyReports.some((report) => report.date === "2026-06-08" && report.day === 7));
+  const completionExport = await completionDemo.export(new Date("2026-06-08T12:00:02.000Z"));
+  assert.equal(completionExport.status.state, "completed");
+  assert.equal(completionExport.status.dayCount, 7);
+
+  const midnightDemo = new DemoRunService({
+    MARKETPILOT_RUN_MODE: "demo_observation",
+  });
+  await midnightDemo.start(new Date("2026-06-30T20:19:22.383Z"));
+  await midnightDemo.dailyEvaluation(new Date("2026-06-30T20:20:00.000Z"));
+  const midnightReport = await midnightDemo.report(new Date("2026-07-01T02:00:43.989Z"));
+  const midnightStatus = await midnightDemo.status(new Date("2026-07-01T02:00:43.989Z"));
+  assert.equal(midnightStatus.dayCount, 1);
+  assert.equal(midnightReport.dayCount, 1);
+  assert.equal(midnightReport.dailyReports.length, 1);
+  assert.equal(midnightReport.dailyReports[0]?.day, 1);
+
+  const schedulerA = startDemoRunScheduler({ MARKETPILOT_RUN_MODE: "demo_observation" });
+  const schedulerB = startDemoRunScheduler({ MARKETPILOT_RUN_MODE: "demo_observation" });
+  assert.ok(schedulerA);
+  assert.equal(schedulerA, schedulerB);
+  if (schedulerA) clearInterval(schedulerA);
 } finally {
   // No teardown is required for the global demo utilities in this test file.
 }

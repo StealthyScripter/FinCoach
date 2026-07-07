@@ -3,6 +3,9 @@ import { createSeedOverview } from "./storage";
 import { aiResearchDraftService } from "./aiResearchDraftService";
 import { eventLogService } from "./eventLogService";
 import { storage } from "./storage";
+import { bootstrapTestDatabase } from "./testDatabase";
+
+await bootstrapTestDatabase();
 
 const result = await aiResearchDraftService.generate(createSeedOverview(), "SPY", new Date("2026-01-15T14:00:00.000Z"));
 

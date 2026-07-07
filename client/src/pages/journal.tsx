@@ -51,17 +51,32 @@ export default function Journal() {
       <div className="space-y-6 animate-in fade-in duration-500">
         <div>
           <h1 className="text-3xl font-bold text-white">Journal</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Prediction tracking, missed evidence, and wrong-thesis learning loop.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Connect each lesson to a prediction, paper trade, review, mistake, and updated rule.</p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-5">
+          {["Lesson", "Prediction", "Paper trade", "Review", "Updated lesson"].map((step) => (
+            <div key={step} className="rounded-lg border border-border/60 bg-background/35 p-3">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">Learning loop</div>
+              <div className="mt-1 text-sm font-medium text-white">{step}</div>
+            </div>
+          ))}
         </div>
 
         <Card className="border-border/60 bg-card/70">
           <CardHeader>
-            <CardTitle className="text-white">Review Prediction</CardTitle>
+            <CardTitle className="text-white">Review what happened</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+              <ReviewPrompt title="What happened?" value="Record the outcome, not the excuse." />
+              <ReviewPrompt title="Why?" value="Name the market driver or missing evidence." />
+              <ReviewPrompt title="What did I miss?" value="Turn the mistake into a reusable check." />
+              <ReviewPrompt title="Next time" value="Write the rule before the next paper trade." />
+            </div>
             <form className="space-y-3" onSubmit={handleSubmit}>
               <Textarea value={actualOutcome} onChange={(event) => setActualOutcome(event.target.value)} />
-              <Button type="submit" disabled={review.isPending}>Record What We Missed</Button>
+              <Button type="submit" disabled={review.isPending}>Save review and update lesson</Button>
             </form>
           </CardContent>
         </Card>
@@ -175,6 +190,15 @@ function InsightBlock({ title, items }: { title: string; items: string[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function ReviewPrompt({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-background/35 p-3">
+      <div className="text-xs uppercase tracking-wide text-primary">{title}</div>
+      <p className="mt-1 text-xs text-slate-200">{value}</p>
     </div>
   );
 }

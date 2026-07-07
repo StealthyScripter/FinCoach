@@ -43,6 +43,12 @@ export class PredictionReviewService {
     const record = this.predictions.get(submission.predictionId) ?? this.fallbackRecord(submission, now);
     const missingEvidence = Array.from(new Set([...record.missingEvidence, ...submission.missingEvidence]));
     const contradicted = /wrong|failed|miss|opposite|loss|invalid/i.test(submission.actualOutcome);
+    const updatedLesson = contradicted
+      ? "Do not upgrade a thesis until contradictory evidence and missing catalysts have been checked."
+      : "Keep tracking the evidence chain and compare expected versus actual outcomes.";
+    const futureRuleAdjustment = contradicted
+      ? "Downgrade future confidence when source freshness, contradictory evidence, or catalyst coverage is incomplete."
+      : "Maintain current strategy rating but continue monitoring calibration.";
     const review: PredictionReview = {
       id: `review-${randomUUID()}`,
       predictionId: record.id,
@@ -60,12 +66,8 @@ export class PredictionReviewService {
         ? missingEvidence
         : ["No explicit missing evidence was supplied; require a stronger post-mortem before changing rules."],
       whichAgentFailed: submission.agent ?? record.agent,
-      updatedLesson: contradicted
-        ? "Do not upgrade a thesis until contradictory evidence and missing catalysts have been checked."
-        : "Keep tracking the evidence chain and compare expected versus actual outcomes.",
-      futureRuleAdjustment: contradicted
-        ? "Downgrade future confidence when source freshness, contradictory evidence, or catalyst coverage is incomplete."
-        : "Maintain current strategy rating but continue monitoring calibration.",
+      updatedLesson: normalizeInsightText(updatedLesson),
+      futureRuleAdjustment: normalizeInsightText(futureRuleAdjustment),
       shouldConfidenceModelChange: contradicted || record.confidence > 80,
       shouldStrategyBeDowngraded: contradicted || record.strategyDowngraded,
       userLearning: "Separate what happened from why it happened, and define what would prove the thesis wrong before acting.",
@@ -191,3 +193,8 @@ export class PredictionReviewService {
 }
 
 export const predictionReviewService = new PredictionReviewService();
+
+function normalizeInsightText(value: string) {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : "Maintain current strategy rating but continue monitoring calibration.";
+}
