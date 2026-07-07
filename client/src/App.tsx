@@ -20,6 +20,8 @@ import PortfolioCoach from "@/pages/portfolio-coach";
 import Journal from "@/pages/journal";
 import System from "@/pages/system";
 import ExecutionCenter from "@/pages/execution-center";
+import ResearchLab from "@/pages/research-lab";
+import ForwardTesting from "@/pages/forward-testing";
 
 function Router() {
   return (
@@ -28,11 +30,13 @@ function Router() {
       <Route path="/learn" component={Learn} />
       <Route path="/learn/:domain" component={Learn} />
       <Route path="/ask" component={AskMarketPilot} />
+      <Route path="/research" component={ResearchLab} />
       <Route path="/opportunities" component={Opportunities} />
       <Route path="/portfolio" component={PortfolioCoach} />
       <Route path="/journal" component={Journal} />
       <Route path="/system" component={System} />
       <Route path="/execution" component={ExecutionCenter} />
+      <Route path="/forward-testing" component={ForwardTesting} />
       <Route path="/challenge" component={Challenge} />
       <Route path="/trade-desk" component={TradeDesk} />
       <Route path="/strategy-lab" component={StrategyLab} />
