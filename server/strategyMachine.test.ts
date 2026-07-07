@@ -10,6 +10,7 @@ import { ValidationService } from "./strategy-machine/validation";
 import { ForwardTestService } from "./strategy-machine/forward-testing";
 import { DemoOnlyPolicyError, DemoOnlyPolicyService } from "./execution/demoOnlyPolicy";
 import { TradeJournalService } from "./strategy-machine/journal";
+import { StrategyRankingService } from "./strategy-machine/strategy-ranking";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -303,3 +304,32 @@ assert.equal(journalService.search({ experimentId: activeExperimentId, instrumen
 assert.throws(() => journalService.create({ ...(journalCreated.payload as never), entryReason: "" }), /required fields/);
 
 console.log("strategy machine journal tests passed");
+
+const rankingService = new StrategyRankingService();
+const ranked = rankingService.rank({
+  experimentId: activeExperimentId,
+  sampleSize: 80,
+  expectancy: 0.35,
+  maxDrawdown: 0.7,
+  forwardTestScore: 0.8,
+  journalQuality: 1,
+  regimeSurvival: 0.75,
+  symbolSuitability: 0.9,
+  sourceEventRefs: [toEventReference(validation), toEventReference(journalReviewEvents[0])],
+});
+assert.ok(["StrategyRanked", "StrategyPromoted"].includes(ranked.type));
+assert.ok(Number(ranked.payload.score) > 0);
+const demoted = rankingService.rank({
+  experimentId: activeExperimentId,
+  sampleSize: 80,
+  expectancy: -0.2,
+  maxDrawdown: 4,
+  forwardTestScore: 0.1,
+  journalQuality: 0.5,
+  regimeSurvival: 0.2,
+  symbolSuitability: 0.5,
+  sourceEventRefs: [toEventReference(validation)],
+}, "focus");
+assert.equal(demoted.type, "StrategyRetired");
+
+console.log("strategy machine strategy-ranking tests passed");
