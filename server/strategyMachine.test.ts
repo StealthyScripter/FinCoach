@@ -11,6 +11,7 @@ import { ForwardTestService } from "./strategy-machine/forward-testing";
 import { DemoOnlyPolicyError, DemoOnlyPolicyService } from "./execution/demoOnlyPolicy";
 import { TradeJournalService } from "./strategy-machine/journal";
 import { StrategyRankingService } from "./strategy-machine/strategy-ranking";
+import { MlSupportService } from "./strategy-machine/ml-support";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -333,3 +334,16 @@ const demoted = rankingService.rank({
 assert.equal(demoted.type, "StrategyRetired");
 
 console.log("strategy machine strategy-ranking tests passed");
+
+const mlSupport = new MlSupportService();
+const regimeClassified = mlSupport.classifyRegime({ instrument: "EUR_USD", atr: 0.004, trendSlope: 0.0002, sourceEventRefs: [toEventReference(volatility)] });
+assert.equal(regimeClassified.type, "RegimeClassified");
+assert.notEqual(regimeClassified.payload.regime, "next_candle_prediction");
+const clustered = mlSupport.clusterPatterns({ patternTypes: ["breakout", "volatility_expansion"], sourceEventRefs: patternEvents.filter((event) => event.type === "PatternDetected").map(toEventReference) });
+assert.equal(clustered.type, "PatternClustered");
+const tradeQuality = mlSupport.rankTradeQuality({ tradeId: String(demoTrade.payload.tradeId), rMultiple: 1.2, followedRules: true, sourceEventRefs: [toEventReference(journalCreated)] });
+assert.equal(tradeQuality.payload.quality, "high");
+const priority = mlSupport.prioritizeExperiment({ experimentId: activeExperimentId, evidenceScore: 0.8, journalQuality: 1, sourceEventRefs: [toEventReference(ranked)] });
+assert.equal(priority.payload.priority, "high");
+
+console.log("strategy machine ml-support tests passed");
