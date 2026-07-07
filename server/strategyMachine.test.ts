@@ -5,6 +5,7 @@ import { PatternDiscoveryService } from "./strategy-machine/pattern-discovery";
 import { HypothesisService } from "./strategy-machine/hypothesis";
 import { RuleBuilderService, validateObjective, type RuleSet } from "./strategy-machine/rule-builder";
 import { ExperimentManagerService } from "./strategy-machine/experiment-manager";
+import { BacktestService } from "./strategy-machine/backtesting";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -194,3 +195,33 @@ assert.throws(() => experimentManager.transition(activeExperimentId, "forward_te
 assert.equal(experimentManager.get(activeExperimentId).strategyDecisionRefs.length, 1);
 
 console.log("strategy machine experiment-manager tests passed");
+
+const backtestService = new BacktestService();
+const backtestCandles: Candle[] = Array.from({ length: 40 }, (_, index) => ({
+  instrument: "EUR_USD",
+  timeframe: "15m",
+  timestamp: new Date(Date.UTC(2026, 0, 2, 7, index * 15)).toISOString(),
+  open: 1.1 + index * 0.0003,
+  high: 1.1007 + index * 0.0003,
+  low: 1.0997 + index * 0.0003,
+  close: 1.1004 + index * 0.0003,
+  volume: 200,
+}));
+const backtest = backtestService.run({
+  experimentId: activeExperimentId,
+  ruleSet,
+  candles: backtestCandles,
+  spread: 0.0001,
+  slippage: 0.00005,
+  commissionPerTrade: 0,
+  riskPerTrade: 0.0025,
+  sourceEventRefs: [toEventReference(ruleSetEvent)],
+});
+assert.equal(backtest.type, "BacktestCompleted");
+assert.ok(Number(backtest.payload.tradeCount) > 0);
+assert.ok("profitFactor" in backtest.payload);
+assert.ok("maxDrawdown" in backtest.payload);
+const insufficientBacktest = backtestService.run({ experimentId: activeExperimentId, ruleSet, candles: backtestCandles.slice(0, 4), spread: 0.0001, slippage: 0, commissionPerTrade: 0, riskPerTrade: 0.0025, sourceEventRefs: [toEventReference(ruleSetEvent)] });
+assert.equal(insufficientBacktest.type, "BacktestInsufficientSample");
+
+console.log("strategy machine backtesting tests passed");
