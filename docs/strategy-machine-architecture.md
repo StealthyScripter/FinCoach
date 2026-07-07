@@ -33,3 +33,20 @@ Only the owning module can read or write its repository. Other modules receive t
 ## Safety
 
 Execution modules must call the global `DemoOnlyPolicyService`. Live, real, production, unknown, or unverified account modes fail closed.
+
+## Final Module Map
+
+- `core`: event envelope, lineage, registry, boundary checks
+- `market-data`: observation-only market context
+- `pattern-discovery`: deterministic pattern evidence
+- `hypothesis`: testable research hypotheses
+- `rule-builder`: objective rule sets and versions
+- `experiment-manager`: experiment lifecycle and refinement loop
+- `backtesting`: deterministic simulated execution metrics
+- `validation`: statistical evidence gates
+- `forward-testing`: demo-only forward-test state and demo trade references
+- `journal`: trade snapshots, lessons, and improvement suggestions
+- `strategy-ranking`: evidence-weighted lifecycle status
+- `ml-support`: deterministic advisory classifiers and ranking
+- `telemetry`: operational research health
+- `demo-execution`: final demo-only execution decision wrapper
