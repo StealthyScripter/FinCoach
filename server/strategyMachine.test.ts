@@ -372,3 +372,21 @@ const health = telemetryService.healthChanged(telemetry);
 assert.equal(health.type, "ResearchPipelineHealthChanged");
 
 console.log("strategy machine telemetry tests passed");
+
+const loopEvents = experimentManager.suggestRefinement({
+  experimentId: activeExperimentId,
+  lesson: "Retest with tighter spread filter from journal review.",
+  currentRuleSetVersion: ruleSet.version,
+  refs: [toEventReference(journalReviewEvents[1]), toEventReference(ranked)],
+});
+assert.deepEqual(loopEvents.map((event) => event.type), [
+  "ExperimentRefinementSuggested",
+  "ExperimentVersionCreated",
+  "RuleSetVersionCreated",
+  "RetestRequested",
+  "LearningLoopCompleted",
+]);
+assert.equal(loopEvents[2].payload.oldVersionPreserved, true);
+assert.equal(loopEvents[3].sourceEventRefs[0].eventId, loopEvents[2].id);
+
+console.log("strategy machine continuous-improvement tests passed");

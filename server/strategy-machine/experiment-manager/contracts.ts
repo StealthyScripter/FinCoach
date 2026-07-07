@@ -19,3 +19,12 @@ export type Experiment = {
   journalRefs: EventReference[];
   strategyDecisionRefs: EventReference[];
 };
+
+export type ExperimentVersion = {
+  experimentId: string;
+  versionId: string;
+  parentVersionId: string | null;
+  ruleSetVersion: number;
+  reason: string;
+  sourceEventRefs: EventReference[];
+};

@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { createEvent, type EventReference } from "../core";
 import { ExperimentManagerEventTypes } from "./events";
-import type { Experiment, ExperimentState } from "./contracts";
+import type { Experiment, ExperimentState, ExperimentVersion } from "./contracts";
 import { ExperimentRepository } from "./repository";
 
 const allowedTransitions: Record<ExperimentState, ExperimentState[]> = {
@@ -58,11 +58,39 @@ export class ExperimentManagerService {
     return this.require(experimentId);
   }
 
+  suggestRefinement(input: { experimentId: string; lesson: string; currentRuleSetVersion: number; refs: EventReference[] }) {
+    const experiment = this.require(input.experimentId);
+    if (!input.lesson.trim()) throw new Error("Refinement requires journal lesson evidence");
+    const suggested = createEvent({
+      type: ExperimentManagerEventTypes.ExperimentRefinementSuggested,
+      module: "experiment-manager",
+      payload: { experimentId: experiment.experimentId, lesson: input.lesson, currentRuleSetVersion: input.currentRuleSetVersion },
+      sourceEventRefs: input.refs,
+    });
+    const version: ExperimentVersion = {
+      experimentId: experiment.experimentId,
+      versionId: randomUUID(),
+      parentVersionId: null,
+      ruleSetVersion: input.currentRuleSetVersion + 1,
+      reason: input.lesson,
+      sourceEventRefs: [referenceFrom(suggested)],
+    };
+    const versionCreated = createEvent({ type: ExperimentManagerEventTypes.ExperimentVersionCreated, module: "experiment-manager", payload: version as unknown as Record<string, unknown>, causationId: suggested.id, sourceEventRefs: [referenceFrom(suggested)] });
+    const ruleVersionCreated = createEvent({ type: ExperimentManagerEventTypes.RuleSetVersionCreated, module: "experiment-manager", payload: { experimentId: experiment.experimentId, ruleSetVersion: version.ruleSetVersion, oldVersionPreserved: true }, causationId: versionCreated.id, sourceEventRefs: [referenceFrom(versionCreated)] });
+    const retest = createEvent({ type: ExperimentManagerEventTypes.RetestRequested, module: "experiment-manager", payload: { experimentId: experiment.experimentId, ruleSetVersion: version.ruleSetVersion }, causationId: ruleVersionCreated.id, sourceEventRefs: [referenceFrom(ruleVersionCreated)] });
+    const completed = createEvent({ type: ExperimentManagerEventTypes.LearningLoopCompleted, module: "experiment-manager", payload: { experimentId: experiment.experimentId, nextStep: "retest" }, causationId: retest.id, sourceEventRefs: [referenceFrom(retest)] });
+    return [suggested, versionCreated, ruleVersionCreated, retest, completed];
+  }
+
   private require(experimentId: string) {
     const experiment = this.repository.get(experimentId);
     if (!experiment) throw new Error(`Experiment not found: ${experimentId}`);
     return experiment;
   }
+}
+
+function referenceFrom(event: { id: string; type: string; module: EventReference["module"]; schemaVersion: string; occurredAt: string }): EventReference {
+  return { eventId: event.id, eventType: event.type, module: event.module, schemaVersion: event.schemaVersion, occurredAt: event.occurredAt };
 }
 
 function attachRefs(experiment: Experiment, refs: EventReference[]) {
