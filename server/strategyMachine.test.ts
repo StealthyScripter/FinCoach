@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { StrategyMachineCoreService, createEvent, toEventReference, validateEventReferences, InMemoryEventRepository } from "./strategy-machine/core";
 import { MarketDataService, normalizeInstrument, type Candle } from "./strategy-machine/market-data";
+import { PatternDiscoveryService } from "./strategy-machine/pattern-discovery";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -84,3 +85,56 @@ assert.equal(economic.payload.blackout, true);
 assert.equal(economic.sourceEventRefs[0].eventId, marketSnapshot.id);
 
 console.log("strategy machine market-data tests passed");
+
+const patternDiscovery = new PatternDiscoveryService();
+const breakoutCandles: Candle[] = [
+  ...Array.from({ length: 9 }, (_, index) => ({
+    instrument: "EUR_USD",
+    timeframe: "15m" as const,
+    timestamp: new Date(Date.UTC(2026, 0, 1, 6, index * 15)).toISOString(),
+    open: 1.1 + index * 0.0001,
+    high: 1.1005 + index * 0.0001,
+    low: 1.0998 + index * 0.0001,
+    close: 1.1002 + index * 0.0001,
+    volume: 100,
+  })),
+  {
+    instrument: "EUR_USD",
+    timeframe: "15m",
+    timestamp: "2026-01-01T08:15:00.000Z",
+    open: 1.101,
+    high: 1.103,
+    low: 1.1009,
+    close: 1.1028,
+    volume: 140,
+  },
+];
+const patternEvents = patternDiscovery.detect({
+  instrument: "EUR_USD",
+  timeframe: "15m",
+  candles: breakoutCandles,
+  sourceEventRefs: [toEventReference(candleSeries)],
+});
+assert.ok(patternEvents.some((event) => event.type === "PatternDetected" && event.payload.patternType === "breakout"));
+assert.ok(patternEvents.every((event) => event.sourceEventRefs.length > 0 || event.type === "PatternClusterCreated"));
+const repeated = patternDiscovery.detect({
+  instrument: "EUR_USD",
+  timeframe: "15m",
+  candles: breakoutCandles,
+  sourceEventRefs: [toEventReference(candleSeries)],
+});
+assert.deepEqual(
+  repeated.filter((event) => event.type === "PatternDetected").map((event) => [event.payload.patternType, event.payload.confidence]),
+  patternEvents.filter((event) => event.type === "PatternDetected").map((event) => [event.payload.patternType, event.payload.confidence]),
+);
+
+const insufficientPatterns = patternDiscovery.detect({
+  instrument: "EUR_USD",
+  timeframe: "15m",
+  candles: breakoutCandles.slice(0, 3),
+  sourceEventRefs: [toEventReference(candleSeries)],
+});
+assert.equal(insufficientPatterns[0].type, "PatternRejected");
+assert.equal(insufficientPatterns[0].payload.reason, "insufficient_data");
+
+console.log("strategy machine pattern-discovery tests passed");
