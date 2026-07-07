@@ -6,6 +6,7 @@ import { HypothesisService } from "./strategy-machine/hypothesis";
 import { RuleBuilderService, validateObjective, type RuleSet } from "./strategy-machine/rule-builder";
 import { ExperimentManagerService } from "./strategy-machine/experiment-manager";
 import { BacktestService } from "./strategy-machine/backtesting";
+import { ValidationService } from "./strategy-machine/validation";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -225,3 +226,13 @@ const insufficientBacktest = backtestService.run({ experimentId: activeExperimen
 assert.equal(insufficientBacktest.type, "BacktestInsufficientSample");
 
 console.log("strategy machine backtesting tests passed");
+
+const validationService = new ValidationService();
+const validation = validationService.validate(backtest);
+assert.ok(["ExperimentValidated", "ExperimentReadyForForwardTest", "ExperimentNeedsMoreData", "ExperimentRejected"].includes(validation.type));
+assert.ok(Number(validation.payload.evidenceScore) >= 0);
+assert.equal(validation.sourceEventRefs[0].eventId, backtest.id);
+const needsMoreData = validationService.validate(insufficientBacktest);
+assert.equal(needsMoreData.type, "ExperimentNeedsMoreData");
+
+console.log("strategy machine validation tests passed");
