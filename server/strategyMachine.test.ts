@@ -9,6 +9,7 @@ import { BacktestService } from "./strategy-machine/backtesting";
 import { ValidationService } from "./strategy-machine/validation";
 import { ForwardTestService } from "./strategy-machine/forward-testing";
 import { DemoOnlyPolicyError, DemoOnlyPolicyService } from "./execution/demoOnlyPolicy";
+import { TradeJournalService } from "./strategy-machine/journal";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -268,3 +269,37 @@ assert.throws(() => new ForwardTestService(undefined, new DemoOnlyPolicyService(
 }), DemoOnlyPolicyError);
 
 console.log("strategy machine forward-testing tests passed");
+
+const journalService = new TradeJournalService();
+const journalCreated = journalService.create({
+  experimentId: activeExperimentId,
+  tradeId: String(demoTrade.payload.tradeId),
+  instrument: "EUR_USD",
+  ruleVersion: ruleSet.version,
+  entryReason: "Objective breakout rule triggered after London session filter passed.",
+  stopLoss: 1.099,
+  takeProfit: 1.103,
+  positionSize: 1,
+  outcome: "win",
+  beforeEntrySnapshotRefs: [toEventReference(marketSnapshot)],
+  afterExitSnapshotRefs: [],
+  multiTimeframeSnapshotRefs: [toEventReference(candleSeries)],
+  screenshotRefs: [{ type: "placeholder", uri: "test://chart-placeholder", capturedAt: "2026-01-03T08:00:00.000Z", redacted: true }],
+  sourceEventRefs: [toEventReference(demoTrade)],
+});
+assert.equal(journalCreated.type, "TradeJournalCreated");
+const journalId = String(journalCreated.payload.journalId);
+const snapshotAttached = journalService.attachSnapshot(journalId, { after: [toEventReference(spread)] });
+assert.equal(snapshotAttached.type, "TradeSnapshotAttached");
+const journalReviewEvents = journalService.review(journalId, {
+  lessonLearned: "Spread remained acceptable during the breakout.",
+  mistakeClassification: null,
+  improvementSuggestion: "Retest with tighter spread filter.",
+  refs: [toEventReference(snapshotAttached)],
+});
+assert.ok(journalReviewEvents.some((event) => event.type === "LessonExtracted"));
+assert.ok(journalReviewEvents.some((event) => event.type === "RuleImprovementSuggested"));
+assert.equal(journalService.search({ experimentId: activeExperimentId, instrument: "EUR_USD", outcome: "win" }).length, 1);
+assert.throws(() => journalService.create({ ...(journalCreated.payload as never), entryReason: "" }), /required fields/);
+
+console.log("strategy machine journal tests passed");
