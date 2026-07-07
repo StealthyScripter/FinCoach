@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { StrategyMachineCoreService, createEvent, toEventReference, validateEventReferences, InMemoryEventRepository } from "./strategy-machine/core";
 import { MarketDataService, normalizeInstrument, type Candle } from "./strategy-machine/market-data";
 import { PatternDiscoveryService } from "./strategy-machine/pattern-discovery";
+import { HypothesisService } from "./strategy-machine/hypothesis";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -138,3 +139,16 @@ assert.equal(insufficientPatterns[0].type, "PatternRejected");
 assert.equal(insufficientPatterns[0].payload.reason, "insufficient_data");
 
 console.log("strategy machine pattern-discovery tests passed");
+
+const hypothesisService = new HypothesisService();
+const hypothesis = hypothesisService.fromPatterns(patternEvents);
+assert.equal(hypothesis.type, "HypothesisCreated");
+assert.ok(String(hypothesis.payload.statement).includes("EUR_USD"));
+assert.ok(Number(hypothesis.payload.requiredSampleSize) >= 30);
+assert.ok((hypothesis.payload.regimeTags as string[]).includes("breakout-regime"));
+assert.equal(hypothesis.sourceEventRefs.length, patternEvents.filter((event) => event.type === "PatternDetected").length);
+
+const weakHypothesis = hypothesisService.fromPatterns(insufficientPatterns);
+assert.equal(weakHypothesis.type, "HypothesisRejected");
+
+console.log("strategy machine hypothesis tests passed");
