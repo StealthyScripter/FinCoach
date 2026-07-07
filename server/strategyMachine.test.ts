@@ -13,6 +13,7 @@ import { TradeJournalService } from "./strategy-machine/journal";
 import { StrategyRankingService } from "./strategy-machine/strategy-ranking";
 import { MlSupportService } from "./strategy-machine/ml-support";
 import { TelemetryService } from "./strategy-machine/telemetry";
+import { DemoExecutionService } from "./strategy-machine/demo-execution";
 
 const repository = new InMemoryEventRepository();
 const core = new StrategyMachineCoreService(repository);
@@ -390,3 +391,40 @@ assert.equal(loopEvents[2].payload.oldVersionPreserved, true);
 assert.equal(loopEvents[3].sourceEventRefs[0].eventId, loopEvents[2].id);
 
 console.log("strategy machine continuous-improvement tests passed");
+
+const demoExecution = new DemoExecutionService(undefined, new DemoOnlyPolicyService({ MARKETPILOT_DEMO_ONLY: "true" }));
+const paperAllowed = demoExecution.decide({
+  provider: "paper_provider",
+  accountMode: "paper",
+  verificationSource: "paper.metadata",
+  attemptedAction: "demo.paper.order",
+  confirmationReceived: false,
+  killSwitchActive: false,
+  sourceEventRefs: [toEventReference(forwardTest)],
+});
+assert.equal(paperAllowed.type, "DemoExecutionAllowed");
+for (const blockedRequest of [
+  { provider: "oanda_practice", accountMode: "live", verificationSource: "oanda.account", attemptedAction: "oanda.order" },
+  { provider: "metatrader_demo", accountMode: "live", verificationSource: "mt.account", attemptedAction: "metatrader.order" },
+  { provider: "telegram", accountMode: "unverified", verificationSource: "telegram.command", attemptedAction: "telegram.command.order" },
+  { provider: "tradingview_webhook", accountMode: "live", verificationSource: "tradingview.signal", attemptedAction: "tradingview.route.live" },
+  { provider: "paper_provider", accountMode: "unknown", verificationSource: "unverified", attemptedAction: "paper.order" },
+]) {
+  const blocked = demoExecution.decide({ ...blockedRequest, confirmationReceived: true, killSwitchActive: false, sourceEventRefs: [toEventReference(forwardTest)] });
+  assert.equal(blocked.type, "DemoExecutionBlocked");
+  assert.equal(blocked.payload.confirmationIgnored, true);
+}
+const killBlocked = demoExecution.decide({
+  provider: "paper_provider",
+  accountMode: "paper",
+  verificationSource: "paper.metadata",
+  attemptedAction: "paper.order",
+  confirmationReceived: true,
+  killSwitchActive: true,
+  sourceEventRefs: [toEventReference(forwardTest)],
+});
+assert.equal(killBlocked.type, "DemoExecutionBlocked");
+assert.equal(killBlocked.payload.killSwitchActive, true);
+assert.equal(new DemoOnlyPolicyService({ MARKETPILOT_DEMO_ONLY: "false" }).check({ provider: "paper_provider", accountMode: "paper", verificationSource: "paper.metadata", attemptedAction: "paper.order" }).blocked, true);
+
+console.log("strategy machine demo-execution hardening tests passed");
