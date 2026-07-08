@@ -494,6 +494,114 @@ export type StrategyLabSnapshot = {
   }>;
 };
 
+export type ResearchCoveragePlan = {
+  generatedAt: string;
+  requirements: { minimumYears: number; preferredYears: number; idealYears: number; sourcePriority: string[] };
+  items: Array<{
+    instrument: string;
+    timeframe: string;
+    candlesAvailable: number;
+    start: string | null;
+    end: string | null;
+    yearsAvailable: number;
+    target: "missing" | "below_minimum" | "minimum" | "preferred" | "ideal";
+    missingWindows: Array<{ from: string; to: string; reason: string }>;
+    qualityWarnings: string[];
+  }>;
+};
+
+export type ReplayRunStatus = {
+  running: boolean;
+  lastRunAt: string | null;
+  experimentsRun: number;
+  hypothesesTested: number;
+  ruleSetsRejected: number;
+  eventsEmitted: number;
+  promoted: number;
+  demoted: number;
+  topRejectionReasons: string[];
+  latestWarnings: string[];
+};
+
+export type StabilitySnapshot = {
+  generatedAt: string;
+  comparisons: Array<{
+    experimentId: string;
+    stable: boolean;
+    fragileParameterSet: boolean;
+    narrowOptima: boolean;
+    regimeSpecificOverfitting: boolean;
+    performanceDecay: boolean;
+    reasons: string[];
+    metrics: {
+      expectancyStability: number;
+      drawdownStability: number;
+      profitFactorStability: number;
+      winRateStability: number;
+      rMultipleStability: number;
+      sampleSize: number;
+      regimeCoverage: number;
+      symbolCoverage: number;
+      walkForwardConsistency: number;
+    };
+  }>;
+};
+
+export type ResearchAccelerationReport = {
+  generatedAt: string;
+  yearsOfHistoryAvailable: number;
+  equivalentMarketDaysReplayed: number;
+  experimentsRun: number;
+  hypothesesTested: number;
+  ruleSetsRejected: number;
+  strategiesPromoted: number;
+  strategiesDemoted: number;
+  topRejectionReasons: string[];
+  mostStableCandidates: StabilitySnapshot["comparisons"];
+  evidenceGapsRemaining: string[];
+  forwardTestingJustified: boolean;
+};
+
+export type HistoricalBackfillSnapshot = {
+  status: {
+    runId: string | null;
+    running: boolean;
+    stopRequested: boolean;
+    dryRun: boolean;
+    startedAt: string | null;
+    completedAt: string | null;
+    currentInstrument: string | null;
+    currentTimeframe: string | null;
+    cursor: string | null;
+    requestedWindows: number;
+    requestsCompleted: number;
+    candlesFetched: number;
+    candlesImported: number;
+    duplicatesSkipped: number;
+    gapsDetected: number;
+    latestImportedAt: string | null;
+    estimatedCompletion: string | null;
+    warnings: string[];
+  };
+  acquisitionPlan: {
+    generatedAt: string;
+    targets: { minimum: number; preferred: number; ideal: number };
+    sourcePriority: string[];
+    items: Array<{
+      instrument: string;
+      timeframe: string;
+      candlesAvailable: number;
+      yearsAvailable: number;
+      target: string;
+      missingWindows: Array<{ from: string; to: string; reason: string }>;
+      estimatedCandlesToMinimum: number;
+      estimatedCandlesToPreferred: number;
+      estimatedCandlesToIdeal: number;
+      nextSource: string;
+    }>;
+  };
+};
+
 export function useMarketPilotOverview() {
   return useQuery<MarketPilotOverview>({
     queryKey: ["/api/marketpilot/overview"],
@@ -658,6 +766,36 @@ export function useDemoRunReport() {
 export function useDemoRunExport() {
   return useQuery<DemoRunExportPayload>({
     queryKey: ["/api/marketpilot/demo-run/export"],
+  });
+}
+
+export function useResearchCoverage() {
+  return useQuery<ResearchCoveragePlan>({
+    queryKey: ["/api/marketpilot/research-pipeline/history/coverage"],
+  });
+}
+
+export function useResearchReplayStatus() {
+  return useQuery<ReplayRunStatus>({
+    queryKey: ["/api/marketpilot/research-pipeline/replay/status"],
+  });
+}
+
+export function useResearchReplayReport() {
+  return useQuery<ResearchAccelerationReport>({
+    queryKey: ["/api/marketpilot/research-pipeline/replay/report"],
+  });
+}
+
+export function useResearchStability() {
+  return useQuery<StabilitySnapshot>({
+    queryKey: ["/api/marketpilot/research-pipeline/stability"],
+  });
+}
+
+export function useHistoricalBackfillStatus() {
+  return useQuery<HistoricalBackfillSnapshot>({
+    queryKey: ["/api/marketpilot/research-pipeline/history/backfill-status"],
   });
 }
 

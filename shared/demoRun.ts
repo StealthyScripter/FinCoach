@@ -77,6 +77,7 @@ export type DemoRunStatus = {
   blockedActions: string[];
   topAdjustment: DemoRunAdjustment | null;
   latestDailyReport: DemoRunDailyReport | null;
+  researchPipeline: DemoRunResearchPipelineSummary;
 };
 
 export type DemoRunTelemetry = {
@@ -148,6 +149,27 @@ export type DemoRunTelemetry = {
   };
   dailyReports: DemoRunDailyReport[];
   adjustments: DemoRunAdjustment[];
+  researchPipeline: DemoRunResearchPipelineSummary;
+};
+
+export type DemoRunResearchPipelineSummary = {
+  status: "idle" | "healthy" | "blocked";
+  cyclesRun: number;
+  patternsDetected: number;
+  hypothesesCreated: number;
+  experimentsCreated: number;
+  backtestsRun: number;
+  validationsRun: number;
+  promoted: number;
+  forwardTestsStarted: number;
+  journalEntriesCreated: number;
+  rejected: number;
+  weakRejectedCount: number;
+  insufficientDataCount: number;
+  promotedWithFullEvidenceCount: number;
+  promotedWithoutFullEvidenceCount: number;
+  latestRejectionReasons: string[];
+  latestRunAt: string | null;
 };
 
 export type DemoRunFinalReport = {

@@ -19,3 +19,6 @@ artifacts/private/
 .venv
 venv/
 venv*
+
+backfill-oanda-batch-state.json
+backfill-oanda-batch-state*.json

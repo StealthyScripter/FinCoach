@@ -15,6 +15,7 @@ import { ToolConnectorRegistryService } from "./toolConnectorRegistryService";
 import { predictionReviewService } from "./predictionReviewService";
 import { portfolioRiskAnalyticsService } from "./portfolioRiskAnalyticsService";
 import { demoRunRecordStore, type PersistedDemoRunRecord } from "./demoRunRecordStore";
+import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
 import type {
   DemoRunAdjustment,
   DemoRunDailyReport,
@@ -24,6 +25,7 @@ import type {
   DemoRunState,
   DemoRunStatus,
   DemoRunTelemetry,
+  DemoRunResearchPipelineSummary,
 } from "@shared/demoRun";
 
 const DEMO_ALLOWED_SYMBOLS = ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "XAG/USD"];
@@ -85,7 +87,7 @@ export class DemoRunService {
       endTime: null,
       pausedAt: null,
       allowedSymbols: [...DEMO_ALLOWED_SYMBOLS],
-      allowedStrategies: context.allowedStrategies,
+      allowedStrategies: [],
       connectedProviders: context.connectedProviders,
       riskLimits: {
         maxDailyLoss: 250,
@@ -301,6 +303,7 @@ export class DemoRunService {
       blockedActions: this.blockedActions(context),
       topAdjustment,
       latestDailyReport,
+      researchPipeline: summarizeResearchPipeline(),
     };
   }
 
@@ -528,6 +531,7 @@ export class DemoRunService {
       },
       dailyReports: this.record?.dailyReports ?? [],
       adjustments: this.record?.adjustments ?? [],
+      researchPipeline: summarizeResearchPipeline(),
     };
     return telemetry;
   }
@@ -724,6 +728,29 @@ export class DemoRunService {
     };
     await demoRunRecordStore.save(payload);
   }
+}
+
+function summarizeResearchPipeline(): DemoRunResearchPipelineSummary {
+  const status = strategyResearchSchedulerService.snapshot();
+  return {
+    status: status.health.status,
+    cyclesRun: status.health.cyclesRun,
+    patternsDetected: status.counts.patternsDetected,
+    hypothesesCreated: status.counts.hypothesesCreated,
+    experimentsCreated: status.counts.experimentsCreated,
+    backtestsRun: status.counts.backtestsRun,
+    validationsRun: status.counts.validationsRun,
+    promoted: status.counts.promoted,
+    forwardTestsStarted: status.counts.forwardTestsStarted,
+    journalEntriesCreated: status.counts.journalEntriesCreated,
+    rejected: status.counts.rejected,
+    weakRejectedCount: status.counts.weakRejectedCount,
+    insufficientDataCount: status.counts.insufficientDataCount,
+    promotedWithFullEvidenceCount: status.counts.promotedWithFullEvidenceCount,
+    promotedWithoutFullEvidenceCount: status.counts.promotedWithoutFullEvidenceCount,
+    latestRejectionReasons: status.latestRejectionReasons,
+    latestRunAt: status.lastRunAt,
+  };
 }
 
 function summarizeRepeatedActions(events: ReturnType<typeof eventLogService.list>) {

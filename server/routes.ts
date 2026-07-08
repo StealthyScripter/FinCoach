@@ -104,6 +104,10 @@ import { strategyLabService } from "./execution/strategyLabService";
 import { auditExportService } from "./execution/auditExportService";
 import { telegramBotService } from "./telegramService";
 import { demoRunService } from "./demoRunService";
+import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
+import { historicalDataImportService } from "./historicalDataImportService";
+import { researchAccelerationService } from "./researchAccelerationService";
+import { oandaHistoricalBackfillService } from "./historicalDataBackfillService";
 
 const emergencyControlService = new EmergencyControlService(
   executionRiskService,
@@ -164,6 +168,93 @@ export async function registerRoutes(
 
   app.get("/api/marketpilot/demo-run/export", async (_req, res) => {
     res.json(await demoRunService.export());
+  });
+
+  app.get("/api/marketpilot/research-pipeline/status", async (_req, res) => {
+    res.json(strategyResearchSchedulerService.snapshot());
+  });
+
+  app.post("/api/marketpilot/research-pipeline/history/import-csv", async (req, res) => {
+    const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
+    const defaultInstrument = typeof req.body?.instrument === "string" ? req.body.instrument : undefined;
+    const defaultTimeframe = typeof req.body?.timeframe === "string" ? req.body.timeframe : undefined;
+    if (!csv.trim()) {
+      res.status(400).json({ message: "CSV payload is required" });
+      return;
+    }
+    try {
+      res.json(historicalDataImportService.importCsv({ csv, defaultInstrument, defaultTimeframe: defaultTimeframe as never }));
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "Historical CSV import failed" });
+    }
+  });
+
+  app.get("/api/marketpilot/research-pipeline/history/coverage", async (_req, res) => {
+    res.json(researchAccelerationService.coverage());
+  });
+
+  app.post("/api/marketpilot/research-pipeline/history/import-oanda", async (req, res) => {
+    const instruments = Array.isArray(req.body?.instruments) ? req.body.instruments.filter((item: unknown): item is string => typeof item === "string") : undefined;
+    const timeframes = Array.isArray(req.body?.timeframes) ? req.body.timeframes.filter((item: unknown): item is never => typeof item === "string") : undefined;
+    const count = typeof req.body?.count === "number" ? req.body.count : undefined;
+    res.json(await researchAccelerationService.importOanda({ instruments, timeframes, count }));
+  });
+
+  app.post("/api/marketpilot/research-pipeline/history/backfill-oanda", async (req, res) => {
+    const instruments = Array.isArray(req.body?.instruments) ? req.body.instruments.filter((item: unknown): item is string => typeof item === "string") : undefined;
+    const timeframes = Array.isArray(req.body?.timeframes) ? req.body.timeframes.filter((item: unknown): item is never => typeof item === "string") : undefined;
+    const maxCandlesPerRequest = typeof req.body?.maxCandlesPerRequest === "number" ? req.body.maxCandlesPerRequest : undefined;
+    const maxRequestsPerRun = typeof req.body?.maxRequestsPerRun === "number" ? req.body.maxRequestsPerRun : undefined;
+    const rateLimitMs = typeof req.body?.rateLimitMs === "number" ? req.body.rateLimitMs : undefined;
+    try {
+      res.json(await oandaHistoricalBackfillService.backfillOanda({
+        instruments,
+        timeframes,
+        start: typeof req.body?.start === "string" ? req.body.start : undefined,
+        end: typeof req.body?.end === "string" ? req.body.end : undefined,
+        maxCandlesPerRequest,
+        maxRequestsPerRun,
+        rateLimitMs,
+        dryRun: req.body?.dryRun === true,
+        resume: req.body?.resume !== false,
+      }));
+    } catch (error) {
+      res.status(400).json({ message: error instanceof Error ? error.message : "OANDA historical backfill failed" });
+    }
+  });
+
+  app.get("/api/marketpilot/research-pipeline/history/backfill-status", async (_req, res) => {
+    res.json({
+      status: oandaHistoricalBackfillService.status(),
+      acquisitionPlan: oandaHistoricalBackfillService.acquisitionPlan(),
+    });
+  });
+
+  app.post("/api/marketpilot/research-pipeline/history/backfill-stop", async (_req, res) => {
+    res.json(oandaHistoricalBackfillService.stop());
+  });
+
+  app.post("/api/marketpilot/research-pipeline/replay/run", async (req, res) => {
+    const instruments = Array.isArray(req.body?.instruments) ? req.body.instruments.filter((item: unknown): item is string => typeof item === "string") : undefined;
+    const timeframe = typeof req.body?.timeframe === "string" ? req.body.timeframe as never : undefined;
+    res.json(researchAccelerationService.runReplay({ instruments, timeframe }));
+  });
+
+  app.get("/api/marketpilot/research-pipeline/replay/status", async (_req, res) => {
+    res.json(researchAccelerationService.replayStatus());
+  });
+
+  app.get("/api/marketpilot/research-pipeline/replay/report", async (_req, res) => {
+    res.json(researchAccelerationService.replayReport());
+  });
+
+  app.get("/api/marketpilot/research-pipeline/stability", async (_req, res) => {
+    res.json(researchAccelerationService.stabilitySnapshot());
+  });
+
+  app.post("/api/marketpilot/research-pipeline/tick", async (_req, res) => {
+    const status = await demoRunService.status();
+    res.json(await strategyResearchSchedulerService.runOnce({ runState: status.state }));
   });
 
   app.post("/api/marketpilot/demo-run/start", async (_req, res) => {
