@@ -1,14 +1,14 @@
 import type { TelegramNormalizedCommand, TelegramNormalizedUpdate } from "./contracts";
 import { telegramMetrics } from "./metrics";
-import { telegramCommandRouter, type TelegramCommandRouter } from "./commandRouter";
-import { telegramNotificationService, type TelegramNotificationService } from "./notificationService";
+import type { TelegramCommandRouter } from "./commandRouter";
+import type { TelegramNotificationService } from "./notificationService";
 
 type RouterReply = string | { success?: boolean; reply?: string };
 
 export class TelegramTransport {
   constructor(
-    private readonly router: Pick<TelegramCommandRouter, "handle"> = telegramCommandRouter,
-    private readonly notifications: Pick<TelegramNotificationService, "sendCommandReply"> = telegramNotificationService,
+    private readonly router?: Pick<TelegramCommandRouter, "handle">,
+    private readonly notifications?: Pick<TelegramNotificationService, "sendCommandReply">,
   ) {}
 
   async handle(update: TelegramNormalizedUpdate) {
@@ -18,7 +18,8 @@ export class TelegramTransport {
       return { processed: false as const, reason: "not_command" };
     }
 
-    const routerReply = await this.router.handle({
+    const router = await this.getRouter();
+    const routerReply = await router.handle({
       command: [command.command, ...command.args].join(" "),
       actorId: command.actorId,
       chatId: command.chatId,
@@ -29,7 +30,8 @@ export class TelegramTransport {
       return { processed: true as const, replied: false as const };
     }
 
-    const delivery = await this.notifications.sendCommandReply(command.chatId, reply, {
+    const notifications = await this.getNotifications();
+    const delivery = await notifications.sendCommandReply(command.chatId, reply, {
       source: command.source,
       command: command.command,
       messageId: command.messageId,
@@ -54,6 +56,16 @@ export class TelegramTransport {
       messageId: update.messageId,
       receivedAt: update.receivedAt,
     };
+  }
+
+  private async getRouter() {
+    if (this.router) return this.router;
+    return (await import("./commandRouter")).telegramCommandRouter;
+  }
+
+  private async getNotifications() {
+    if (this.notifications) return this.notifications;
+    return (await import("./notificationService")).telegramNotificationService;
   }
 }
 

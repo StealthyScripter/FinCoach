@@ -6,6 +6,7 @@ import { strategyResearchSchedulerService } from "../strategyResearchSchedulerSe
 import { loadTelegramConfig, telegramClient, validateTelegramConfig } from "./telegramClient";
 import { telegramRepository } from "./repository";
 import { redactChatId } from "./formatter";
+import { telegramUpdateReceiver } from "./updateReceiver";
 
 const processStartedAt = Date.now();
 
@@ -38,6 +39,7 @@ export async function buildTelegramStatus() {
       operationsChat: redactChatId(config.chatId),
       signalChat: redactChatId(config.signalChatId),
       client: telegramClient.health(),
+      updateReceiver: telegramUpdateReceiver.health(),
       repository: telegramRepository.health(),
     },
   };

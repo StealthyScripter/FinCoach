@@ -54,6 +54,15 @@ export class TelegramUpdateReceiver {
     return this;
   }
 
+  health() {
+    return {
+      running: this.running,
+      stopped: this.stopped,
+      inFlight: Boolean(this.inFlight),
+      seenUpdateIds: this.seenUpdateIds.size,
+    };
+  }
+
   async stop() {
     this.stopped = true;
     this.running = false;
