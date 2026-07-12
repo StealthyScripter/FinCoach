@@ -10,6 +10,7 @@ import { TelegramUpdateCursor } from "./telegram/updateCursor";
 import { TelegramTransport } from "./telegram/transport";
 import { TelegramUpdateReceiver } from "./telegram/updateReceiver";
 import { TelegramScheduler } from "./telegram/scheduler";
+import { TelegramLifecycleMonitor, normalizeProcessFailure } from "./telegram/lifecycleMonitor";
 import type { TelegramSchedulerRunRecord, TelegramSummaryRecord } from "./telegram/contracts";
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -311,6 +312,49 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
       throw new Error("timer duplicate summary rejection");
     });
   });
+  assert.equal(rejections.length, 0);
+}
+
+{
+  const secret = "telegram-token-never-print";
+  const normalized = normalizeProcessFailure(new Error(`failed with ${secret}`), { TELEGRAM_BOT_TOKEN: secret });
+  assert.equal(normalized.type, "Error");
+  assert.ok(!normalized.message.includes(secret));
+  assert.ok(normalized.message.includes("[REDACTED]"));
+}
+
+{
+  const sent: string[] = [];
+  const monitor = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), {
+    sendOperations: async (_kind: string, text: string) => {
+      sent.push(text);
+      return { sent: true as const };
+    },
+  } as never, { TELEGRAM_BOT_TOKEN: "secret-token-123" } as never);
+  monitor.reportUnhandledRejection(new TypeError("bad async state secret-token-123"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].includes("FinCoach process rejection"));
+  assert.ok(sent[0].includes("Type: TypeError"));
+  assert.ok(!sent[0].includes("secret-token-123"));
+  monitor.reportUnhandledRejection(new TypeError("bad async state secret-token-123"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sent.length, 1);
+}
+
+{
+  const sent: string[] = [];
+  const monitor = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), {
+    sendOperations: async (_kind: string, text: string) => {
+      sent.push(text);
+      throw new Error("telegram send failed");
+    },
+  } as never);
+  const rejections = await captureUnhandledRejections(() => {
+    monitor.reportUnhandledRejection("plain string rejection");
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sent.length, 1);
   assert.equal(rejections.length, 0);
 }
 

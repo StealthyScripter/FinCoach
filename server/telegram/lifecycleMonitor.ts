@@ -1,4 +1,4 @@
-import { formatGracefulStop, formatRecovery, formatStartup } from "./formatter";
+import { formatGracefulStop, formatRecovery, formatStartup, protectTelegramMessageLength, redactTelegramSecrets } from "./formatter";
 import { telegramNotificationService, type TelegramNotificationService } from "./notificationService";
 import { telegramRepository, type TelegramRepository } from "./repository";
 import { emitTelegramEvent } from "./events";
@@ -8,6 +8,8 @@ export class TelegramLifecycleMonitor {
   private readonly startedAt = new Date();
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private shutdownRegistered = false;
+  private reportingProcessFailure = false;
+  private readonly processFailureDeduplication = new Map<string, number>();
 
   constructor(
     private readonly repository: TelegramRepository = telegramRepository,
@@ -73,14 +75,69 @@ export class TelegramLifecycleMonitor {
       });
     }
     process.on("uncaughtException", (error) => {
-      emitTelegramEvent("ApplicationStopping", { reason: "uncaught exception", error: error.message });
-      void this.notifications.sendOperations("lifecycle", `🔴 FinCoach crash reported\nReason: uncaught exception\nLive execution: blocked\nTimestamp: ${new Date().toISOString()}`);
+      this.reportUncaughtException(error);
     });
     process.on("unhandledRejection", (reason) => {
-      emitTelegramEvent("ApplicationStopping", { reason: "unhandled rejection", error: reason instanceof Error ? reason.message : String(reason) });
-      void this.notifications.sendOperations("lifecycle", `🔴 FinCoach rejection reported\nReason: unhandled rejection\nLive execution: blocked\nTimestamp: ${new Date().toISOString()}`);
+      this.reportUnhandledRejection(reason);
     });
   }
+
+  reportUncaughtException(error: unknown) {
+    this.reportProcessFailure("exception", error);
+  }
+
+  reportUnhandledRejection(reason: unknown) {
+    this.reportProcessFailure("rejection", reason);
+  }
+
+  private reportProcessFailure(kind: "exception" | "rejection", reason: unknown) {
+    const details = normalizeProcessFailure(reason, this.env);
+    const dedupeKey = `${kind}:${details.type}:${details.message}`;
+    const now = Date.now();
+    const previous = this.processFailureDeduplication.get(dedupeKey);
+    if (previous && now - previous < 60_000) return;
+    this.processFailureDeduplication.set(dedupeKey, now);
+    if (this.reportingProcessFailure) return;
+    this.reportingProcessFailure = true;
+    emitTelegramEvent("ApplicationStopping", { reason: `unhandled ${kind}`, error: details.message, type: details.type });
+    console.error(`FinCoach process ${kind}: ${details.type}: ${details.message}`);
+    const text = [
+      kind === "rejection" ? "🔴 FinCoach process rejection" : "🔴 FinCoach process exception",
+      `Type: ${details.type}`,
+      `Message: ${details.message}`,
+      "Live execution: blocked",
+      `Timestamp: ${new Date().toISOString()}`,
+    ].join("\n");
+    try {
+      Promise.resolve(this.notifications.sendOperations("lifecycle", text))
+        .catch((error) => {
+          const nested = normalizeProcessFailure(error, this.env);
+          console.error(`FinCoach process ${kind} alert failed: ${nested.type}: ${nested.message}`);
+        })
+        .finally(() => {
+          this.reportingProcessFailure = false;
+        });
+    } catch (error) {
+      const nested = normalizeProcessFailure(error, this.env);
+      console.error(`FinCoach process ${kind} alert failed: ${nested.type}: ${nested.message}`);
+      this.reportingProcessFailure = false;
+    }
+  }
+}
+
+export function normalizeProcessFailure(reason: unknown, env: NodeJS.ProcessEnv = process.env) {
+  const type = reason instanceof Error ? reason.name || "Error" : typeof reason;
+  const rawMessage = reason instanceof Error ? reason.message : String(reason);
+  let message = String(redactTelegramSecrets(rawMessage));
+  for (const value of Object.values(env)) {
+    if (typeof value === "string" && value.length >= 6) {
+      message = message.split(value).join("[REDACTED]");
+    }
+  }
+  return {
+    type,
+    message: protectTelegramMessageLength(message || "unknown", 500),
+  };
 }
 
 export function formatDuration(ms: number) {
