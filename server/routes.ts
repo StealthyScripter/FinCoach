@@ -103,6 +103,7 @@ import {
 import { strategyLabService } from "./execution/strategyLabService";
 import { auditExportService } from "./execution/auditExportService";
 import { telegramBotService } from "./telegramService";
+import { registerTelegramOperationsRoutes } from "./telegram";
 import { demoRunService } from "./demoRunService";
 import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
 import { historicalDataImportService } from "./historicalDataImportService";
@@ -150,9 +151,7 @@ export async function registerRoutes(
     res.json(providerRegistryService.getSnapshot());
   });
 
-  app.get("/api/marketpilot/telegram/status", async (_req, res) => {
-    res.json(telegramBotService.status());
-  });
+  registerTelegramOperationsRoutes(app);
 
   app.get("/api/marketpilot/demo-run/status", async (_req, res) => {
     res.json(await demoRunService.status());

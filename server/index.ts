@@ -7,6 +7,7 @@ import { metricsService } from "./metricsService";
 import { strategyEvidenceStore } from "./execution/strategyEvidenceStore";
 import { startDemoRunScheduler } from "./demoRunScheduler";
 import { demoOnlyPolicyService } from "./execution/demoOnlyPolicy";
+import { startTelegramOperations } from "./telegram";
 
 const app = express();
 const httpServer = createServer(app);
@@ -74,6 +75,7 @@ app.use((req, res, next) => {
   await strategyEvidenceStore.bootstrap();
   await registerRoutes(httpServer, app);
   startDemoRunScheduler();
+  void startTelegramOperations();
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

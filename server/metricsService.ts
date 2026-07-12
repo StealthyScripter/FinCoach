@@ -1,6 +1,7 @@
 import type { MarketPilotOverview, MetricsSnapshot, VerificationQualityReport } from "@shared/schema";
 import { eventLogService } from "./eventLogService";
 import { getStorageMode } from "./storageMode";
+import { telegramMetrics } from "./telegram/metrics";
 
 const startedAt = Date.now();
 
@@ -60,6 +61,7 @@ export class MetricsService {
 export const metricsService = new MetricsService();
 
 export function renderPrometheusMetrics(snapshot: MetricsSnapshot): string {
+  const telegram = telegramMetrics.snapshot();
   const lines = [
     "# HELP marketpilot_uptime_seconds Time since the process started.",
     "# TYPE marketpilot_uptime_seconds gauge",
@@ -103,6 +105,45 @@ export function renderPrometheusMetrics(snapshot: MetricsSnapshot): string {
     "# HELP marketpilot_event_log_count_total Total events currently retained in the event log.",
     "# TYPE marketpilot_event_log_count_total counter",
     `marketpilot_event_log_count_total ${snapshot.eventLogCount}`,
+    "# HELP marketpilot_telegram_sends_attempted_total Telegram sends attempted.",
+    "# TYPE marketpilot_telegram_sends_attempted_total counter",
+    `marketpilot_telegram_sends_attempted_total ${telegram.sendsAttempted}`,
+    "# HELP marketpilot_telegram_sends_succeeded_total Telegram sends succeeded.",
+    "# TYPE marketpilot_telegram_sends_succeeded_total counter",
+    `marketpilot_telegram_sends_succeeded_total ${telegram.sendsSucceeded}`,
+    "# HELP marketpilot_telegram_sends_failed_total Telegram sends failed.",
+    "# TYPE marketpilot_telegram_sends_failed_total counter",
+    `marketpilot_telegram_sends_failed_total ${telegram.sendsFailed}`,
+    "# HELP marketpilot_telegram_rate_limits_total Telegram rate limits observed.",
+    "# TYPE marketpilot_telegram_rate_limits_total counter",
+    `marketpilot_telegram_rate_limits_total ${telegram.rateLimits}`,
+    "# HELP marketpilot_telegram_commands_received_total Telegram commands received.",
+    "# TYPE marketpilot_telegram_commands_received_total counter",
+    `marketpilot_telegram_commands_received_total ${telegram.commandsReceived}`,
+    "# HELP marketpilot_telegram_unauthorized_commands_total Unauthorized Telegram commands.",
+    "# TYPE marketpilot_telegram_unauthorized_commands_total counter",
+    `marketpilot_telegram_unauthorized_commands_total ${telegram.unauthorizedCommands}`,
+    "# HELP marketpilot_telegram_signals_considered_total Telegram signals considered.",
+    "# TYPE marketpilot_telegram_signals_considered_total counter",
+    `marketpilot_telegram_signals_considered_total ${telegram.signalsConsidered}`,
+    "# HELP marketpilot_telegram_signals_rejected_total Telegram signals rejected.",
+    "# TYPE marketpilot_telegram_signals_rejected_total counter",
+    `marketpilot_telegram_signals_rejected_total ${telegram.signalsRejected}`,
+    "# HELP marketpilot_telegram_signals_published_total Telegram signals published.",
+    "# TYPE marketpilot_telegram_signals_published_total counter",
+    `marketpilot_telegram_signals_published_total ${telegram.signalsPublished}`,
+    "# HELP marketpilot_telegram_duplicates_suppressed_total Duplicate Telegram signals suppressed.",
+    "# TYPE marketpilot_telegram_duplicates_suppressed_total counter",
+    `marketpilot_telegram_duplicates_suppressed_total ${telegram.duplicatesSuppressed}`,
+    "# HELP marketpilot_telegram_kill_switch_suppressions_total Telegram signals suppressed by kill switch.",
+    "# TYPE marketpilot_telegram_kill_switch_suppressions_total counter",
+    `marketpilot_telegram_kill_switch_suppressions_total ${telegram.killSwitchSuppressions}`,
+    "# HELP marketpilot_telegram_delivery_latency_ms Average Telegram delivery latency.",
+    "# TYPE marketpilot_telegram_delivery_latency_ms gauge",
+    `marketpilot_telegram_delivery_latency_ms ${telegram.averageDeliveryLatencyMs ?? 0}`,
+    "# HELP marketpilot_telegram_average_signal_r Average finalized Telegram signal R.",
+    "# TYPE marketpilot_telegram_average_signal_r gauge",
+    `marketpilot_telegram_average_signal_r ${telegram.averageSignalR ?? 0}`,
   ];
 
   return `${lines.join("\n")}\n`;

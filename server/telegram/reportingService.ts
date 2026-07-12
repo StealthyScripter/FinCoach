@@ -1,0 +1,212 @@
+import { randomUUID } from "crypto";
+import { storage } from "../storage";
+import { demoRunService } from "../demoRunService";
+import { strategyResearchSchedulerService } from "../strategyResearchSchedulerService";
+import { executionRiskService, summarizePositions } from "../execution/riskControls";
+import { paperStrategyRuntime } from "../execution/paperStrategyRuntime";
+import { strategyEvidenceStore } from "../execution/strategyEvidenceStore";
+import { providerRegistryService } from "../providerRegistryService";
+import { telegramMetrics } from "./metrics";
+import { telegramRepository, type TelegramRepository } from "./repository";
+
+export type StrategyPerformanceInput = {
+  strategyId: string;
+  name: string;
+  version: number;
+  status: string;
+  instrument: string;
+  timeframe: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  grossProfit: number;
+  grossLoss: number;
+  netProfit: number;
+  capitalAllocated: number;
+  totalRiskCommitted: number;
+  maximumDrawdown: number;
+  evidenceScore: number;
+  forwardTestDuration: string;
+  confidenceCalibration: string;
+  promotionState: string;
+  averageR: number | null;
+};
+
+export class TelegramReportingService {
+  constructor(private readonly repository: TelegramRepository = telegramRepository) {}
+
+  async statusMessage() {
+    const demo = await demoRunService.status().catch(() => null);
+    const pipeline = strategyResearchSchedulerService.snapshot();
+    const providers = providerRegistryService.getSnapshot();
+    const risk = executionRiskService.snapshot();
+    const open = paperStrategyRuntime.listOpen();
+    return [
+      "FinCoach Status",
+      `State: running`,
+      `Demo run: ${demo?.state ?? "unknown"}`,
+      `Research pipeline: ${pipeline.health.status}`,
+      `Providers: ${providers.providers.map((provider) => `${provider.id}:${provider.status}`).join(", ") || "none"}`,
+      `Data freshness: ${pipeline.historicalDataCoverage.length ? "tracked" : "unknown"}`,
+      `Kill switch: ${risk.globalKillSwitch ? "ACTIVE" : "inactive"}`,
+      `Open demo trades: ${open.length}`,
+      "Live execution: blocked",
+    ].join("\n");
+  }
+
+  openTradesMessage() {
+    const open = paperStrategyRuntime.listOpen();
+    if (open.length === 0) return "Environment: DEMO/PAPER/PRACTICE\nNo open demo trades.";
+    return [
+      "Environment: DEMO/PAPER/PRACTICE",
+      ...open.slice(0, 10).map((trade) => [
+        `${trade.symbol} ${trade.side}`,
+        `Entry: ${trade.entryPrice}`,
+        `Current: ${trade.currentPrice}`,
+        `Unrealized P/L: ${trade.unrealizedPnL}`,
+        `Strategy: ${trade.strategyId}`,
+      ].join(" | ")),
+    ].join("\n");
+  }
+
+  exposureMessage() {
+    const positions = paperStrategyRuntime.listOpen().map((trade) => ({
+      id: trade.id,
+      instrument: trade.symbol,
+      side: trade.side,
+      units: trade.units,
+      entryPrice: trade.entryPrice,
+      currentPrice: trade.currentPrice,
+      stopLoss: trade.stopLoss,
+      takeProfit: trade.takeProfit,
+      unrealizedPnL: trade.unrealizedPnL,
+      realizedPnL: 0,
+      marginUsed: 0,
+      staleData: false,
+      stopLossStatus: "active" as const,
+      takeProfitStatus: "active" as const,
+      openedAt: trade.openedAt,
+      updatedAt: new Date().toISOString(),
+    }));
+    const exposure = summarizePositions(positions);
+    return [
+      "Environment: DEMO/PAPER/PRACTICE",
+      `Gross exposure: ${exposure.exposure}`,
+      `Net exposure: ${exposure.exposure}`,
+      `Open positions: ${exposure.openPositions}`,
+      `Unrealized demo P/L: ${exposure.unrealizedPnL}`,
+      `Correlated exposure warnings: ${exposure.correlation}`,
+      "Remaining demo risk capacity: tracked by demo risk controls",
+    ].join("\n");
+  }
+
+  async dailySummary(now = new Date()) {
+    const demo = await demoRunService.status().catch(() => null);
+    const telemetry = await demoRunService.telemetry().catch(() => null);
+    const pipeline = strategyResearchSchedulerService.snapshot();
+    const evidence = strategyEvidenceStore.snapshot();
+    const report = {
+      generatedAt: now.toISOString(),
+      system: { uptimeSeconds: demo?.uptimeSeconds ?? 0, reliability: telemetry?.reliability ?? null },
+      demoRun: demo,
+      research: pipeline.counts,
+      signals: telegramMetrics.snapshot(),
+      rejectedSignals: evidence.rejectedSignals.slice(0, 10),
+      safety: telemetry?.safety ?? null,
+      nextResearchPriority: pipeline.latestRejectionReasons[0] ?? "Continue evidence collection and validation.",
+      disclaimer: "Historical performance is not guaranteed future performance. FinCoach is demo-only.",
+    };
+    const conciseMessage = [
+      "Daily FinCoach Summary",
+      `Demo run: ${demo?.state ?? "unknown"}`,
+      `Research cycles: ${pipeline.health.cyclesRun}`,
+      `Patterns discovered: ${pipeline.counts.patternsDetected}`,
+      `Experiments created: ${pipeline.counts.experimentsCreated}`,
+      `Backtests completed: ${pipeline.counts.backtestsRun}`,
+      `Signals published/suppressed: ${telegramMetrics.snapshot().signalsPublished}/${telegramMetrics.snapshot().signalsRejected}`,
+      `Safety blocks: ${pipeline.health.safetyBlocks}`,
+      `Next: ${report.nextResearchPriority}`,
+      "Live execution: blocked",
+    ].join("\n");
+    const record = await this.repository.saveSummary({
+      id: randomUUID(),
+      period: "daily",
+      summaryDate: now.toISOString().slice(0, 10),
+      conciseMessage,
+      report,
+      deliveryId: null,
+      createdAt: now.toISOString(),
+    });
+    telegramMetrics.increment("summariesGenerated");
+    return record;
+  }
+
+  async weeklySummary(now = new Date()) {
+    const pipeline = strategyResearchSchedulerService.snapshot();
+    const metrics = telegramMetrics.snapshot();
+    const report = {
+      generatedAt: now.toISOString(),
+      providerReliability: providerRegistryService.getSnapshot().providers.map((provider) => ({ id: provider.id, health: provider.status })),
+      researchThroughput: pipeline.counts,
+      strategyPerformance: this.strategyPerformance(),
+      signals: metrics,
+      comparisons: { priorWeek: "not_available", experimentBaseline: "tracked where available", benchmark: "not_available" },
+      comingWeekResearchPlan: pipeline.latestRejectionReasons.slice(0, 3),
+      disclaimer: "Historical performance is not guaranteed future performance. FinCoach is demo-only.",
+    };
+    const conciseMessage = [
+      "Weekly FinCoach Summary",
+      `Research cycles: ${pipeline.health.cyclesRun}`,
+      `Experiments run: ${pipeline.counts.experimentsCreated}`,
+      `Backtests run: ${pipeline.counts.backtestsRun}`,
+      `Stable candidates: ${pipeline.counts.promoted}`,
+      `Signals published/rejected: ${metrics.signalsPublished}/${metrics.signalsRejected}`,
+      `Average signal R: ${metrics.averageSignalR ?? "not_available"}`,
+      "Live execution: blocked",
+    ].join("\n");
+    const record = await this.repository.saveSummary({
+      id: randomUUID(),
+      period: "weekly",
+      summaryDate: weekKey(now),
+      conciseMessage,
+      report,
+      deliveryId: null,
+      createdAt: now.toISOString(),
+    });
+    telegramMetrics.increment("summariesGenerated");
+    return record;
+  }
+
+  strategyPerformance(input?: StrategyPerformanceInput[]) {
+    const strategies = input ?? [];
+    return strategies.map((strategy) => {
+      const absoluteGrossLoss = Math.abs(strategy.grossLoss);
+      return {
+        ...strategy,
+        winRate: strategy.trades > 0 ? strategy.wins / strategy.trades : null,
+        profitFactor: absoluteGrossLoss > 0 ? strategy.grossProfit / absoluteGrossLoss : null,
+        expectancy: strategy.trades > 0 ? strategy.netProfit / strategy.trades : null,
+        returnPercentage: strategy.capitalAllocated > 0 ? strategy.netProfit / strategy.capitalAllocated * 100 : null,
+        returnOnRiskPercentage: strategy.totalRiskCommitted > 0 ? strategy.netProfit / strategy.totalRiskCommitted * 100 : null,
+      };
+    });
+  }
+
+  async todayMessage() {
+    const summaries = await this.repository.listSummaries("daily", 1);
+    return summaries[0]?.conciseMessage ?? (await this.dailySummary()).conciseMessage;
+  }
+
+  async weekMessage() {
+    const summaries = await this.repository.listSummaries("weekly", 1);
+    return summaries[0]?.conciseMessage ?? (await this.weeklySummary()).conciseMessage;
+  }
+}
+
+function weekKey(date: Date) {
+  const first = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const day = Math.floor((date.getTime() - first.getTime()) / 86_400_000);
+  return `${date.getUTCFullYear()}-W${String(Math.ceil((day + first.getUTCDay() + 1) / 7)).padStart(2, "0")}`;
+}
+
+export const telegramReportingService = new TelegramReportingService();
