@@ -14,6 +14,14 @@ export class TelegramNotificationService {
     return { sent: result.ok, result };
   }
 
+  async sendCommandReply(chatId: string, text: string, metadata: Record<string, unknown> = {}) {
+    const config = loadTelegramConfig(this.env);
+    if (!config.notificationsEnabled || !config.botToken) return { sent: false as const, reason: "telegram command replies not configured" };
+    const result = await this.client.sendMessage({ kind: "command", destination: "operations", chatId, text, metadata });
+    telegramMetrics.recordDelivery(result.ok, result.delivery.latencyMs, result.delivery.status === "rate_limited");
+    return { sent: result.ok, result };
+  }
+
   async sendKillSwitchAlert(reason: string, scope = "global") {
     return this.sendOperations("kill_switch", formatKillSwitch({
       scope,

@@ -105,6 +105,26 @@ export type TelegramAuditEvent =
   | "TelegramSignalLifecycleUpdated"
   | "TelegramCommandAudited";
 
+export type TelegramNormalizedUpdate = {
+  source: "telegram";
+  updateId: number;
+  chatId: string;
+  actorId: string;
+  messageId: string;
+  text: string;
+  receivedAt: string;
+};
+
+export type TelegramNormalizedCommand = {
+  source: "telegram";
+  command: string;
+  args: string[];
+  actorId: string;
+  chatId: string;
+  messageId: string;
+  receivedAt: string;
+};
+
 export const finCoachSignalSchema = z.object({
   schema: z.literal(TELEGRAM_SIGNAL_SCHEMA),
   signalId: z.string().uuid(),
@@ -239,6 +259,13 @@ export type TelegramMetricsSnapshot = {
   duplicatesSuppressed: number;
   staleSignalsSuppressed: number;
   killSwitchSuppressions: number;
+  updatesReceived: number;
+  updatesProcessed: number;
+  updatesIgnored: number;
+  updatesFailed: number;
+  repliesSent: number;
+  replyFailures: number;
+  pollingReconnects: number;
   signalResultsByOutcome: Record<string, number>;
   averageSignalR: number | null;
   averageDeliveryLatencyMs: number | null;

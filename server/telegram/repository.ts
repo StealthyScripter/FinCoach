@@ -25,6 +25,8 @@ export interface TelegramRepository {
   saveSchedulerRun(record: TelegramSchedulerRunRecord): Promise<TelegramSchedulerRunRecord>;
   completeSchedulerRun(id: string, status: TelegramSchedulerRunRecord["status"], details?: Record<string, unknown>): Promise<void>;
   saveCommandAudit(record: TelegramCommandAuditRecord): Promise<TelegramCommandAuditRecord>;
+  loadUpdateCursor(transport: string): Promise<number | null>;
+  saveUpdateCursor(transport: string, updateId: number): Promise<void>;
   latestLifecycleHeartbeat(): Promise<{ heartbeatAt: string; cleanShutdown: boolean; processId: string | null } | null>;
   saveLifecycleState(input: { processId: string; heartbeatAt: string; cleanShutdown: boolean; startedAt: string; stoppedAt?: string | null }): Promise<void>;
   health(): { provider: "memory" | "postgres"; status: "healthy" | "disabled"; records: number };
@@ -37,6 +39,7 @@ export class InMemoryTelegramRepository implements TelegramRepository {
   private summaries: TelegramSummaryRecord[] = [];
   private schedulerRuns = new Map<string, TelegramSchedulerRunRecord>();
   private commands: TelegramCommandAuditRecord[] = [];
+  private updateCursors = new Map<string, number>();
   private lifecycle: { heartbeatAt: string; cleanShutdown: boolean; processId: string | null; startedAt: string; stoppedAt?: string | null } | null = null;
 
   async saveDelivery(record: TelegramDeliveryRecord) {
@@ -108,6 +111,15 @@ export class InMemoryTelegramRepository implements TelegramRepository {
   async saveCommandAudit(record: TelegramCommandAuditRecord) {
     this.commands.push(record);
     return record;
+  }
+
+  async loadUpdateCursor(transport: string) {
+    return this.updateCursors.get(transport) ?? null;
+  }
+
+  async saveUpdateCursor(transport: string, updateId: number) {
+    const current = this.updateCursors.get(transport);
+    if (current === undefined || updateId > current) this.updateCursors.set(transport, updateId);
   }
 
   async latestLifecycleHeartbeat() {
@@ -285,6 +297,25 @@ export class PgTelegramRepository implements TelegramRepository {
       [record.id, record.command, record.actorIdRedacted, record.chatIdRedacted, record.authorized, record.outcome, record.reason, record.createdAt],
     );
     return record;
+  }
+
+  async loadUpdateCursor(transport: string) {
+    if (!this.pool) return null;
+    const rows = await this.pool.query(`SELECT last_update_id FROM telegram_update_cursors WHERE transport = $1 LIMIT 1`, [transport]);
+    const value = rows.rows[0]?.last_update_id;
+    return value === undefined || value === null ? null : Number(value);
+  }
+
+  async saveUpdateCursor(transport: string, updateId: number) {
+    if (!this.pool) throw new Error("DATABASE_URL is not configured");
+    await this.pool.query(
+      `INSERT INTO telegram_update_cursors (transport, last_update_id, updated_at)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (transport) DO UPDATE
+       SET last_update_id = GREATEST(telegram_update_cursors.last_update_id, EXCLUDED.last_update_id),
+           updated_at = EXCLUDED.updated_at`,
+      [transport, updateId, new Date().toISOString()],
+    );
   }
 
   async latestLifecycleHeartbeat() {

@@ -15,6 +15,13 @@ export class TelegramMetrics {
     duplicatesSuppressed: 0,
     staleSignalsSuppressed: 0,
     killSwitchSuppressions: 0,
+    updatesReceived: 0,
+    updatesProcessed: 0,
+    updatesIgnored: 0,
+    updatesFailed: 0,
+    repliesSent: 0,
+    replyFailures: 0,
+    pollingReconnects: 0,
   };
   private signalResultsByOutcome = new Map<string, number>();
   private resultR: number[] = [];

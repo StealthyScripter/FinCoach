@@ -6,9 +6,20 @@ import { TelegramReportingService } from "./telegram/reportingService";
 import { TelegramCommandRouter } from "./telegram/commandRouter";
 import { TelegramMarketSessionMonitor } from "./telegram/marketSessionMonitor";
 import { redactTelegramSecrets } from "./telegram/formatter";
+import { TelegramUpdateCursor } from "./telegram/updateCursor";
+import { TelegramTransport } from "./telegram/transport";
+import { TelegramUpdateReceiver } from "./telegram/updateReceiver";
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error("Timed out waiting for condition");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 const baseEnv = {
@@ -183,6 +194,89 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
   assert.match(live, /Blocked/);
   const help = await router.handle({ command: "/help", actorId: "123456", chatId: "123456" });
   assert.match(help, /FinCoach Telegram Commands/);
+}
+
+{
+  const replies: Array<{ chatId: string; text: string }> = [];
+  const transport = new TelegramTransport(
+    { handle: async (input) => `reply:${input.command}:${input.actorId}:${input.chatId}` },
+    { sendCommandReply: async (chatId, text) => {
+      replies.push({ chatId, text });
+      return { sent: true as const };
+    } },
+  );
+  const result = await transport.handle({
+    source: "telegram",
+    updateId: 99,
+    chatId: "123456",
+    actorId: "123456",
+    messageId: "10",
+    text: "/status@FinCoachBot now",
+    receivedAt: "2026-07-13T10:00:00.000Z",
+  });
+  assert.equal(result.processed, true);
+  assert.deepEqual(replies, [{ chatId: "123456", text: "reply:/status now:123456:123456" }]);
+
+  const ignored = await transport.handle({
+    source: "telegram",
+    updateId: 100,
+    chatId: "123456",
+    actorId: "123456",
+    messageId: "11",
+    text: "hello",
+    receivedAt: "2026-07-13T10:00:01.000Z",
+  });
+  assert.equal(ignored.processed, false);
+}
+
+{
+  const repo = new InMemoryTelegramRepository();
+  const cursor = new TelegramUpdateCursor(repo);
+  assert.equal(await cursor.loadOffset(), 0);
+  await cursor.saveProcessed(41);
+  await cursor.saveProcessed(40);
+  assert.equal(await cursor.loadOffset(), 42);
+}
+
+{
+  const repo = new InMemoryTelegramRepository();
+  const cursor = new TelegramUpdateCursor(repo);
+  const handled: string[] = [];
+  const transport = new TelegramTransport(
+    { handle: async (input) => {
+      handled.push(input.command);
+      return "ok";
+    } },
+    { sendCommandReply: async () => ({ sent: true as const }) },
+  );
+  let calls = 0;
+  const fetcher = async (_url: string | URL | Request, init?: RequestInit) => {
+    calls += 1;
+    if (calls === 1) {
+      return jsonResponse({
+        ok: true,
+        result: [{
+          update_id: 41,
+          message: {
+            message_id: 5,
+            date: 1783936800,
+            text: "/help",
+            chat: { id: "123456" },
+            from: { id: "123456" },
+          },
+        }],
+      });
+    }
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+  };
+  const receiver = new TelegramUpdateReceiver(loadTelegramConfig(baseEnv), cursor, transport, fetcher);
+  receiver.start();
+  await waitFor(() => handled.length === 1);
+  await receiver.stop();
+  assert.deepEqual(handled, ["/help"]);
+  assert.equal(await cursor.loadOffset(), 42);
 }
 
 {
