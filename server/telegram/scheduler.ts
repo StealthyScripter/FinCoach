@@ -4,6 +4,7 @@ import { telegramReportingService } from "./reportingService";
 import { telegramSignalPublisher } from "./signalPublisher";
 import { loadTelegramConfig } from "./telegramClient";
 import { createSchedulerRun, telegramRepository, type TelegramRepository } from "./repository";
+import { telegramMetrics } from "./metrics";
 
 const runningJobs = new Set<string>();
 
@@ -64,16 +65,33 @@ export class TelegramScheduler {
         const skipped = createSchedulerRun(name, { reason: "job already running" });
         skipped.status = "skipped";
         skipped.completedAt = new Date().toISOString();
-        await this.repository.saveSchedulerRun(skipped);
+        try {
+          await this.repository.saveSchedulerRun(skipped);
+        } catch (error) {
+          telegramMetrics.recordSchedulerPersistenceFailure(error);
+          console.error("Telegram scheduler failed to persist skipped job", error);
+        }
+        telegramMetrics.recordSchedulerJob("skipped");
         return { ok: true, status: "skipped", reason: "job already running" };
       }
       runningJobs.add(name);
       acquired = true;
       const run = createSchedulerRun(name);
       runId = run.id;
-      await this.repository.saveSchedulerRun(run);
+      try {
+        await this.repository.saveSchedulerRun(run);
+      } catch (error) {
+        telegramMetrics.recordSchedulerPersistenceFailure(error);
+        throw error;
+      }
       const result = await fn();
-      await this.repository.completeSchedulerRun(run.id, "completed", { result });
+      try {
+        await this.repository.completeSchedulerRun(run.id, "completed", { result });
+      } catch (error) {
+        telegramMetrics.recordSchedulerPersistenceFailure(error);
+        throw error;
+      }
+      telegramMetrics.recordSchedulerJob("completed");
       return { ok: true, status: "completed", result };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -81,10 +99,12 @@ export class TelegramScheduler {
         try {
           await this.repository.completeSchedulerRun(runId, "failed", { error: message });
         } catch (persistenceError) {
+          telegramMetrics.recordSchedulerPersistenceFailure(persistenceError);
           console.error("Telegram scheduler failed to persist job failure", persistenceError);
         }
       }
       console.error(`Telegram scheduler job ${name} failed`, error);
+      telegramMetrics.recordSchedulerJob("failed", error);
       return { ok: false, status: "failed", error: message };
     } finally {
       if (acquired) runningJobs.delete(name);
@@ -97,9 +117,13 @@ export class TelegramScheduler {
     const reporting = this.dependencies.reporting ?? telegramReportingService;
     const notifications = this.dependencies.notifications ?? telegramNotificationService;
     const result = await reporting.dailySummaryResult(now);
-    if (result.status === "existing" && result.summary.deliveryId) return { sent: false, reason: "daily summary already sent", summaryId: result.summary.id, status: "already_sent" };
+    if (result.status === "existing" && result.summary.deliveryId) {
+      telegramMetrics.recordSummarySend("daily", "automatic", false);
+      return { sent: false, reason: "daily summary already sent", summaryId: result.summary.id, status: "already_sent" };
+    }
     const delivery = await notifications.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "daily", automatic: true });
     if (delivery.sent && "result" in delivery) await reporting.markDelivered(result.summary.id, delivery.result.delivery.id);
+    telegramMetrics.recordSummarySend("daily", "automatic", delivery.sent);
     return { ...delivery, summaryId: result.summary.id, status: result.status };
   }
 
@@ -109,9 +133,13 @@ export class TelegramScheduler {
     const reporting = this.dependencies.reporting ?? telegramReportingService;
     const notifications = this.dependencies.notifications ?? telegramNotificationService;
     const result = await reporting.weeklySummaryResult(now);
-    if (result.status === "existing" && result.summary.deliveryId) return { sent: false, reason: "weekly summary already sent", summaryId: result.summary.id, status: "already_sent" };
+    if (result.status === "existing" && result.summary.deliveryId) {
+      telegramMetrics.recordSummarySend("weekly", "automatic", false);
+      return { sent: false, reason: "weekly summary already sent", summaryId: result.summary.id, status: "already_sent" };
+    }
     const delivery = await notifications.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "weekly", automatic: true });
     if (delivery.sent && "result" in delivery) await reporting.markDelivered(result.summary.id, delivery.result.delivery.id);
+    telegramMetrics.recordSummarySend("weekly", "automatic", delivery.sent);
     return { ...delivery, summaryId: result.summary.id, status: result.status };
   }
 

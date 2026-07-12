@@ -171,7 +171,7 @@ try {
     thesis: "Paper hook thesis",
     entryReason: "Entry reason",
     expectedMove: "Upward move",
-  });
+  }, new Date("2026-07-13T12:00:00.000Z"));
   const closedTrade = localPaperRuntime.close(openTrade.id, 1.12, "manual");
   localPaperRuntime.stop("paper-hook-strategy");
   postTradeReviewService.reviewPaperTrade(closedTrade);

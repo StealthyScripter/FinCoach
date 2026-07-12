@@ -113,7 +113,10 @@ export class TelegramReportingService {
   async dailySummaryResult(now = new Date()): Promise<TelegramSummaryResult> {
     const summaryDate = now.toISOString().slice(0, 10);
     const existing = await this.repository.findSummaryByPeriodAndDate("daily", summaryDate);
-    if (existing) return { summary: existing, status: "existing" };
+    if (existing) {
+      telegramMetrics.recordSummaryResult("daily", "existing");
+      return { summary: existing, status: "existing" };
+    }
     const createdAt = now.toISOString();
     const demo = await demoRunService.status().catch(() => null);
     const telemetry = await demoRunService.telemetry().catch(() => null);
@@ -152,8 +155,9 @@ export class TelegramReportingService {
       deliveryId: null,
       createdAt,
     });
-    telegramMetrics.increment("summariesGenerated");
-    return { summary: record, status: record.id === candidateId ? "created" : "existing" };
+    const status = record.id === candidateId ? "created" : "existing";
+    telegramMetrics.recordSummaryResult("daily", status);
+    return { summary: record, status };
   }
 
   async weeklySummary(now = new Date()) {
@@ -163,7 +167,10 @@ export class TelegramReportingService {
   async weeklySummaryResult(now = new Date()): Promise<TelegramSummaryResult> {
     const summaryDate = weekKey(now);
     const existing = await this.repository.findSummaryByPeriodAndDate("weekly", summaryDate);
-    if (existing) return { summary: existing, status: "existing" };
+    if (existing) {
+      telegramMetrics.recordSummaryResult("weekly", "existing");
+      return { summary: existing, status: "existing" };
+    }
     const createdAt = now.toISOString();
     const pipeline = strategyResearchSchedulerService.snapshot();
     const metrics = telegramMetrics.snapshot();
@@ -197,8 +204,9 @@ export class TelegramReportingService {
       deliveryId: null,
       createdAt,
     });
-    telegramMetrics.increment("summariesGenerated");
-    return { summary: record, status: record.id === candidateId ? "created" : "existing" };
+    const status = record.id === candidateId ? "created" : "existing";
+    telegramMetrics.recordSummaryResult("weekly", status);
+    return { summary: record, status };
   }
 
   strategyPerformance(input?: StrategyPerformanceInput[]) {

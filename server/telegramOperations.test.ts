@@ -11,6 +11,7 @@ import { TelegramTransport } from "./telegram/transport";
 import { TelegramUpdateReceiver } from "./telegram/updateReceiver";
 import { TelegramScheduler } from "./telegram/scheduler";
 import { TelegramLifecycleMonitor, normalizeProcessFailure } from "./telegram/lifecycleMonitor";
+import { telegramMetrics } from "./telegram/metrics";
 import type { TelegramSchedulerRunRecord, TelegramSummaryRecord } from "./telegram/contracts";
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -453,6 +454,24 @@ await withTelegramScheduleEnv({
   assert.equal((await repo.listSummaries("weekly", 10)).length, 2);
   assert.equal((await repo.listSummaries("daily", 10)).length, 1);
 });
+
+{
+  const snapshot = telegramMetrics.snapshot();
+  assert.ok(snapshot.summaryGenerationAttempts >= 1);
+  assert.ok(snapshot.summariesCreated >= 1);
+  assert.ok(snapshot.existingSummariesReused >= 1);
+  assert.ok(snapshot.automaticSummarySends >= 1);
+  assert.ok(snapshot.duplicateSummarySendsSuppressed >= 1);
+  assert.ok(snapshot.schedulerJobsCompleted >= 1);
+  assert.ok(snapshot.schedulerJobsFailed >= 1);
+  assert.ok(snapshot.schedulerJobsSkipped >= 1);
+  assert.ok(snapshot.schedulerPersistenceFailures >= 1);
+  assert.ok(snapshot.lastDailySummaryStatus);
+  assert.ok(snapshot.lastWeeklySummaryStatus);
+  assert.ok(snapshot.lastSchedulerError);
+  assert.ok(snapshot.lastSuccessfulAutomaticDailySend);
+  assert.ok(snapshot.lastSuccessfulAutomaticWeeklySend);
+}
 
 {
   const router = new TelegramCommandRouter(baseEnv, new TelegramReportingService(new InMemoryTelegramRepository()), new InMemoryTelegramRepository());

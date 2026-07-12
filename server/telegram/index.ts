@@ -69,6 +69,7 @@ export function registerTelegramOperationsRoutes(app: Express) {
     const delivery = parsed.data.forceSend
       ? await telegramNotificationService.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "daily", manual: true, forceSend: true })
       : { sent: false as const, reason: result.status === "existing" ? "existing summary reused; forceSend required for manual resend" : "manual summary generated without automatic send" };
+    if (delivery.sent || result.status === "existing") telegramMetrics.recordSummarySend("daily", "manual", delivery.sent);
     res.status(result.status === "created" ? 201 : 200).json({ summary: result.summary, status: result.status, delivery, liveExecutionBlocked: true });
   });
 
@@ -82,6 +83,7 @@ export function registerTelegramOperationsRoutes(app: Express) {
     const delivery = parsed.data.forceSend
       ? await telegramNotificationService.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "weekly", manual: true, forceSend: true })
       : { sent: false as const, reason: result.status === "existing" ? "existing summary reused; forceSend required for manual resend" : "manual summary generated without automatic send" };
+    if (delivery.sent || result.status === "existing") telegramMetrics.recordSummarySend("weekly", "manual", delivery.sent);
     res.status(result.status === "created" ? 201 : 200).json({ summary: result.summary, status: result.status, delivery, liveExecutionBlocked: true });
   });
 
