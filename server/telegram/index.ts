@@ -16,6 +16,10 @@ const signalPreviewSchema = z.object({
   signal: z.record(z.unknown()).optional(),
 });
 
+const manualSummarySchema = z.object({
+  forceSend: z.boolean().optional().default(false),
+});
+
 export async function startTelegramOperations() {
   const config = loadTelegramConfig();
   const validation = validateTelegramConfig(config);
@@ -56,15 +60,29 @@ export function registerTelegramOperationsRoutes(app: Express) {
   });
 
   app.post("/api/marketpilot/telegram/daily-summary", async (_req, res) => {
-    const summary = await telegramReportingService.dailySummary();
-    const delivery = await telegramNotificationService.sendOperations("report", summary.conciseMessage, { summaryId: summary.id, period: "daily", manual: true });
-    res.status(201).json({ summary, delivery, liveExecutionBlocked: true });
+    const parsed = manualSummarySchema.safeParse(_req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid manual summary payload", issues: parsed.error.flatten() });
+      return;
+    }
+    const result = await telegramReportingService.dailySummaryResult();
+    const delivery = parsed.data.forceSend
+      ? await telegramNotificationService.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "daily", manual: true, forceSend: true })
+      : { sent: false as const, reason: result.status === "existing" ? "existing summary reused; forceSend required for manual resend" : "manual summary generated without automatic send" };
+    res.status(result.status === "created" ? 201 : 200).json({ summary: result.summary, status: result.status, delivery, liveExecutionBlocked: true });
   });
 
   app.post("/api/marketpilot/telegram/weekly-summary", async (_req, res) => {
-    const summary = await telegramReportingService.weeklySummary();
-    const delivery = await telegramNotificationService.sendOperations("report", summary.conciseMessage, { summaryId: summary.id, period: "weekly", manual: true });
-    res.status(201).json({ summary, delivery, liveExecutionBlocked: true });
+    const parsed = manualSummarySchema.safeParse(_req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ message: "Invalid manual summary payload", issues: parsed.error.flatten() });
+      return;
+    }
+    const result = await telegramReportingService.weeklySummaryResult();
+    const delivery = parsed.data.forceSend
+      ? await telegramNotificationService.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "weekly", manual: true, forceSend: true })
+      : { sent: false as const, reason: result.status === "existing" ? "existing summary reused; forceSend required for manual resend" : "manual summary generated without automatic send" };
+    res.status(result.status === "created" ? 201 : 200).json({ summary: result.summary, status: result.status, delivery, liveExecutionBlocked: true });
   });
 
   app.post("/api/marketpilot/telegram/signal-preview", async (req, res) => {

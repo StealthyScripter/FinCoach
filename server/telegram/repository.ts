@@ -21,6 +21,7 @@ export interface TelegramRepository {
   saveSignalUpdate(record: TelegramSignalLifecycleUpdate): Promise<TelegramSignalLifecycleUpdate>;
   listSignalUpdates(signalId: string): Promise<TelegramSignalLifecycleUpdate[]>;
   saveSummary(record: TelegramSummaryRecord): Promise<TelegramSummaryRecord>;
+  findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string): Promise<TelegramSummaryRecord | null>;
   listSummaries(period?: "daily" | "weekly", limit?: number): Promise<TelegramSummaryRecord[]>;
   saveSchedulerRun(record: TelegramSchedulerRunRecord): Promise<TelegramSchedulerRunRecord>;
   completeSchedulerRun(id: string, status: TelegramSchedulerRunRecord["status"], details?: Record<string, unknown>): Promise<void>;
@@ -90,8 +91,14 @@ export class InMemoryTelegramRepository implements TelegramRepository {
   }
 
   async saveSummary(record: TelegramSummaryRecord) {
+    const existing = await this.findSummaryByPeriodAndDate(record.period, record.summaryDate);
+    if (existing) return existing;
     this.summaries.push(record);
     return record;
+  }
+
+  async findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string) {
+    return this.summaries.find((item) => item.period === period && item.summaryDate === summaryDate) ?? null;
   }
 
   async listSummaries(period?: "daily" | "weekly", limit = 30) {
@@ -243,13 +250,24 @@ export class PgTelegramRepository implements TelegramRepository {
 
   async saveSummary(record: TelegramSummaryRecord) {
     if (!this.pool) throw new Error("DATABASE_URL is not configured");
-    await this.pool.query(
+    const rows = await this.pool.query(
       `INSERT INTO telegram_summaries (id, period, summary_date, concise_message, report, delivery_id, created_at)
        VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (period, summary_date) DO UPDATE SET
+         concise_message = telegram_summaries.concise_message,
+         report = telegram_summaries.report,
+         delivery_id = telegram_summaries.delivery_id,
+         created_at = telegram_summaries.created_at
+       RETURNING *`,
       [record.id, record.period, record.summaryDate, record.conciseMessage, JSON.stringify(record.report), record.deliveryId, record.createdAt],
     );
-    return record;
+    return rowToSummary(rows.rows[0]);
+  }
+
+  async findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string) {
+    if (!this.pool) return null;
+    const rows = await this.pool.query(`SELECT * FROM telegram_summaries WHERE period = $1 AND summary_date = $2 LIMIT 1`, [period, summaryDate]);
+    return rows.rows[0] ? rowToSummary(rows.rows[0]) : null;
   }
 
   async listSummaries(period?: "daily" | "weekly", limit = 30) {
@@ -258,15 +276,7 @@ export class PgTelegramRepository implements TelegramRepository {
       `SELECT * FROM telegram_summaries WHERE ($1::text IS NULL OR period = $1) ORDER BY created_at DESC LIMIT $2`,
       [period ?? null, limit],
     );
-    return rows.rows.map((row) => ({
-      id: String(row.id),
-      period: row.period,
-      summaryDate: String(row.summary_date),
-      conciseMessage: String(row.concise_message),
-      report: row.report ?? {},
-      deliveryId: row.delivery_id ? String(row.delivery_id) : null,
-      createdAt: new Date(row.created_at).toISOString(),
-    }));
+    return rows.rows.map(rowToSummary);
   }
 
   async saveSchedulerRun(record: TelegramSchedulerRunRecord) {
@@ -404,6 +414,18 @@ function rowToSignal(row: Record<string, unknown>): TelegramSignalRecord {
     expiresAt: new Date(row.expires_at as string).toISOString(),
     lastUpdateAt: new Date(row.last_update_at as string).toISOString(),
     metadata: (row.metadata ?? {}) as Record<string, unknown>,
+  };
+}
+
+function rowToSummary(row: Record<string, unknown>): TelegramSummaryRecord {
+  return {
+    id: String(row.id),
+    period: row.period as TelegramSummaryRecord["period"],
+    summaryDate: String(row.summary_date),
+    conciseMessage: String(row.concise_message),
+    report: (row.report ?? {}) as Record<string, unknown>,
+    deliveryId: row.delivery_id ? String(row.delivery_id) : null,
+    createdAt: new Date(row.created_at as string).toISOString(),
   };
 }
 

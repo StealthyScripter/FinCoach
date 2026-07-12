@@ -40,7 +40,7 @@ const baseEnv = {
 class UniqueSummaryRepository extends InMemoryTelegramRepository {
   async saveSummary(record: TelegramSummaryRecord) {
     const existing = (await this.listSummaries(record.period, 100)).find((summary) => summary.summaryDate === record.summaryDate);
-    if (existing) throw new Error('duplicate key value violates unique constraint "idx_telegram_summaries_once"');
+    if (existing) return existing;
     return super.saveSummary(record);
   }
 }
