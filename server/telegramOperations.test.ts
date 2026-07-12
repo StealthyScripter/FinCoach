@@ -77,6 +77,32 @@ async function captureUnhandledRejections(action: () => void | Promise<void>) {
   }
 }
 
+async function withTelegramScheduleEnv<T>(env: Record<string, string>, action: () => Promise<T>) {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    return await action();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+function fakeSummaryNotifications(deliveryIds: string[]) {
+  return {
+    sendOperations: async () => {
+      const id = `delivery-${deliveryIds.length + 1}`;
+      deliveryIds.push(id);
+      return { sent: true as const, result: { delivery: { id } } };
+    },
+  };
+}
+
 {
   const repo = new InMemoryTelegramRepository();
   const client = new TelegramClient(loadTelegramConfig(baseEnv), repo, async () => jsonResponse({ ok: true, result: { message_id: 42 } }));
@@ -332,6 +358,57 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
   assert.equal((await repo.listSummaries("daily", 10)).length, 1);
   assert.equal((await repo.listSummaries("weekly", 10)).length, 1);
 }
+
+await withTelegramScheduleEnv({
+  TELEGRAM_DAILY_SUMMARY_HOUR_UTC: "22",
+  TELEGRAM_WEEKLY_SUMMARY_DAY: "0",
+  TELEGRAM_WEEKLY_SUMMARY_HOUR_UTC: "22",
+}, async () => {
+  const repo = new UniqueSummaryRepository();
+  const reporting = new TelegramReportingService(repo);
+  const deliveryIds: string[] = [];
+  const scheduler = new TelegramScheduler(repo, { reporting, notifications: fakeSummaryNotifications(deliveryIds) } as never);
+  const first = await (scheduler as any).maybeDailySummary(new Date("2026-07-13T22:05:00.000Z"));
+  const laterSameHour = await (scheduler as any).maybeDailySummary(new Date("2026-07-13T22:50:00.000Z"));
+  const restarted = await (new TelegramScheduler(repo, { reporting, notifications: fakeSummaryNotifications(deliveryIds) } as never) as any).maybeDailySummary(new Date("2026-07-13T22:55:00.000Z"));
+  const nextDay = await (scheduler as any).maybeDailySummary(new Date("2026-07-14T22:05:00.000Z"));
+  const outsideHour = await (scheduler as any).maybeDailySummary(new Date("2026-07-14T23:05:00.000Z"));
+  assert.equal(first.sent, true);
+  assert.equal(laterSameHour.sent, false);
+  assert.equal(laterSameHour.status, "already_sent");
+  assert.equal(restarted.sent, false);
+  assert.equal(nextDay.sent, true);
+  assert.equal(outsideHour.reason, "outside configured hour");
+  assert.equal(deliveryIds.length, 2);
+  assert.equal((await repo.listSummaries("daily", 10)).length, 2);
+});
+
+await withTelegramScheduleEnv({
+  TELEGRAM_DAILY_SUMMARY_HOUR_UTC: "22",
+  TELEGRAM_WEEKLY_SUMMARY_DAY: "0",
+  TELEGRAM_WEEKLY_SUMMARY_HOUR_UTC: "22",
+}, async () => {
+  const repo = new UniqueSummaryRepository();
+  const reporting = new TelegramReportingService(repo);
+  const deliveryIds: string[] = [];
+  const scheduler = new TelegramScheduler(repo, { reporting, notifications: fakeSummaryNotifications(deliveryIds) } as never);
+  const first = await (scheduler as any).maybeWeeklySummary(new Date("2026-07-12T22:05:00.000Z"));
+  const laterSameHour = await (scheduler as any).maybeWeeklySummary(new Date("2026-07-12T22:35:00.000Z"));
+  const nextWeek = await (scheduler as any).maybeWeeklySummary(new Date("2026-07-19T22:05:00.000Z"));
+  const wrongDay = await (scheduler as any).maybeWeeklySummary(new Date("2026-07-13T22:05:00.000Z"));
+  const wrongHour = await (scheduler as any).maybeWeeklySummary(new Date("2026-07-19T21:05:00.000Z"));
+  const daily = await (scheduler as any).maybeDailySummary(new Date("2026-07-19T22:05:00.000Z"));
+  assert.equal(first.sent, true);
+  assert.equal(laterSameHour.sent, false);
+  assert.equal(laterSameHour.status, "already_sent");
+  assert.equal(nextWeek.sent, true);
+  assert.equal(wrongDay.reason, "outside configured weekly window");
+  assert.equal(wrongHour.reason, "outside configured weekly window");
+  assert.equal(daily.sent, true);
+  assert.equal(deliveryIds.length, 3);
+  assert.equal((await repo.listSummaries("weekly", 10)).length, 2);
+  assert.equal((await repo.listSummaries("daily", 10)).length, 1);
+});
 
 {
   const router = new TelegramCommandRouter(baseEnv, new TelegramReportingService(new InMemoryTelegramRepository()), new InMemoryTelegramRepository());

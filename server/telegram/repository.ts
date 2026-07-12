@@ -22,6 +22,7 @@ export interface TelegramRepository {
   listSignalUpdates(signalId: string): Promise<TelegramSignalLifecycleUpdate[]>;
   saveSummary(record: TelegramSummaryRecord): Promise<TelegramSummaryRecord>;
   findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string): Promise<TelegramSummaryRecord | null>;
+  markSummaryDelivered(id: string, deliveryId: string): Promise<TelegramSummaryRecord | null>;
   listSummaries(period?: "daily" | "weekly", limit?: number): Promise<TelegramSummaryRecord[]>;
   saveSchedulerRun(record: TelegramSchedulerRunRecord): Promise<TelegramSchedulerRunRecord>;
   completeSchedulerRun(id: string, status: TelegramSchedulerRunRecord["status"], details?: Record<string, unknown>): Promise<void>;
@@ -99,6 +100,13 @@ export class InMemoryTelegramRepository implements TelegramRepository {
 
   async findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string) {
     return this.summaries.find((item) => item.period === period && item.summaryDate === summaryDate) ?? null;
+  }
+
+  async markSummaryDelivered(id: string, deliveryId: string) {
+    const index = this.summaries.findIndex((item) => item.id === id);
+    if (index < 0) return null;
+    this.summaries[index] = { ...this.summaries[index], deliveryId };
+    return this.summaries[index];
   }
 
   async listSummaries(period?: "daily" | "weekly", limit = 30) {
@@ -267,6 +275,12 @@ export class PgTelegramRepository implements TelegramRepository {
   async findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string) {
     if (!this.pool) return null;
     const rows = await this.pool.query(`SELECT * FROM telegram_summaries WHERE period = $1 AND summary_date = $2 LIMIT 1`, [period, summaryDate]);
+    return rows.rows[0] ? rowToSummary(rows.rows[0]) : null;
+  }
+
+  async markSummaryDelivered(id: string, deliveryId: string) {
+    if (!this.pool) return null;
+    const rows = await this.pool.query(`UPDATE telegram_summaries SET delivery_id = $2 WHERE id = $1 RETURNING *`, [id, deliveryId]);
     return rows.rows[0] ? rowToSummary(rows.rows[0]) : null;
   }
 

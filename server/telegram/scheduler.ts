@@ -96,8 +96,11 @@ export class TelegramScheduler {
     if (now.getUTCHours() !== config.dailySummaryHourUtc) return { sent: false, reason: "outside configured hour" };
     const reporting = this.dependencies.reporting ?? telegramReportingService;
     const notifications = this.dependencies.notifications ?? telegramNotificationService;
-    const summary = await reporting.dailySummary(now);
-    return notifications.sendOperations("report", summary.conciseMessage, { summaryId: summary.id, period: "daily" });
+    const result = await reporting.dailySummaryResult(now);
+    if (result.status === "existing" && result.summary.deliveryId) return { sent: false, reason: "daily summary already sent", summaryId: result.summary.id, status: "already_sent" };
+    const delivery = await notifications.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "daily", automatic: true });
+    if (delivery.sent && "result" in delivery) await reporting.markDelivered(result.summary.id, delivery.result.delivery.id);
+    return { ...delivery, summaryId: result.summary.id, status: result.status };
   }
 
   private async maybeWeeklySummary(now = new Date()) {
@@ -105,8 +108,11 @@ export class TelegramScheduler {
     if (now.getUTCDay() !== config.weeklySummaryDay || now.getUTCHours() !== config.weeklySummaryHourUtc) return { sent: false, reason: "outside configured weekly window" };
     const reporting = this.dependencies.reporting ?? telegramReportingService;
     const notifications = this.dependencies.notifications ?? telegramNotificationService;
-    const summary = await reporting.weeklySummary(now);
-    return notifications.sendOperations("report", summary.conciseMessage, { summaryId: summary.id, period: "weekly" });
+    const result = await reporting.weeklySummaryResult(now);
+    if (result.status === "existing" && result.summary.deliveryId) return { sent: false, reason: "weekly summary already sent", summaryId: result.summary.id, status: "already_sent" };
+    const delivery = await notifications.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "weekly", automatic: true });
+    if (delivery.sent && "result" in delivery) await reporting.markDelivered(result.summary.id, delivery.result.delivery.id);
+    return { ...delivery, summaryId: result.summary.id, status: result.status };
   }
 
   private async expireSignals(now = new Date()) {

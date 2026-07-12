@@ -225,6 +225,10 @@ export class TelegramReportingService {
     const summaries = await this.repository.listSummaries("weekly", 1);
     return summaries[0]?.conciseMessage ?? (await this.weeklySummary()).conciseMessage;
   }
+
+  async markDelivered(summaryId: string, deliveryId: string) {
+    return this.repository.markSummaryDelivered(summaryId, deliveryId);
+  }
 }
 
 function weekKey(date: Date) {
