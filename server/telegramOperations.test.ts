@@ -9,6 +9,8 @@ import { redactTelegramSecrets } from "./telegram/formatter";
 import { TelegramUpdateCursor } from "./telegram/updateCursor";
 import { TelegramTransport } from "./telegram/transport";
 import { TelegramUpdateReceiver } from "./telegram/updateReceiver";
+import { TelegramScheduler } from "./telegram/scheduler";
+import type { TelegramSchedulerRunRecord, TelegramSummaryRecord } from "./telegram/contracts";
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -34,6 +36,46 @@ const baseEnv = {
   TELEGRAM_SIGNAL_COOLDOWN_MINUTES: "60",
   TELEGRAM_SIGNAL_SIGNING_SECRET: "dedicated-signing-secret",
 };
+
+class UniqueSummaryRepository extends InMemoryTelegramRepository {
+  async saveSummary(record: TelegramSummaryRecord) {
+    const existing = (await this.listSummaries(record.period, 100)).find((summary) => summary.summaryDate === record.summaryDate);
+    if (existing) throw new Error('duplicate key value violates unique constraint "idx_telegram_summaries_once"');
+    return super.saveSummary(record);
+  }
+}
+
+class FailingSchedulerRepository extends InMemoryTelegramRepository {
+  saveSchedulerRunError: Error | null = null;
+  completeSchedulerRunError: Error | null = null;
+  completed: Array<{ id: string; status: TelegramSchedulerRunRecord["status"]; details: Record<string, unknown> }> = [];
+
+  async saveSchedulerRun(record: TelegramSchedulerRunRecord) {
+    if (this.saveSchedulerRunError) throw this.saveSchedulerRunError;
+    return super.saveSchedulerRun(record);
+  }
+
+  async completeSchedulerRun(id: string, status: TelegramSchedulerRunRecord["status"], details: Record<string, unknown> = {}) {
+    this.completed.push({ id, status, details });
+    if (this.completeSchedulerRunError) throw this.completeSchedulerRunError;
+    return super.completeSchedulerRun(id, status, details);
+  }
+}
+
+async function captureUnhandledRejections(action: () => void | Promise<void>) {
+  const rejections: unknown[] = [];
+  const handler = (reason: unknown) => {
+    rejections.push(reason);
+  };
+  process.on("unhandledRejection", handler);
+  try {
+    await action();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return rejections;
+  } finally {
+    process.off("unhandledRejection", handler);
+  }
+}
 
 {
   const repo = new InMemoryTelegramRepository();
@@ -184,6 +226,80 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
   assert.equal(zero.returnPercentage, null);
   assert.equal(zero.returnOnRiskPercentage, null);
   assert.equal(zero.profitFactor, null);
+}
+
+{
+  const repo = new UniqueSummaryRepository();
+  const reporting = new TelegramReportingService(repo);
+  const first = await reporting.dailySummary(new Date("2026-07-13T22:00:00.000Z"));
+  const second = await reporting.dailySummary(new Date("2026-07-13T22:15:00.000Z"));
+  assert.equal(second.id, first.id);
+  assert.equal((await repo.listSummaries("daily", 10)).length, 1);
+}
+
+{
+  const repo = new UniqueSummaryRepository();
+  const reporting = new TelegramReportingService(repo);
+  const first = await reporting.weeklySummary(new Date("2026-07-12T22:00:00.000Z"));
+  const second = await reporting.weeklySummary(new Date("2026-07-12T22:30:00.000Z"));
+  assert.equal(second.id, first.id);
+  assert.equal((await repo.listSummaries("weekly", 10)).length, 1);
+}
+
+{
+  const repo = new UniqueSummaryRepository();
+  const reporting = new TelegramReportingService(repo);
+  const scheduler = new TelegramScheduler(repo, { reporting } as never);
+  const first = await scheduler.runJob("daily-summary", () => reporting.dailySummary(new Date("2026-07-13T22:00:00.000Z")));
+  const second = await scheduler.runJob("daily-summary", () => reporting.dailySummary(new Date("2026-07-13T22:15:00.000Z")));
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+}
+
+{
+  const repo = new FailingSchedulerRepository();
+  repo.saveSchedulerRunError = new Error("scheduler start persistence unavailable");
+  const scheduler = new TelegramScheduler(repo);
+  const result = await scheduler.runJob("daily-summary", async () => "not reached");
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /scheduler start persistence unavailable/);
+}
+
+{
+  const repo = new FailingSchedulerRepository();
+  repo.completeSchedulerRunError = new Error("scheduler failure persistence unavailable");
+  const scheduler = new TelegramScheduler(repo);
+  const result = await scheduler.runJob("daily-summary", async () => {
+    throw new Error("summary generation failed");
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /summary generation failed/);
+}
+
+{
+  const scheduler = new TelegramScheduler();
+  const rejections = await captureUnhandledRejections(() => {
+    void scheduler.runJob("daily-summary", async () => {
+      throw new Error("timer duplicate summary rejection");
+    });
+  });
+  assert.equal(rejections.length, 0);
+}
+
+{
+  const repo = new UniqueSummaryRepository();
+  const reporting = new TelegramReportingService(repo);
+  const dailyOne = reporting.dailySummary(new Date("2026-07-12T22:00:00.000Z"));
+  const weeklyOne = reporting.weeklySummary(new Date("2026-07-12T22:00:00.000Z"));
+  await Promise.all([dailyOne, weeklyOne]);
+  const dailyTwo = await reporting.dailySummary(new Date("2026-07-12T22:30:00.000Z"));
+  const weeklyTwo = await reporting.weeklySummary(new Date("2026-07-12T22:30:00.000Z"));
+  assert.equal(dailyTwo.summaryDate, "2026-07-12");
+  assert.equal(weeklyTwo.summaryDate, "2026-W29");
+  assert.equal((await repo.listSummaries("daily", 10)).length, 1);
+  assert.equal((await repo.listSummaries("weekly", 10)).length, 1);
 }
 
 {
