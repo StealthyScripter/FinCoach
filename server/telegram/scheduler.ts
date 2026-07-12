@@ -15,6 +15,11 @@ type SchedulerDependencies = {
   signalPublisher?: typeof telegramSignalPublisher;
 };
 
+export type SchedulerJobResult<T> =
+  | { ok: true; status: "completed"; result: T }
+  | { ok: true; status: "skipped"; reason: string }
+  | { ok: false; status: "failed"; error: string };
+
 export class TelegramScheduler {
   private timers: NodeJS.Timeout[] = [];
   private started = false;
@@ -28,10 +33,10 @@ export class TelegramScheduler {
     if (this.started) return { started: false, reason: "already started" };
     this.started = true;
     const marketSessionMonitor = this.dependencies.marketSessionMonitor ?? telegramMarketSessionMonitor;
-    this.timers.push(setInterval(() => void this.runJob("market-session-alerts", () => marketSessionMonitor.check()), 60_000));
-    this.timers.push(setInterval(() => void this.runJob("daily-summary", () => this.maybeDailySummary()), 15 * 60_000));
-    this.timers.push(setInterval(() => void this.runJob("weekly-summary", () => this.maybeWeeklySummary()), 30 * 60_000));
-    this.timers.push(setInterval(() => void this.runJob("signal-expiry", () => this.expireSignals()), 60_000));
+    this.scheduleJob("market-session-alerts", 60_000, () => marketSessionMonitor.check());
+    this.scheduleJob("daily-summary", 15 * 60_000, () => this.maybeDailySummary());
+    this.scheduleJob("weekly-summary", 30 * 60_000, () => this.maybeWeeklySummary());
+    this.scheduleJob("signal-expiry", 60_000, () => this.expireSignals());
     for (const timer of this.timers) timer.unref?.();
     return { started: true, warning: "Process-local scheduling is used. Multi-instance deployments require PostgreSQL advisory locks or leases." };
   }
@@ -42,20 +47,47 @@ export class TelegramScheduler {
     this.started = false;
   }
 
-  async runJob<T>(name: string, fn: () => Promise<T> | T) {
-    if (runningJobs.has(name)) return { skipped: true, reason: "job already running" };
-    runningJobs.add(name);
-    const run = createSchedulerRun(name);
-    await this.repository.saveSchedulerRun(run);
+  private scheduleJob<T>(name: string, intervalMs: number, fn: () => Promise<T> | T) {
+    const timer = setInterval(() => {
+      this.runJob(name, fn).catch((error) => {
+        console.error(`Telegram scheduler job ${name} escaped containment`, error);
+      });
+    }, intervalMs);
+    this.timers.push(timer);
+  }
+
+  async runJob<T>(name: string, fn: () => Promise<T> | T): Promise<SchedulerJobResult<T>> {
+    let runId: string | null = null;
+    let acquired = false;
     try {
+      if (runningJobs.has(name)) {
+        const skipped = createSchedulerRun(name, { reason: "job already running" });
+        skipped.status = "skipped";
+        skipped.completedAt = new Date().toISOString();
+        await this.repository.saveSchedulerRun(skipped);
+        return { ok: true, status: "skipped", reason: "job already running" };
+      }
+      runningJobs.add(name);
+      acquired = true;
+      const run = createSchedulerRun(name);
+      runId = run.id;
+      await this.repository.saveSchedulerRun(run);
       const result = await fn();
       await this.repository.completeSchedulerRun(run.id, "completed", { result });
-      return result;
+      return { ok: true, status: "completed", result };
     } catch (error) {
-      await this.repository.completeSchedulerRun(run.id, "failed", { error: error instanceof Error ? error.message : String(error) });
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (runId) {
+        try {
+          await this.repository.completeSchedulerRun(runId, "failed", { error: message });
+        } catch (persistenceError) {
+          console.error("Telegram scheduler failed to persist job failure", persistenceError);
+        }
+      }
+      console.error(`Telegram scheduler job ${name} failed`, error);
+      return { ok: false, status: "failed", error: message };
     } finally {
-      runningJobs.delete(name);
+      if (acquired) runningJobs.delete(name);
     }
   }
 

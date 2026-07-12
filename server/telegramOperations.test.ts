@@ -289,6 +289,37 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
 }
 
 {
+  const repo = new FailingSchedulerRepository();
+  const scheduler = new TelegramScheduler(repo);
+  let release!: () => void;
+  const first = scheduler.runJob("daily-summary", () => new Promise<string>((resolve) => {
+    release = () => resolve("done");
+  }));
+  const skipped = await scheduler.runJob("daily-summary", async () => "overlap");
+  assert.equal(skipped.ok, true);
+  assert.equal(skipped.status, "skipped");
+  release();
+  const completed = await first;
+  assert.equal(completed.ok, true);
+  const next = await scheduler.runJob("daily-summary", async () => "next");
+  assert.equal(next.ok, true);
+  assert.equal(next.status, "completed");
+}
+
+{
+  const repo = new FailingSchedulerRepository();
+  const scheduler = new TelegramScheduler(repo);
+  const [daily, weekly] = await Promise.all([
+    scheduler.runJob("daily-summary", async () => "daily"),
+    scheduler.runJob("weekly-summary", async () => "weekly"),
+  ]);
+  assert.equal(daily.ok, true);
+  assert.equal(weekly.ok, true);
+  assert.equal(daily.status, "completed");
+  assert.equal(weekly.status, "completed");
+}
+
+{
   const repo = new UniqueSummaryRepository();
   const reporting = new TelegramReportingService(repo);
   const dailyOne = reporting.dailySummary(new Date("2026-07-12T22:00:00.000Z"));
