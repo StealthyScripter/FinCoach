@@ -65,6 +65,9 @@
     "test:assessment": "tsx server/proficiencyAssessmentService.test.ts",
     "test:journal-review": "tsx server/journalReviewService.test.ts",
     "test:focused-assistant": "tsx server/focusedAssistantServices.test.ts",
+    "db:up": "docker-compose up -d postgres",
+    "db:down": "docker-compose down",
+    "db:logs": "docker-compose logs -f postgres",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
