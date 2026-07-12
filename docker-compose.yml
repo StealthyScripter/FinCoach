@@ -3,12 +3,15 @@ services:
     image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE is required}
     container_name: ${POSTGRES_CONTAINER_NAME:?POSTGRES_CONTAINER_NAME is required}
     restart: ${POSTGRES_RESTART_POLICY:?POSTGRES_RESTART_POLICY is required}
+
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+
     ports:
-      - "${POSTGRES_HOST_PORT:?POSTGRES_HOST_PORT is required}:${POSTGRES_CONTAINER_PORT:?POSTGRES_CONTAINER_PORT is required}"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:?POSTGRES_HOST_PORT is required}:${POSTGRES_CONTAINER_PORT:?POSTGRES_CONTAINER_PORT is required}"
+
     command:
       - postgres
       - -c
@@ -29,10 +32,14 @@ services:
       - random_page_cost=${POSTGRES_RANDOM_PAGE_COST:?POSTGRES_RANDOM_PAGE_COST is required}
       - -c
       - work_mem=${POSTGRES_WORK_MEM:?POSTGRES_WORK_MEM is required}
+
     volumes:
       - fincoach-postgres-data:/var/lib/postgresql/data
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
       interval: ${POSTGRES_HEALTHCHECK_INTERVAL:?POSTGRES_HEALTHCHECK_INTERVAL is required}
       timeout: ${POSTGRES_HEALTHCHECK_TIMEOUT:?POSTGRES_HEALTHCHECK_TIMEOUT is required}
       retries: ${POSTGRES_HEALTHCHECK_RETRIES:?POSTGRES_HEALTHCHECK_RETRIES is required}

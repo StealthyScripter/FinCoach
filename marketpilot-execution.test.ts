@@ -5,13 +5,13 @@ import {
   OandaExecutionProvider,
   PaperExecutionProvider,
   RobinhoodCryptoExecutionProvider,
-} from "./FinCoach/server/execution/providers";
-import { INSTRUMENTS, normalizeSymbol, strategyDefinitionSchema } from "./FinCoach/server/execution/domain";
-import { marketBacktestingService } from "./FinCoach/server/execution/marketBacktesting";
-import { signTradingViewSignal, TradingViewWebhookSignalProvider } from "./FinCoach/server/execution/tradingViewWebhook";
-import { PaperAutomationService } from "./FinCoach/server/execution/paperAutomation";
-import { DEFAULT_AUTONOMY_POLICY, ExecutionRiskService, summarizePositions } from "./FinCoach/server/execution/riskControls";
-import { evaluateLiveReadiness } from "./FinCoach/server/execution/liveReadiness";
+} from "./server/execution/providers";
+import { INSTRUMENTS, normalizeSymbol, strategyDefinitionSchema } from "./server/execution/domain";
+import { marketBacktestingService } from "./server/execution/marketBacktesting";
+import { signTradingViewSignal, TradingViewWebhookSignalProvider } from "./server/execution/tradingViewWebhook";
+import { PaperAutomationService } from "./server/execution/paperAutomation";
+import { DEFAULT_AUTONOMY_POLICY, ExecutionRiskService, summarizePositions } from "./server/execution/riskControls";
+import { evaluateLiveReadiness } from "./server/execution/liveReadiness";
 
 async function main() {
 const now = Date.parse("2026-06-18T14:00:00.000Z");
