@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import { ForwardTestingV2EventTypes, ForwardTestingV2Service } from "./v2/forward-testing";
+const c = "00000000-0000-4000-8000-000000000015";
+const strategy = { strategyId: "s1", strategyVersion: 1, schemaVersion: "fincoach.v2.strategy.1" as const, hypothesisId: "h1", name: "research", assetClasses: ["forex"], symbols: ["EUR_USD"], timeframes: ["1h"], entryConditions: [], filters: [], sidePolicy: { candidateSide: "buy" as const }, stopLoss: { type: "atr_multiple" as const, value: 1 }, takeProfit: { type: "atr_multiple" as const, value: 1.5 }, timeExit: null, invalidationRules: [], positionSizing: { type: "fixed_fractional" as const, riskFraction: 0.01 }, costModel: { costModelId: "fx", version: "1" }, sessionRestrictions: [], eventRestrictions: [], supportedRegimes: ["trend"], requiredFeatureDefinitions: [], complexityScore: 1, fingerprint: "fp", createdAt: "2026-01-01T00:00:00.000Z", correlationId: c, causationId: null };
+const request = { strategy, courtCaseId: "court-1", courtVerdict: "approve_for_forward_test" as const, rankingId: "rank-1", snapshot: { snapshotId: "snap-1", symbol: "EUR_USD", timestamp: "2026-01-01T00:00:00.000Z", bid: 1, ask: 1.0002, spread: 0.0002, fresh: true, contextEventId: "ctx-1", lineageEventIds: ["md-1","ctx-1"] }, demoVerification: { demoOnly: true as const, environment: "practice" as const, accountMode: "practice" as const, verifiedAt: "2026-01-01T00:00:01.000Z" }, killSwitchActive: false, reason: "court approved research validation", counterargument: "cost sensitivity may degrade", expectedR: 1.5, risk: 0.01, lineageEventIds: ["rank-1","court-1"], correlationId: c, causationId: null };
+const svc = new ForwardTestingV2Service();
+assert.equal(svc.create(request).record?.status, "monitoring");
+assert.equal(svc.create({ ...request, killSwitchActive: true }).events[0].eventType, ForwardTestingV2EventTypes.ForwardTestBlocked);
+assert.equal(svc.create({ ...request, demoVerification: { ...request.demoVerification, accountMode: "paper" as const } }).events[0].eventType, ForwardTestingV2EventTypes.ForwardTestDemoVerificationFailed);
+assert.equal(svc.create({ ...request, snapshot: { ...request.snapshot, fresh: false } }).record, null);
+assert.equal(svc.create({ ...request, courtVerdict: "approve_for_replay" as const }).record, null);
+assert.equal(svc.create({ ...request, lineageEventIds: [] }).events[0].eventType, ForwardTestingV2EventTypes.ForwardTestLineageMissing);
+assert.equal("submitOrder" in svc || "placeOrder" in svc, false);
+console.log("v2 phase 15 forward-testing tests passed");
