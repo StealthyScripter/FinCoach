@@ -66,3 +66,9 @@ The initial Version 2 market-data module lives in `server/v2/market-data`. It ow
 Provider adapters return data only. They do not expose broker order methods, and the market-data service has no execution dependency. OANDA practice history and stock data are represented through adapter contracts so provider-specific implementations can be added without changing downstream module contracts.
 
 The Phase 1 repository is contract-driven and currently includes an in-memory implementation for deterministic tests. PostgreSQL-backed persistence will use the same `MarketDataRepositoryContract` when the database is available for migrations and integration verification.
+
+## Phase 2 Market Context
+
+The Version 2 market-context module lives in `server/v2/market-context`. It accepts public market-data contracts and event-calendar facts, then emits immutable context events. It classifies sessions, market-open state, overlaps, spread/liquidity state, volatility percentile, trend/range regime, event and earnings proximity, holiday/rollover state, and data-quality state.
+
+The module describes conditions only. It does not query market-data repositories, call broker adapters, publish signals, or make execution decisions.
