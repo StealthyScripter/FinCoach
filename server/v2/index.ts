@@ -22,3 +22,4 @@ export * from "./external-evaluation";
 export * from "./journal";
 export * from "./learning";
 export * from "./ml-support";
+export * from "./strategy-evolution";
