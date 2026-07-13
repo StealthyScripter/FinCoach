@@ -1,0 +1,32 @@
+export type MarketStateFeatureValue = number | string | boolean | null;
+export type MarketStateVector = {
+  stateId: string;
+  vectorVersion: "fincoach.v2.market-memory.vector.1";
+  symbol: string;
+  timeframe: string;
+  effectiveAt: string;
+  session?: string;
+  regime?: string;
+  features: Record<string, MarketStateFeatureValue>;
+  sourceEventIds: string[];
+  createdAt: string;
+  correlationId: string;
+  causationId: string | null;
+};
+export type HistoricalNeighbor = { stateId: string; distance: number; similarity: number; effectiveAt: string; outcome?: { returnR: number; adverseExcursion: number; favorableExcursion: number } };
+export type DistributionSummary = { min: number; max: number; mean: number };
+export type HistoricalSimilarityResult = {
+  queryStateId: string;
+  vectorVersion: string;
+  neighbors: HistoricalNeighbor[];
+  similarityScore: number;
+  confidence: number;
+  outcomeDistribution: { sampleSize: number; meanReturn: number; medianReturn: number; positiveRate: number; adverseExcursion: DistributionSummary; favorableExcursion: DistributionSummary };
+  warnings: string[];
+  filters: Record<string, unknown>;
+  createdAt: string;
+  correlationId: string;
+  causationId: string | null;
+};
+export type VectorInput = Omit<MarketStateVector, "stateId" | "vectorVersion" | "createdAt"> & { createdAt?: string };
+export type SearchInput = { queryStateId: string; candidates?: MarketStateVector[]; minNeighbors?: number; filters?: { symbol?: string; timeframe?: string; regime?: string }; correlationId: string; causationId: string | null };
