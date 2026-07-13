@@ -1,0 +1,3 @@
+export type SignalSide = "buy" | "sell";
+export type V2ResearchSignal = { schema: "fincoach.signal.v2"; signalId: string; symbol: string; side: SignalSide; entryPrice: number; stopLoss: number; takeProfit: number; timeframe: string; strategyId: string; strategyVersion: number; courtCaseId: string; forwardTestId: string; confidence: number; evidenceScore: number; validUntil: string; demoOnly: true; createdAt: string; lineageEventIds: string[]; correlationId: string; causationId: string | null };
+export type SignalRequest = Omit<V2ResearchSignal, "schema" | "signalId" | "createdAt"> & { createdAt?: string; killSwitchActive: boolean; marketSnapshotFresh: boolean; forwardTestStatus: "monitoring" | "completed" | "blocked" | "failed" | "cancelled" };

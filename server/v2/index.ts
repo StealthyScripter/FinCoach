@@ -17,3 +17,4 @@ export * from "./courtroom";
 export * from "./market-memory";
 export * from "./ranking";
 export * from "./forward-testing";
+export * from "./signals";

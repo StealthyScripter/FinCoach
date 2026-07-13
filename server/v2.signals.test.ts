@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import { SignalsV2EventTypes, SignalsV2Service } from "./v2/signals";
+const c = "00000000-0000-4000-8000-000000000016";
+const req = { symbol: "EUR_USD", side: "buy" as const, entryPrice: 1.1, stopLoss: 1.09, takeProfit: 1.12, timeframe: "1h", strategyId: "s1", strategyVersion: 1, courtCaseId: "court-1", forwardTestId: "ft-1", confidence: 0.7, evidenceScore: 0.8, validUntil: "2026-01-01T01:00:00.000Z", demoOnly: true as const, lineageEventIds: ["ft-1","court-1"], correlationId: c, causationId: null, killSwitchActive: false, marketSnapshotFresh: true, forwardTestStatus: "monitoring" as const, createdAt: "2026-01-01T00:00:00.000Z" };
+const svc = new SignalsV2Service();
+const one = svc.publish(req);
+assert.equal(one.signal?.schema, "fincoach.signal.v2");
+assert.equal(one.signal?.demoOnly, true);
+assert.equal(svc.publish(req).events[0].eventType, SignalsV2EventTypes.SignalDuplicateSuppressed);
+assert.equal(svc.publish({ ...req, stopLoss: 1.2 }).signal, null);
+assert.equal(svc.publish({ ...req, killSwitchActive: true }).signal, null);
+assert.equal(svc.publish({ ...req, marketSnapshotFresh: false }).signal, null);
+assert.equal(svc.publish({ ...req, lineageEventIds: [] }).signal, null);
+assert.equal("telegramClient" in svc || "submitOrder" in svc, false);
+console.log("v2 phase 16 signals tests passed");
