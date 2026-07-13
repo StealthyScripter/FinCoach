@@ -58,3 +58,11 @@ Live execution remains blocked. Version 2 does not change existing OANDA, Telegr
 ## Phase 0 Limitations
 
 This phase establishes architecture and contracts only. Business modules, persistence migrations, APIs, Telegram operations, and autonomous orchestration are intentionally deferred to later phases.
+
+## Phase 1 Market Data Foundation
+
+The initial Version 2 market-data module lives in `server/v2/market-data`. It owns symbol normalization, quote and candle normalization, provider adapter contracts, quality scoring, duplicate detection, gap detection, freshness checks, import idempotency, and checkpoint cursors.
+
+Provider adapters return data only. They do not expose broker order methods, and the market-data service has no execution dependency. OANDA practice history and stock data are represented through adapter contracts so provider-specific implementations can be added without changing downstream module contracts.
+
+The Phase 1 repository is contract-driven and currently includes an in-memory implementation for deterministic tests. PostgreSQL-backed persistence will use the same `MarketDataRepositoryContract` when the database is available for migrations and integration verification.
