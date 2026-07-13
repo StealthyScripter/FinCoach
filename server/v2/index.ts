@@ -19,3 +19,4 @@ export * from "./ranking";
 export * from "./forward-testing";
 export * from "./signals";
 export * from "./external-evaluation";
+export * from "./journal";
