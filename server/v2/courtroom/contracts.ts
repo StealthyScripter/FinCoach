@@ -1,0 +1,5 @@
+import type { BacktestResult } from "../backtesting";
+export type CourtVerdict = "reject" | "revise" | "watch" | "approve_for_replay" | "approve_for_forward_test";
+export type CourtExhibit = { exhibitId: string; sourceEventId: string; kind: "defense" | "prosecution" | "risk"; summary: string };
+export type StrategyCourtCase = { caseId: string; schemaVersion: "fincoach.v2.court.1"; strategyId: string; strategyVersion: number; hypothesisId: string; experimentIds: string[]; backtestIds: string[]; defenseExhibits: CourtExhibit[]; prosecutionExhibits: CourtExhibit[]; riskExhibits: CourtExhibit[]; policyVersion: string; verdict: CourtVerdict; verdictReasons: string[]; remediation: string[]; evidenceScore: number; createdAt: string; correlationId: string; causationId: string | null };
+export type CourtInput = { strategyId: string; strategyVersion: number; hypothesisId: string; experimentIds: string[]; backtests: BacktestResult[]; defenseExhibits: CourtExhibit[]; prosecutionExhibits: CourtExhibit[]; riskExhibits: CourtExhibit[]; correlationId: string; causationId: string | null };
