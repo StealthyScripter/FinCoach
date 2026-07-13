@@ -72,3 +72,9 @@ The Phase 1 repository is contract-driven and currently includes an in-memory im
 The Version 2 market-context module lives in `server/v2/market-context`. It accepts public market-data contracts and event-calendar facts, then emits immutable context events. It classifies sessions, market-open state, overlaps, spread/liquidity state, volatility percentile, trend/range regime, event and earnings proximity, holiday/rollover state, and data-quality state.
 
 The module describes conditions only. It does not query market-data repositories, call broker adapters, publish signals, or make execution decisions.
+
+## Phase 3 Chart Analysis
+
+The Version 2 chart-analysis module lives in `server/v2/chart-analysis`. It converts complete normalized candles into objective feature sets covering structure, volatility, momentum, participation, and liquidity concepts. The implementation rejects unsorted candles instead of reordering them, which preserves no-look-ahead behavior for replay and backtesting.
+
+Feature definitions are versioned by `featureDefinitionVersion`, and the module emits immutable technical feature and derived condition events. It consumes candle contracts only and does not call market-data repositories, broker adapters, Telegram, or signal publishing code.
