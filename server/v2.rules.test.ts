@@ -1,0 +1,16 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "crypto";
+import { evaluateRule, RulesV2Compiler, RulesV2EventTypes } from "./v2/rules";
+const compiler = new RulesV2Compiler();
+const base = { hypothesisId: "hyp-1", name: "London breakout", assetClasses: ["forex"], symbols: ["EUR_USD"], timeframes: ["1h"], entryConditions: [{ field: "session", operator: "==" as const, value: "london" }, { field: "atr_slope", operator: ">" as const, value: 0 }], filters: [], sidePolicy: { candidateSide: "buy" as const }, stopLoss: { type: "atr_multiple" as const, value: 1 }, takeProfit: { type: "atr_multiple" as const, value: 1.5 }, timeExit: null, invalidationRules: [{ field: "close", operator: "<" as const, value: 1.1 }], positionSizing: { type: "fixed_fractional" as const, riskFraction: 0.01 }, costModel: { costModelId: "institutional-forex", version: "1" }, sessionRestrictions: [], eventRestrictions: [], supportedRegimes: ["trend"], requiredFeatureDefinitions: [{ featureId: "atr_zscore", version: "feature-engineering.v1" }], correlationId: randomUUID(), causationId: randomUUID() };
+const compiled = compiler.compile(base);
+assert.equal(compiled.strategy?.strategyVersion, 1);
+assert.ok(compiled.events.some(e => e.eventType === RulesV2EventTypes.StrategyDefinitionCreated));
+assert.equal(compiler.compile({ ...base, stopLoss: undefined as never }).events[0].eventType, RulesV2EventTypes.RuleSetRejected);
+assert.equal(compiler.compile({ ...base, takeProfit: undefined as never }).events[0].eventType, RulesV2EventTypes.RuleSetRejected);
+assert.equal(compiler.compile({ ...base, invalidationRules: [] }).events[0].eventType, RulesV2EventTypes.RuleSetRejected);
+assert.equal(compiler.compile({ ...base, entryConditions: [{ field: "setup", operator: "==" as const, value: "looks strong" }] }).events[0].eventType, RulesV2EventTypes.RuleSetRejected);
+assert.equal(compiler.compile({ ...base, entryConditions: [{ field: "session", operator: "==" as const, value: "london" }, { field: "session", operator: "==" as const, value: "asia" }] }).events[0].eventType, RulesV2EventTypes.RuleSetRejected);
+assert.equal(evaluateRule({ field: "x", operator: ">" as const, value: 2 }, { x: 3 }), true);
+assert.equal("submitOrder" in compiler, false);
+console.log("v2 phase 9 rules tests passed");
