@@ -104,6 +104,7 @@ import { strategyLabService } from "./execution/strategyLabService";
 import { auditExportService } from "./execution/auditExportService";
 import { telegramBotService } from "./telegramService";
 import { registerTelegramOperationsRoutes } from "./telegram";
+import { registerV2OperationsRoutes } from "./v2/operations";
 import { demoRunService } from "./demoRunService";
 import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
 import { historicalDataImportService } from "./historicalDataImportService";
@@ -152,6 +153,7 @@ export async function registerRoutes(
   });
 
   registerTelegramOperationsRoutes(app);
+  registerV2OperationsRoutes(app);
 
   app.get("/api/marketpilot/demo-run/status", async (_req, res) => {
     res.json(await demoRunService.status());

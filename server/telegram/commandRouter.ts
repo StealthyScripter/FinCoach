@@ -20,6 +20,19 @@ const READ_ONLY_COMMANDS = new Set([
   "/week",
   "/strategies",
   "/kill_status",
+  "/v2_status",
+  "/research_today",
+  "/observations",
+  "/hypotheses",
+  "/experiments",
+  "/backtests",
+  "/court_cases",
+  "/strategy_leaderboard",
+  "/forward_tests",
+  "/signals",
+  "/evaluator_results",
+  "/lessons",
+  "/strategy_health",
   "/help",
 ]);
 
@@ -71,6 +84,8 @@ export class TelegramCommandRouter {
       "FinCoach Telegram Commands",
       "/status /health /demo_status /pipeline_status /providers",
       "/open_trades /exposure /today /week /strategies /kill_status",
+      "/v2_status /research_today /observations /hypotheses /experiments /backtests",
+      "/court_cases /strategy_leaderboard /forward_tests /signals /evaluator_results /lessons /strategy_health",
       "Confirmation required: /pause_demo /resume_demo /disable_automation /kill",
       "Live trading commands are blocked.",
     ].join("\n");
@@ -108,6 +123,22 @@ export class TelegramCommandRouter {
         return "Strategy performance is available in /api/marketpilot/telegram/status and weekly summaries.";
       case "/kill_status":
         return `Kill switch: ${executionRiskService.snapshot().globalKillSwitch ? "ACTIVE" : "inactive"}\nNew signals: ${executionRiskService.snapshot().globalKillSwitch ? "suppressed" : "allowed through quality gate"}\nLive execution: blocked`;
+      case "/v2_status":
+      case "/research_today":
+      case "/observations":
+      case "/hypotheses":
+      case "/experiments":
+      case "/backtests":
+      case "/court_cases":
+      case "/strategy_leaderboard":
+      case "/forward_tests":
+      case "/signals":
+      case "/evaluator_results":
+      case "/lessons":
+      case "/strategy_health": {
+        const { v2OperationsService } = await import("../v2/operations");
+        return v2OperationsService.telegramSummary(command);
+      }
       case "/pause_demo":
         await demoRunService.pause("Telegram /pause_demo");
         return "Demo run paused. Live execution remains blocked.";
