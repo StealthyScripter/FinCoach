@@ -9,3 +9,4 @@ export * from "./fundamentals";
 export * from "./observations";
 export * from "./replay";
 export * from "./trader-emulators";
+export * from "./hypothesis";

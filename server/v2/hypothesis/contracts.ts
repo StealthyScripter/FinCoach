@@ -1,0 +1,28 @@
+export type ObjectiveCondition = { field: string; operator: "==" | "!=" | ">" | ">=" | "<" | "<=" | "in"; value: string | number | boolean | string[]; usesFutureData?: boolean };
+export type MeasurableOutcome = { metric: "probability" | "expectancy" | "return_r" | "max_adverse_excursion"; operator: ">" | ">=" | "<" | "<="; value: number; horizon: string };
+export type ComparisonBaseline = { baselineId: string; description: string; metric: string; value: number };
+export type ResearchHypothesis = {
+  hypothesisId: string;
+  schemaVersion: "fincoach.v2.hypothesis.1";
+  statement: string;
+  targetPopulation: { symbols: string[]; assetClasses: string[]; timeframes: string[]; sessions: string[]; regimes: string[] };
+  conditions: ObjectiveCondition[];
+  expectedOutcome: MeasurableOutcome;
+  baseline: ComparisonBaseline;
+  invalidationCriteria: ObjectiveCondition[];
+  minimumSampleSize: number;
+  minimumIndependentOccurrences: number;
+  mechanism: string;
+  evidenceEventIds: string[];
+  contradictoryEvidenceEventIds: string[];
+  sourceObservationIds: string[];
+  sourceTraderAnalysisIds: string[];
+  dataMiningRisk: "low" | "medium" | "high";
+  confidence: number;
+  status: "draft" | "ready_for_rules" | "insufficient_evidence" | "rejected";
+  createdAt: string;
+  correlationId: string;
+  causationId: string | null;
+  fingerprint: string;
+};
+export type HypothesisGenerationInput = Omit<ResearchHypothesis, "hypothesisId" | "schemaVersion" | "status" | "createdAt" | "fingerprint" | "confidence" | "dataMiningRisk"> & { createdAt?: string };
