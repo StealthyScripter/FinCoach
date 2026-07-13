@@ -1,0 +1,15 @@
+export const ReliabilityV2EventTypes = {
+  DurableLeaseAcquired: "DurableLeaseAcquired",
+  DurableLeaseRejected: "DurableLeaseRejected",
+  StaleLeaseRecovered: "StaleLeaseRecovered",
+  PayloadRejected: "PayloadRejected",
+  EndpointRejected: "EndpointRejected",
+  ProviderCircuitBreakerOpened: "ProviderCircuitBreakerOpened",
+  ProviderCircuitBreakerClosed: "ProviderCircuitBreakerClosed",
+  RetryBudgetRecorded: "RetryBudgetRecorded",
+  RetryBudgetExhausted: "RetryBudgetExhausted",
+  AuditChainAppended: "AuditChainAppended",
+  AuditChainTamperDetected: "AuditChainTamperDetected",
+  DeadLetterStored: "DeadLetterStored",
+  DeadLetterReplayRequested: "DeadLetterReplayRequested",
+} as const;
