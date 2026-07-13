@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import { ExternalEvaluationV2EventTypes, ExternalEvaluationV2Service } from "./v2/external-evaluation";
+const c = "00000000-0000-4000-8000-000000000017";
+const input = { evaluationId: "eval-1", signalId: "sig-1", evaluatorVersion: "fixture-1", entryReached: true, slReached: false, tpReached: true, outcome: "tp" as const, r: 1.5, profitLoss: 15, mfe: 1.8, mae: -0.2, holdingDurationMinutes: 60, dataSource: "fixture", evaluatedAt: "2026-01-01T01:00:00.000Z", notes: "independent fixture", lineageEventIds: ["sig-1"], correlationId: c, causationId: null };
+const svc = new ExternalEvaluationV2Service();
+const received = svc.receive(input);
+assert.equal(received.evaluation?.schemaVersion, "fincoach.v2.external-evaluation.1");
+assert.equal(svc.receive(input).events[0].eventType, ExternalEvaluationV2EventTypes.ExternalEvaluationDuplicateSuppressed);
+assert.equal(svc.receive({ ...input, evaluationId: "bad", outcome: "sl", slReached: false }).evaluation, null);
+assert.equal(svc.receive({ ...input, evaluationId: "bad2", lineageEventIds: [] }).evaluation, null);
+const rec = svc.reconcile("sig-1", "sl", [received.evaluation!], c, null);
+assert.equal(rec.reconciliation.disagreement, true);
+assert.ok(rec.events.some(e => e.eventType === ExternalEvaluationV2EventTypes.EvaluationDisagreementDetected));
+assert.equal("mutateSignal" in svc || "submitOrder" in svc, false);
+console.log("v2 phase 17 external-evaluation tests passed");

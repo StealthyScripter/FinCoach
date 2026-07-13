@@ -1,0 +1,4 @@
+export type ExternalEvaluationOutcome = "tp" | "sl" | "expired" | "cancelled" | "open" | "unknown";
+export type ExternalEvaluation = { evaluationId: string; schemaVersion: "fincoach.v2.external-evaluation.1"; signalId: string; evaluatorVersion: string; entryReached: boolean; slReached: boolean; tpReached: boolean; outcome: ExternalEvaluationOutcome; r: number; profitLoss: number; mfe: number; mae: number; holdingDurationMinutes: number; dataSource: string; evaluatedAt: string; notes: string; lineageEventIds: string[]; correlationId: string; causationId: string | null };
+export type ExternalEvaluationInput = Omit<ExternalEvaluation, "schemaVersion">;
+export type ReconciledOutcome = { reconciliationId: string; signalId: string; evaluationIds: string[]; internalOutcome: ExternalEvaluationOutcome; externalOutcome: ExternalEvaluationOutcome; disagreement: boolean; createdAt: string; lineageEventIds: string[]; correlationId: string; causationId: string | null };
