@@ -114,6 +114,7 @@ export class TelegramReportingService {
     const summaryDate = now.toISOString().slice(0, 10);
     const existing = await this.repository.findSummaryByPeriodAndDate("daily", summaryDate);
     if (existing) {
+      validateSummaryForPeriod(existing, "daily", summaryDate);
       telegramMetrics.recordSummaryResult("daily", "existing");
       return { summary: existing, status: "existing" };
     }
@@ -156,6 +157,7 @@ export class TelegramReportingService {
       createdAt,
     });
     const status = record.id === candidateId ? "created" : "existing";
+    validateSummaryForPeriod(record, "daily", summaryDate);
     telegramMetrics.recordSummaryResult("daily", status);
     return { summary: record, status };
   }
@@ -168,6 +170,7 @@ export class TelegramReportingService {
     const summaryDate = weekKey(now);
     const existing = await this.repository.findSummaryByPeriodAndDate("weekly", summaryDate);
     if (existing) {
+      validateSummaryForPeriod(existing, "weekly", summaryDate);
       telegramMetrics.recordSummaryResult("weekly", "existing");
       return { summary: existing, status: "existing" };
     }
@@ -205,6 +208,7 @@ export class TelegramReportingService {
       createdAt,
     });
     const status = record.id === candidateId ? "created" : "existing";
+    validateSummaryForPeriod(record, "weekly", summaryDate);
     telegramMetrics.recordSummaryResult("weekly", status);
     return { summary: record, status };
   }
@@ -237,6 +241,14 @@ export class TelegramReportingService {
   async markDelivered(summaryId: string, deliveryId: string) {
     return this.repository.markSummaryDelivered(summaryId, deliveryId);
   }
+}
+
+function validateSummaryForPeriod(record: TelegramSummaryRecord, period: "daily" | "weekly", summaryDate: string) {
+  if (!record || typeof record !== "object") throw new Error("malformed persisted summary row");
+  if (record.period !== period) throw new Error(`invalid summary period: expected ${period}, received ${record.period}`);
+  if (record.summaryDate !== summaryDate) throw new Error(`invalid summary date: expected ${summaryDate}, received ${record.summaryDate}`);
+  if (!record.id || !record.conciseMessage || !record.createdAt) throw new Error("missing required summary fields");
+  if (!record.report || typeof record.report !== "object") throw new Error("malformed persisted summary report");
 }
 
 function weekKey(date: Date) {

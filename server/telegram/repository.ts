@@ -432,6 +432,7 @@ function rowToSignal(row: Record<string, unknown>): TelegramSignalRecord {
 }
 
 function rowToSummary(row: Record<string, unknown>): TelegramSummaryRecord {
+  if (!row) throw new Error("invariant violation: telegram summary persistence returned no row");
   return {
     id: String(row.id),
     period: row.period as TelegramSummaryRecord["period"],

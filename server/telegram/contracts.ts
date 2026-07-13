@@ -234,6 +234,29 @@ export type TelegramSchedulerRunRecord = {
   completedAt: string | null;
 };
 
+export type KnownSkipReason =
+  | "outside_window"
+  | "already_running"
+  | "summary_already_exists"
+  | "summary_already_delivered"
+  | "no_work";
+
+export type ErrorClass =
+  | "configuration"
+  | "persistence"
+  | "delivery"
+  | "data_integrity"
+  | "programming"
+  | "invariant"
+  | "safety"
+  | "unknown";
+
+export type ClassifiedError = {
+  class: ErrorClass;
+  type: string;
+  message: string;
+};
+
 export type TelegramCommandAuditRecord = {
   id: string;
   command: string;

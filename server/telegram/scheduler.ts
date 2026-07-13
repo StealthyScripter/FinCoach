@@ -5,6 +5,8 @@ import { telegramSignalPublisher } from "./signalPublisher";
 import { loadTelegramConfig } from "./telegramClient";
 import { createSchedulerRun, telegramRepository, type TelegramRepository } from "./repository";
 import { telegramMetrics } from "./metrics";
+import { redactTelegramSecrets } from "./formatter";
+import type { ClassifiedError, ErrorClass, KnownSkipReason } from "./contracts";
 
 const runningJobs = new Set<string>();
 
@@ -18,8 +20,8 @@ type SchedulerDependencies = {
 
 export type SchedulerJobResult<T> =
   | { ok: true; status: "completed"; result: T }
-  | { ok: true; status: "skipped"; reason: string }
-  | { ok: false; status: "failed"; error: string };
+  | { ok: true; status: "skipped"; reason: KnownSkipReason }
+  | { ok: false; status: "failed"; error: ClassifiedError };
 
 export class TelegramScheduler {
   private timers: NodeJS.Timeout[] = [];
@@ -62,7 +64,7 @@ export class TelegramScheduler {
     let acquired = false;
     try {
       if (runningJobs.has(name)) {
-        const skipped = createSchedulerRun(name, { reason: "job already running" });
+        const skipped = createSchedulerRun(name, { reason: "already_running" });
         skipped.status = "skipped";
         skipped.completedAt = new Date().toISOString();
         try {
@@ -72,7 +74,7 @@ export class TelegramScheduler {
           console.error("Telegram scheduler failed to persist skipped job", error);
         }
         telegramMetrics.recordSchedulerJob("skipped");
-        return { ok: true, status: "skipped", reason: "job already running" };
+        return { ok: true, status: "skipped", reason: "already_running" };
       }
       runningJobs.add(name);
       acquired = true;
@@ -85,6 +87,12 @@ export class TelegramScheduler {
         throw error;
       }
       const result = await fn();
+      const skipReason = classifySkipResult(result);
+      if (skipReason) {
+        await this.repository.completeSchedulerRun(run.id, "skipped", { reason: skipReason, result });
+        telegramMetrics.recordSchedulerJob("skipped");
+        return { ok: true, status: "skipped", reason: skipReason };
+      }
       try {
         await this.repository.completeSchedulerRun(run.id, "completed", { result });
       } catch (error) {
@@ -94,18 +102,18 @@ export class TelegramScheduler {
       telegramMetrics.recordSchedulerJob("completed");
       return { ok: true, status: "completed", result };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const classified = classifySchedulerError(error);
       if (runId) {
         try {
-          await this.repository.completeSchedulerRun(runId, "failed", { error: message });
+          await this.repository.completeSchedulerRun(runId, "failed", { error: classified });
         } catch (persistenceError) {
           telegramMetrics.recordSchedulerPersistenceFailure(persistenceError);
           console.error("Telegram scheduler failed to persist job failure", persistenceError);
         }
       }
       console.error(`Telegram scheduler job ${name} failed`, error);
-      telegramMetrics.recordSchedulerJob("failed", error);
-      return { ok: false, status: "failed", error: message };
+      telegramMetrics.recordSchedulerJob("failed", classified.message);
+      return { ok: false, status: "failed", error: classified };
     } finally {
       if (acquired) runningJobs.delete(name);
     }
@@ -113,13 +121,13 @@ export class TelegramScheduler {
 
   private async maybeDailySummary(now = new Date()) {
     const config = loadTelegramConfig();
-    if (now.getUTCHours() !== config.dailySummaryHourUtc) return { sent: false, reason: "outside configured hour" };
+    if (now.getUTCHours() !== config.dailySummaryHourUtc) return { sent: false, reason: "outside_window" };
     const reporting = this.dependencies.reporting ?? telegramReportingService;
     const notifications = this.dependencies.notifications ?? telegramNotificationService;
     const result = await reporting.dailySummaryResult(now);
     if (result.status === "existing" && result.summary.deliveryId) {
       telegramMetrics.recordSummarySend("daily", "automatic", false);
-      return { sent: false, reason: "daily summary already sent", summaryId: result.summary.id, status: "already_sent" };
+      return { sent: false, reason: "summary_already_delivered", summaryId: result.summary.id, status: "already_sent" };
     }
     const delivery = await notifications.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "daily", automatic: true });
     if (delivery.sent && "result" in delivery) await reporting.markDelivered(result.summary.id, delivery.result.delivery.id);
@@ -129,13 +137,13 @@ export class TelegramScheduler {
 
   private async maybeWeeklySummary(now = new Date()) {
     const config = loadTelegramConfig();
-    if (now.getUTCDay() !== config.weeklySummaryDay || now.getUTCHours() !== config.weeklySummaryHourUtc) return { sent: false, reason: "outside configured weekly window" };
+    if (now.getUTCDay() !== config.weeklySummaryDay || now.getUTCHours() !== config.weeklySummaryHourUtc) return { sent: false, reason: "outside_window" };
     const reporting = this.dependencies.reporting ?? telegramReportingService;
     const notifications = this.dependencies.notifications ?? telegramNotificationService;
     const result = await reporting.weeklySummaryResult(now);
     if (result.status === "existing" && result.summary.deliveryId) {
       telegramMetrics.recordSummarySend("weekly", "automatic", false);
-      return { sent: false, reason: "weekly summary already sent", summaryId: result.summary.id, status: "already_sent" };
+      return { sent: false, reason: "summary_already_delivered", summaryId: result.summary.id, status: "already_sent" };
     }
     const delivery = await notifications.sendOperations("report", result.summary.conciseMessage, { summaryId: result.summary.id, period: "weekly", automatic: true });
     if (delivery.sent && "result" in delivery) await reporting.markDelivered(result.summary.id, delivery.result.delivery.id);
@@ -161,6 +169,37 @@ export class TelegramScheduler {
     }
     return { expired: expired.length };
   }
+}
+
+function classifySkipResult(result: unknown): KnownSkipReason | null {
+  if (!result || typeof result !== "object") return null;
+  const value = result as Record<string, unknown>;
+  if (value.reason === "outside_window") return "outside_window";
+  if (value.reason === "summary_already_delivered") return "summary_already_delivered";
+  if (value.status === "existing" && value.sent === false) return "summary_already_exists";
+  if (value.expired === 0) return "no_work";
+  if (Array.isArray(result) && result.length === 0) return "no_work";
+  return null;
+}
+
+export function classifySchedulerError(error: unknown): ClassifiedError {
+  const type = error instanceof Error ? error.name || "Error" : typeof error;
+  const raw = error instanceof Error ? error.message : String(error);
+  const message = String(redactTelegramSecrets(raw));
+  return { class: classifyErrorClass(error, message), type, message };
+}
+
+function classifyErrorClass(error: unknown, message: string): ErrorClass {
+  const lowered = message.toLowerCase();
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code) : "";
+  if (error instanceof TypeError || error instanceof ReferenceError || error instanceof SyntaxError || lowered.includes("typeerror") || lowered.includes("referenceerror")) return "programming";
+  if (lowered.includes("invariant")) return "invariant";
+  if (lowered.includes("demo-only") || lowered.includes("live execution") || lowered.includes("unauthorized") || lowered.includes("kill switch")) return "safety";
+  if (lowered.includes("database_url") || lowered.includes("postgres") || lowered.includes("connection") || lowered.includes("persist") || lowered.includes("record cannot be created") || code.startsWith("08")) return "persistence";
+  if (lowered.includes("config")) return "configuration";
+  if (lowered.includes("malformed") || lowered.includes("missing") || lowered.includes("invalid summary") || lowered.includes("unique constraint") || code === "23505") return "data_integrity";
+  if (lowered.includes("telegram") || lowered.includes("delivery") || lowered.includes("rate limited") || lowered.includes("timeout")) return "delivery";
+  return "unknown";
 }
 
 export const telegramScheduler = new TelegramScheduler();

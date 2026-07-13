@@ -291,7 +291,7 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
   const result = await scheduler.runJob("daily-summary", async () => "not reached");
   assert.equal(result.ok, false);
   assert.equal(result.status, "failed");
-  assert.match(result.error, /scheduler start persistence unavailable/);
+  assert.match(result.error.message, /scheduler start persistence unavailable/);
 }
 
 {
@@ -303,7 +303,7 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
   });
   assert.equal(result.ok, false);
   assert.equal(result.status, "failed");
-  assert.match(result.error, /summary generation failed/);
+  assert.match(result.error.message, /summary generation failed/);
 }
 
 {
@@ -423,7 +423,7 @@ await withTelegramScheduleEnv({
   assert.equal(laterSameHour.status, "already_sent");
   assert.equal(restarted.sent, false);
   assert.equal(nextDay.sent, true);
-  assert.equal(outsideHour.reason, "outside configured hour");
+  assert.equal(outsideHour.reason, "outside_window");
   assert.equal(deliveryIds.length, 2);
   assert.equal((await repo.listSummaries("daily", 10)).length, 2);
 });
@@ -447,8 +447,8 @@ await withTelegramScheduleEnv({
   assert.equal(laterSameHour.sent, false);
   assert.equal(laterSameHour.status, "already_sent");
   assert.equal(nextWeek.sent, true);
-  assert.equal(wrongDay.reason, "outside configured weekly window");
-  assert.equal(wrongHour.reason, "outside configured weekly window");
+  assert.equal(wrongDay.reason, "outside_window");
+  assert.equal(wrongHour.reason, "outside_window");
   assert.equal(daily.sent, true);
   assert.equal(deliveryIds.length, 3);
   assert.equal((await repo.listSummaries("weekly", 10)).length, 2);
