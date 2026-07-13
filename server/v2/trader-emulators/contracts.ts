@@ -1,0 +1,34 @@
+export type TraderProfile = "scalper" | "day_trader" | "swing_trader" | "position_trader";
+export type AnalysisEvidence = { sourceEventId: string; description: string; weight: number; expiresAt: string; timeframe: string };
+export type AnalysisRisk = { riskId: string; severity: "low" | "medium" | "high"; description: string };
+export type TraderAnalysisPackage = {
+  analysisId: string;
+  schemaVersion: "fincoach.v2.trader-analysis.1";
+  profile: TraderProfile;
+  symbol: string;
+  analyzedAt: string;
+  horizon: string;
+  supportedTimeframes: string[];
+  observations: string[];
+  supportingEvidence: AnalysisEvidence[];
+  contradictoryEvidence: AnalysisEvidence[];
+  risks: AnalysisRisk[];
+  opportunityState: "none" | "monitor" | "candidate";
+  confidence: number;
+  invalidationConditions: string[];
+  requiredAdditionalEvidence: string[];
+  correlationId: string;
+  causationId: string | null;
+};
+export type TraderAnalysisInput = {
+  profile: TraderProfile;
+  symbol: string;
+  analyzedAt: string;
+  timeframe: string;
+  observations: string[];
+  evidence: AnalysisEvidence[];
+  contradictoryEvidence?: AnalysisEvidence[];
+  context: { liquidityState?: string; spreadState?: string; eventProximity?: string; dataQualityState?: string };
+  correlationId: string;
+  causationId: string | null;
+};
