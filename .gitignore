@@ -21,3 +21,21 @@ venv/
 venv*
 
 backfill-*.json
+
+# OS / editor noise
+.DS_Store
+
+# Dependency installs
+node_modules/
+
+# Build outputs
+dist/
+server/public/
+*.tar.gz
+
+# Local Vite overrides created during ad-hoc builds
+vite.config.ts.*
+
+# Wrapper-only local files that should stay out of version control
+MARKETPILOT_EXECUTION_CONTEXT.md
+marketpilot-execution.test.ts
