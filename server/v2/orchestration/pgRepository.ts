@@ -128,6 +128,31 @@ export class PgOrchestrationRepository {
     }
   }
 
+  async latestCycle(status?: ResearchCycleRecord["status"]): Promise<ResearchCycleRecord | null> {
+    try {
+      const result = status
+        ? await this.db.query("SELECT * FROM v2_orchestration_cycles WHERE status = $1 ORDER BY updated_at DESC, cycle_id DESC LIMIT 1", [status])
+        : await this.db.query("SELECT * FROM v2_orchestration_cycles ORDER BY updated_at DESC, cycle_id DESC LIMIT 1");
+      return result.rowCount ? mapCycle(result.rows[0]) : null;
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
+  async listCycles(input: { limit: number; offset: number; status?: string }): Promise<{ items: ResearchCycleRecord[]; total: number }> {
+    try {
+      const where = input.status ? "WHERE status = $3" : "";
+      const params = input.status ? [input.limit, input.offset, input.status] : [input.limit, input.offset];
+      const items = await this.db.query(`SELECT * FROM v2_orchestration_cycles ${where} ORDER BY updated_at DESC, cycle_id DESC LIMIT $1 OFFSET $2`, params);
+      const total = input.status
+        ? await this.db.query("SELECT count(*)::int AS total FROM v2_orchestration_cycles WHERE status = $1", [input.status])
+        : await this.db.query("SELECT count(*)::int AS total FROM v2_orchestration_cycles");
+      return { items: items.rows.map(mapCycle), total: Number(total.rows[0]?.total ?? 0) };
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
   async saveRetry(input: Omit<RetryState, "retryId" | "createdAt" | "updatedAt"> & { updatedAt?: string }): Promise<RetryState> {
     try {
       const now = input.updatedAt ?? new Date().toISOString();
@@ -227,6 +252,39 @@ export class PgOrchestrationRepository {
     try {
       const result = await this.db.query("SELECT * FROM v2_orchestration_worker_leases WHERE released_at IS NULL AND expires_at > $1 ORDER BY expires_at ASC, lease_name ASC", [now.toISOString()]);
       return result.rows.map(mapLease);
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
+  async staleLeases(now: Date): Promise<DurableWorkerLease[]> {
+    try {
+      const result = await this.db.query("SELECT * FROM v2_orchestration_worker_leases WHERE released_at IS NULL AND expires_at <= $1 ORDER BY expires_at ASC, lease_name ASC", [now.toISOString()]);
+      return result.rows.map(mapLease);
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
+  async retryCounts(): Promise<{ pending: number; exhausted: number }> {
+    try {
+      const result = await this.db.query("SELECT exhausted, count(*)::int AS count FROM v2_orchestration_retries GROUP BY exhausted");
+      let pending = 0;
+      let exhausted = 0;
+      for (const row of result.rows) {
+        if (row.exhausted) exhausted = Number(row.count);
+        else pending = Number(row.count);
+      }
+      return { pending, exhausted };
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
+  async deadLetterCount(): Promise<number> {
+    try {
+      const result = await this.db.query("SELECT count(*)::int AS total FROM v2_orchestration_dead_letters");
+      return Number(result.rows[0]?.total ?? 0);
     } catch (error) {
       throw classifyPostgresError(error);
     }

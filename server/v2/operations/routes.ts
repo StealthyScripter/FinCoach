@@ -20,9 +20,9 @@ const routes: [string, V2OperationsCollection][] = [
 ];
 
 export function registerV2OperationsRoutes(app: Express, service: V2OperationsService = v2OperationsService) {
-  app.get("/api/v2/status", (req: Request, res: Response) => send(res, service.status({ correlationId: correlationId(req) })));
+  app.get("/api/v2/status", async (req: Request, res: Response) => send(res, await service.statusAsync({ correlationId: correlationId(req) })));
   for (const [path, collection] of routes) {
-    app.get(path, (req: Request, res: Response) => send(res, service.list(collection, {
+    app.get(path, async (req: Request, res: Response) => send(res, await service.listAsync(collection, {
       limit: numberParam(req.query.limit),
       offset: numberParam(req.query.offset),
       symbol: stringParam(req.query.symbol),

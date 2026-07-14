@@ -25,6 +25,8 @@ export type V2OperationsQuery = {
   correlationId?: string;
 };
 
+export type V2OperationsAvailability = "available" | "available_empty" | "degraded" | "stale" | "not_configured" | "temporarily_unavailable" | "schema_incompatible";
+
 export type V2OperationsResponse<TBody extends Record<string, unknown>> = {
   status: number;
   body: TBody;

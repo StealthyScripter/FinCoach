@@ -11,7 +11,8 @@ assert.equal(status.body.killSwitchState, "inactive");
 assert.equal(status.events[0].eventType, V2OperationsEventTypes.V2OperationsResponseCreated);
 
 const lessons = operations.list("lessons", { limit: 1, offset: 0, correlationId: status.body.correlationId });
-assert.equal(lessons.body.items.length, 1);
+assert.equal(lessons.body.items.length, 0);
+assert.equal(lessons.body.availability, "not_configured");
 assert.equal(lessons.body.pagination.limit, 1);
 assert.equal(lessons.body.schemaVersion, "fincoach.v2.operations-list.1");
 

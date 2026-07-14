@@ -41,6 +41,10 @@ export class InMemoryV2OperationsRepository {
     return this.reports.get(reportDate) ?? null;
   }
 
+  latestReport() {
+    return [...this.reports.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.report.reportId.localeCompare(a.report.reportId))[0] ?? null;
+  }
+
   saveDelivery(record: DailyReportDeliveryRecord) {
     const existing = this.deliveries.get(record.idempotencyKey);
     if (existing) return { inserted: false, record: existing };
