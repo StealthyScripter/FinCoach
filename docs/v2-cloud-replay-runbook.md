@@ -12,6 +12,21 @@
 
 Do not store provider credentials, database dumps, replay outputs, checkpoints, or logs in Git.
 
+The agent prepares tooling and local verification only. A human operator provisions cloud resources, supplies historical datasets, runs campaign scripts, pays cloud costs, and retains artifacts.
+
+## Historical Preflight
+
+```bash
+bash scripts/v2-replay/cloud-preflight.sh \
+  --expected-commit 73c5722 \
+  --dataset-manifest /data/fincoach/datasets/fx-five-year/manifest.json \
+  --output /var/lib/fincoach/replay/five-year-single \
+  --min-free-disk-gb 200 \
+  --min-memory-gb 16
+```
+
+Preflight checks the clean tree, Node/npm, package scripts, PostgreSQL configuration, dataset manifest, partition hashes, output writability, disk, memory, live-execution block, broker flags, Telegram flags, external signal flags, and Git ignore behavior.
+
 ## Local Verify Command
 
 ```bash
@@ -56,6 +71,12 @@ Prepare a manifest with real dataset identifiers, exact date range, symbols, tim
 npm run v2:replay:prepare -- --output artifacts/v2-replay/five-year
 npm run v2:replay:run -- --manifest artifacts/v2-replay/five-year/manifest.json
 npm run v2:replay:validate -- --output artifacts/v2-replay/five-year
+```
+
+Historical campaign example:
+
+```bash
+bash scripts/v2-replay/run-five-year-single.sh config/replay-campaigns/five-year-single.example.env
 ```
 
 For ten-year or multi-symbol campaigns, use the same flow with a manifest that records the expanded boundaries. Do not claim a campaign completed until the final `summary.json`, `failures.json`, and `report.md` are produced and validated.

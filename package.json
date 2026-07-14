@@ -18,6 +18,8 @@
     "v2:replay:validate": "tsx scripts/v2-replay/validate-replay-results.ts",
     "v2:replay:compare": "tsx scripts/v2-replay/compare-replay-runs.ts",
     "v2:replay:report": "tsx scripts/v2-replay/generate-replay-report.ts",
+    "v2:replay:dataset:validate": "tsx scripts/v2-replay/validate-dataset-manifest.ts",
+    "v2:replay:preflight": "bash scripts/v2-replay/cloud-preflight.sh",
     "test:marketpilot": "tsx server/riskEngine.test.ts",
     "test:event-log": "tsx server/eventLogService.test.ts",
     "test:providers": "tsx server/providerRegistryService.test.ts",

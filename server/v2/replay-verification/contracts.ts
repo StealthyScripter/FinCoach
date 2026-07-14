@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const replayManifestSchema = z.object({
   manifestVersion: z.literal("fincoach.v2.replay-manifest.1"),
+  inputMode: z.enum(["fixture", "historical"]).default("fixture"),
   runId: z.string().min(1),
   repositoryCommit: z.string().min(7),
   startedAt: z.string().datetime(),
@@ -22,8 +23,13 @@ export const replayManifestSchema = z.object({
   eventSchemaVersions: z.record(z.string()),
   expectedSafetyState: z.object({ liveExecutionBlocked: z.literal(true), brokerCallsAllowed: z.literal(false), telegramAllowed: z.literal(false) }),
   outputDirectory: z.string().min(1),
+  historicalDataset: z.object({
+    manifestPath: z.string().min(1),
+    manifestHash: z.string().regex(/^[a-f0-9]{64}$/),
+  }).optional(),
 }).superRefine((manifest, ctx) => {
   if (Date.parse(manifest.startTime) >= Date.parse(manifest.endTime)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endTime"], message: "endTime must be after startTime" });
+  if (manifest.inputMode === "historical" && !manifest.historicalDataset) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["historicalDataset"], message: "historicalDataset is required for historical mode" });
 });
 
 export type ReplayVerificationManifest = z.infer<typeof replayManifestSchema>;
@@ -32,6 +38,7 @@ export type ReplayVerificationFailure = { code: string; severity: "critical" | "
 
 export type ReplayVerificationResult = {
   runId: string;
+  inputMode: "fixture" | "historical";
   manifestHash: string;
   status: "passed" | "warning" | "failed";
   inputEventCount: number;

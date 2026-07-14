@@ -1,0 +1,17 @@
+services:
+  fincoach-replay:
+    build:
+      context: ../..
+      dockerfile: deploy/replay/Dockerfile
+    env_file:
+      - ../../config/replay-campaigns/verify.example.env
+    environment:
+      FINCOACH_LIVE_EXECUTION: blocked
+      BROKER_EXECUTION_ENABLED: "false"
+      TELEGRAM_DELIVERY_ENABLED: "false"
+      EXTERNAL_SIGNAL_PUBLICATION_ENABLED: "false"
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL outside the repository}
+    volumes:
+      - /data/fincoach/datasets:/data/fincoach/datasets:ro
+      - /var/lib/fincoach/replay:/var/lib/fincoach/replay
+    stop_signal: SIGTERM

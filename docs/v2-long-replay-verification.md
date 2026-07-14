@@ -13,6 +13,11 @@ The harness supports these run modes:
 - `resume`: resume from the latest valid checkpoint.
 - `compare`: compare completed replay artifacts for deterministic equivalence.
 
+Replay input modes are explicit:
+
+- `fixture`: uses deterministic local fixture events.
+- `historical`: requires a historical dataset manifest, validates partition hashes, streams records through the historical dataset adapter, and must not call fixture event generation.
+
 ## Local Scope
 
 Local development verification is bounded to deterministic fixtures and moderate stress runs that fit on a laptop. The local suite covers:
@@ -28,6 +33,8 @@ Local development verification is bounded to deterministic fixtures and moderate
 - generated artifact ignore rules.
 
 The local medium replay fixture currently uses 48 deterministic source events across `EUR_USD` and `GBP_USD` on `M15`. It is a tooling validation fixture, not a cloud capacity result.
+
+Local historical-file verification uses a small generated dataset fixture with two symbols, two timeframes, candles, an economic event, a revision, a late-arriving correction, multiple partitions, cursor resume, and hash-mismatch coverage. It is not a five-year or ten-year replay.
 
 ## Cloud Scope
 

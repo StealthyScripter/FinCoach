@@ -5,6 +5,7 @@
 Replay manifests use version `fincoach.v2.replay-manifest.1` and include:
 
 - `manifestVersion`
+- `inputMode`
 - `runId`
 - `repositoryCommit`
 - `startedAt`
@@ -25,6 +26,7 @@ Replay manifests use version `fincoach.v2.replay-manifest.1` and include:
 - `eventSchemaVersions`
 - `expectedSafetyState`
 - `outputDirectory`
+- `historicalDataset`
 
 The canonical manifest hash is SHA-256 over stable JSON with sorted object keys.
 
@@ -46,6 +48,14 @@ Every completed run must write:
 - `summary.json`
 - `report.md`
 
+Historical runs must also write:
+
+- `dataset-manifest.json`
+- `dataset-manifest.sha256`
+- `partition-validation.json`
+- `input-summary.json`
+- `telemetry-snapshot.json`
+
 Missing artifacts are critical failures.
 
 ## Summary
@@ -53,6 +63,7 @@ Missing artifacts are critical failures.
 `summary.json` contains:
 
 - `runId`
+- `inputMode`
 - `manifestHash`
 - `status`
 - `inputEventCount`

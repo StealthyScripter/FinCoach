@@ -1,0 +1,15 @@
+.env
+.env.*
+node_modules
+dist
+artifacts
+replay-output
+metrics-output
+*.log
+*.dump
+*.sql
+*.pem
+*.key
+*.crt
+datasets
+data

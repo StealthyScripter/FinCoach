@@ -17,7 +17,7 @@ export class ReplayVerificationService {
     const started = Date.now();
     const datasetHash = hashReplayDataset(input.sourceEvents);
     const failures: ReplayVerificationFailure[] = [];
-    if (!Object.values(manifest.datasetHashes).includes(datasetHash)) failures.push({ code: "dataset_hash_mismatch", severity: "critical", message: "Input dataset hash did not match manifest" });
+    if (manifest.inputMode === "fixture" && !Object.values(manifest.datasetHashes).includes(datasetHash)) failures.push({ code: "dataset_hash_mismatch", severity: "critical", message: "Input dataset hash did not match manifest" });
     const replay = new ReplayV2Service();
     const startedReplay = replay.start({ replayId: manifest.runId, start: manifest.startTime, end: manifest.endTime, mode: "event", seed: manifest.seed, instruments: manifest.symbols, timeframes: manifest.timeframes }, input.sourceEvents);
     const domainEvents: DomainEvent[] = [...startedReplay.events];
@@ -42,6 +42,7 @@ export class ReplayVerificationService {
     const domainEventHash = createHash("sha256").update(canonicalJson(domainEvents.map(event => ({ type: event.eventType, payload: event.payload })))).digest("hex");
     const result: ReplayVerificationResult = {
       runId: manifest.runId,
+      inputMode: manifest.inputMode,
       manifestHash: hashReplayManifest(manifest),
       status: failures.some(failure => failure.severity === "critical") ? "failed" : failures.length ? "warning" : "passed",
       inputEventCount: input.sourceEvents.length,
@@ -80,6 +81,7 @@ export function fixtureManifest(outputDirectory = "artifacts/v2-replay/local-sho
   const events = deterministicFixtureEvents(count);
   return {
     manifestVersion: "fincoach.v2.replay-manifest.1",
+    inputMode: "fixture",
     runId: `fixture-${count}`,
     repositoryCommit: "local-dev",
     startedAt: new Date(Date.UTC(2026, 0, 1)).toISOString(),
@@ -119,7 +121,7 @@ function writeReplayArtifacts(manifest: ReplayVerificationManifest, result: Repl
   artifact("failures.json", `${JSON.stringify(result.failures, null, 2)}\n`);
   artifact("summary.json", `${JSON.stringify(result, null, 2)}\n`);
   artifact("report.md", `# Replay Report\n\nStatus: ${result.status}\n\nInput events: ${result.inputEventCount}\nOutput events: ${result.outputEventCount}\n`);
-  const validation = validateReplayResult(result, requiredReplayArtifacts());
+  const validation = validateReplayResult(result, requiredReplayArtifacts(), { enforceHistoricalArtifacts: false });
   if (!validation.ok) throw new Error("Replay artifacts failed validation");
 }
 
