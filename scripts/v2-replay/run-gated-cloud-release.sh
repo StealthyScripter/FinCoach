@@ -8,6 +8,8 @@ Usage:
 
 Stages:
   preflight              --expected-commit <commit> --dataset-manifest <path> --output <dir> --min-free-disk-gb <gb> --min-memory-gb <gb>
+  dataset-build          --config <env-file>
+  dataset-validate       --dataset-manifest <path>
   verify                 --output <dir>
   five-year-single       --config <env-file>
   five-year-repeat       --config <env-file>
@@ -109,6 +111,14 @@ case "$stage" in
     min_disk="$(required_arg --min-free-disk-gb "$@")"
     min_memory="$(required_arg --min-memory-gb "$@")"
     run bash scripts/v2-replay/cloud-preflight.sh --expected-commit "$expected_commit" --dataset-manifest "$dataset_manifest" --output "$output" --min-free-disk-gb "$min_disk" --min-memory-gb "$min_memory"
+    ;;
+  dataset-build)
+    config="$(required_arg --config "$@")"
+    run bash scripts/v2-replay/build-oanda-dataset.sh --load-env --config "$config"
+    ;;
+  dataset-validate)
+    dataset_manifest="$(required_arg --dataset-manifest "$@")"
+    run npm run v2:dataset:validate -- --manifest "$dataset_manifest"
     ;;
   verify)
     output="$(required_arg --output "$@")"

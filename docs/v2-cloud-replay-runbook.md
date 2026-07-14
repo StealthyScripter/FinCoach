@@ -8,11 +8,35 @@
 - Required migrations applied through the repository migration command.
 - Live execution disabled. `FINCOACH_LIVE_EXECUTION=enabled` is rejected.
 - No broker or Telegram delivery flags enabled.
-- Historical input data staged outside tracked source with recorded SHA-256 hashes.
+- OANDA practice credentials for dataset acquisition, or historical input data staged outside tracked source with recorded SHA-256 hashes.
 
 Do not store provider credentials, database dumps, replay outputs, checkpoints, or logs in Git.
 
 The agent prepares tooling and local verification only. A human operator provisions cloud resources, supplies historical datasets, runs campaign scripts, pays cloud costs, and retains artifacts.
+
+## OANDA Dataset Build
+
+For OANDA historical candles, the operator should build the replay dataset before preflight instead of hand-authoring manifests:
+
+```bash
+bash scripts/v2-replay/build-oanda-dataset.sh \
+  --load-env \
+  --config config/replay-campaigns/five-year-single.example.env
+```
+
+Equivalent gated form:
+
+```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh dataset-build \
+  --config config/replay-campaigns/five-year-single.example.env
+
+bash scripts/v2-replay/run-gated-cloud-release.sh dataset-validate \
+  --dataset-manifest /data/fincoach/datasets/fx-five-year/manifest.json
+```
+
+The dataset stage requires `OANDA_ENV=practice`, `MARKETPILOT_DEMO_ONLY=true`, and blocked live execution. It calls only OANDA practice read endpoints for instruments and candles. It does not call order, trade, position-close, Telegram, broker-execution, or external-signal paths.
+
+Dataset acquisition and replay are intentionally separate. Repeated deterministic replay runs must use the same frozen `manifest.json`, `manifest.sha256`, partition hashes, symbols, timeframes, seed, and date range.
 
 ## Historical Preflight
 

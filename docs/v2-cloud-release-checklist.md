@@ -7,6 +7,7 @@ Use placeholders literally until replaced by the human operator:
 - `<OUTPUT_ROOT>`
 - `<EXPECTED_COMMIT>`
 - `<CAMPAIGN_ENV>`
+- `<DATASET_ENV>`
 
 Prefer `docs/v2-cloud-deployment-runbook.md` for the complete operator flow. This checklist is the gate-by-gate command reference.
 
@@ -36,6 +37,42 @@ set +a
 npm run test:pgstorage
 npm run db:push
 ```
+
+## Cloud Gate 0: Preflight
+
+## Dataset Gate A: Build OANDA Historical Dataset
+
+Create an env file from `config/replay-campaigns/five-year-single.example.env` or another campaign template. The file must include `DATASET_OUTPUT`, `DATASET_PROVIDER=oanda`, `DATASET_ENVIRONMENT=practice`, `SYMBOLS`, `TIMEFRAMES`, `START_TIME`, `END_TIME`, `PRICE_COMPONENT`, and `COMPRESSION`.
+
+```bash
+bash scripts/v2-replay/build-oanda-dataset.sh \
+  --load-env \
+  --config <DATASET_ENV>
+```
+
+Coordinator form:
+
+```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh dataset-build \
+  --config <DATASET_ENV>
+```
+
+The builder uses OANDA practice historical candle endpoints only, writes committed acquisition-window spools, assembles immutable replay partitions atomically, writes SHA-256 hashes, and creates `manifest.json`.
+
+## Dataset Gate B: Validate Dataset
+
+```bash
+npm run v2:dataset:validate -- --manifest <DATASET_MANIFEST>
+```
+
+Coordinator form:
+
+```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh dataset-validate \
+  --dataset-manifest <DATASET_MANIFEST>
+```
+
+Replay gates must use this frozen manifest. Do not fetch or mutate provider data during deterministic replay.
 
 ## Cloud Gate 0: Preflight
 

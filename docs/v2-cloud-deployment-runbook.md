@@ -56,6 +56,12 @@ npm run db:push
 Run one gate at a time. Review artifacts before invoking the next gate.
 
 ```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh dataset-build \
+  --config <DATASET_BUILD_ENV>
+
+bash scripts/v2-replay/run-gated-cloud-release.sh dataset-validate \
+  --dataset-manifest <DATASET_MANIFEST>
+
 bash scripts/v2-replay/run-gated-cloud-release.sh preflight \
   --expected-commit <RELEASE_COMMIT> \
   --dataset-manifest <DATASET_MANIFEST> \
@@ -102,6 +108,8 @@ bash scripts/v2-replay/run-gated-cloud-release.sh finalize \
 ## Individual Recovery Commands
 
 ```bash
+npm run v2:dataset:resume -- --symbols <SYMBOLS> --timeframes <TIMEFRAMES> --start <START> --end <END> --price <PRICE_COMPONENT> --output <DATASET_OUTPUT>
+npm run v2:dataset:validate -- --manifest <DATASET_OUTPUT>/manifest.json
 npm run v2:replay:resume -- --manifest <OUTPUT_DIR>/manifest.json --batch-size <BATCH_SIZE>
 npm run v2:replay:validate -- --output <OUTPUT_DIR>
 npm run v2:replay:compare -- --left <LEFT_SUMMARY_JSON> --right <RIGHT_SUMMARY_JSON>
@@ -109,6 +117,8 @@ npm run v2:replay:report -- <OUTPUT_DIR>/summary.json
 ```
 
 Completed historical resume is idempotent. Partial artifact-only historical resume fails closed unless durable replay state is available.
+
+OANDA dataset acquisition is a separate immutable dataset stage. Replay gates must use the frozen manifest and hashes from `dataset-validate`; replay execution never downloads provider data.
 
 ## Stop Conditions
 
