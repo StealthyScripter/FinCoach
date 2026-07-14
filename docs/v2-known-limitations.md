@@ -4,6 +4,8 @@
 
 The five-year and ten-year replay campaigns have not been run by this agent. They require human-provisioned cloud resources, historical datasets, PostgreSQL, and retained artifacts.
 
+This is nonblocking for manual cloud deployment readiness, but it blocks any claim that long-duration campaigns passed.
+
 ## Historical Source Throughput
 
 The historical replay source is bounded-memory and checkpoint-compatible, but the current implementation favors correctness and deterministic ordering over maximum throughput. Large campaigns should start with one-symbol five-year runs and use telemetry to size worker counts, batch size, checkpoint interval, disk, memory, and PostgreSQL capacity.

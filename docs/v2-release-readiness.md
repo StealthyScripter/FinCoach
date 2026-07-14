@@ -8,11 +8,11 @@ It is not certified for live trading, unattended broker execution, or production
 
 ## Verdict
 
-`ready_with_documented_limitations`
+`ready_for_manual_cloud_deployment`
 
 The release-blocking full-materialization defect has been corrected. Historical replay now uses a public bounded `ReplaySource` contract and the historical runner consumes dataset records incrementally. Local verification passed for fixture replay, historical sample replay, batch-size determinism, restart/resume behavior, PostgreSQL storage, and safety scans.
 
-The verdict is not `ready_for_controlled_cloud_replay` because the five-year and ten-year campaigns have not been executed in the separately provisioned cloud environment, and cloud-scale capacity remains unproven.
+This verdict means the human operator can deploy the release candidate and begin the gated cloud verification campaign. It does not mean the five-year or ten-year campaigns have passed.
 
 ## Resolved Blockers
 
@@ -24,6 +24,7 @@ The verdict is not `ready_for_controlled_cloud_replay` because the five-year and
 - Historical resume no longer falls back to fixture events.
 - Replay result validation now checks manifest hashes, historical dataset hashes, partition validation, and input-summary consistency instead of only checking artifact names.
 - A gated cloud release coordinator script now wraps the manual campaign stages without automatically advancing past a gate.
+- Completed historical resume is idempotent; partial artifact-only resume fails closed rather than overwriting successful artifacts.
 
 ## Local Verification Summary
 
@@ -37,6 +38,8 @@ The verdict is not `ready_for_controlled_cloud_replay` because the five-year and
 - PostgreSQL restart recovery test: passed.
 - Shell syntax validation for replay scripts: passed.
 - Safety scans found no broker, Telegram, or external signal path used by replay.
+- Local release campaign passed with two symbols, two timeframes, three partitions, gzip plus uncompressed input, six input events, eleven output events, three checkpoints, four source reads, and peak heap near 10 MB.
+- Docker image build passed and Compose config validated with an explicit external `DATABASE_URL`.
 
 ## Release Safety
 

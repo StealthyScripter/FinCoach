@@ -35,3 +35,5 @@ For V2.1 durable evidence mode, verify:
 Historical replay release-candidate operation is limited to controlled research and cloud verification. Before any campaign, confirm live execution is blocked, broker execution is disabled, Telegram delivery is disabled, external signal publication is disabled, PostgreSQL is healthy, and the dataset manifest validates.
 
 Do not continue a cloud gate after a failed validator result. Preserve replay artifacts and checkpoints, classify the failure, and only resume from a manifest whose repository commit, dataset hash, and source cursor match the saved state.
+
+The final manual deployment sequence is defined in `docs/v2-cloud-deployment-runbook.md`; rollback procedures are defined in `docs/v2-deployment-rollback.md`.

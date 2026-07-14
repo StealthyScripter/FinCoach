@@ -8,6 +8,8 @@ Use placeholders literally until replaced by the human operator:
 - `<EXPECTED_COMMIT>`
 - `<CAMPAIGN_ENV>`
 
+Prefer `docs/v2-cloud-deployment-runbook.md` for the complete operator flow. This checklist is the gate-by-gate command reference.
+
 ## Repository Verification
 
 ```bash
