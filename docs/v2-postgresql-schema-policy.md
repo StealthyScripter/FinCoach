@@ -25,6 +25,8 @@ Migrations must be deterministic, ordered, safe to reapply, indexed for expected
 
 `migrations/0014_v2_operational_persistence.sql` introduces durable operational tables required before an extended demo pilot.
 
+`migrations/0015_v2_evidence_persistence.sql` introduces module-owned append-only evidence tables for the high-priority V2 research evidence repositories. The tables share a persistence shape for idempotency, schema versioning, lineage, correlation, causation, payload immutability, and supersession references, but ownership remains per module and table.
+
 Ownership and retention follow `docs/v2-persistence-ownership-map.md`. No table is shared as miscellaneous V2 state.
 
 Conflict policy:
@@ -34,6 +36,37 @@ Conflict policy:
 - Exact duplicates return an idempotent result.
 - Conflicting duplicates return an explicit conflict result or typed persistence error.
 - Unknown SQL failures remain `unknown_persistence_failure` and fail closed.
+
+## Evidence Tables
+
+Evidence tables added in V2.1:
+
+- `v2_forward_tests`
+- `v2_research_signals`
+- `v2_external_evaluations`
+- `v2_research_journal_entries`
+- `v2_learning_lessons`
+- `v2_learning_revision_proposals`
+- `v2_strategy_revision_proposals`
+- `v2_strategy_lifecycle_decisions`
+- `v2_court_verdicts`
+- `v2_ranking_decisions`
+
+Each table has:
+
+- `record_id` primary key;
+- `natural_key` unique;
+- `idempotency_key` unique;
+- `schema_version`;
+- `source_module`;
+- immutable `payload`;
+- `lineage_event_ids`;
+- optional `supersedes_id`;
+- `correlation_id`;
+- optional `causation_id`;
+- `created_at`.
+
+Payload updates are not allowed. Corrections are represented by superseding records where the module contract supports supersession.
 
 Mutable operational fields:
 

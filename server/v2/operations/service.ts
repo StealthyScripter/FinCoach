@@ -12,6 +12,7 @@ type ProjectionRepositories = {
   operations?: DurableOperationsProjectionRepository | InMemoryV2OperationsRepository;
   orchestration?: OrchestrationProjectionRepository;
   pilot?: PilotProjectionRepository;
+  evidence?: Partial<Record<V2OperationsCollection, EvidenceProjectionRepository>>;
 };
 
 type OrchestrationProjectionRepository = {
@@ -32,6 +33,10 @@ type DurableOperationsProjectionRepository = {
   getReportByDate(reportDate: string): Promise<DailyReportRecord | null>;
   saveReport(record: DailyReportRecord): Promise<{ inserted: boolean; record: DailyReportRecord }>;
   saveDelivery(record: DailyReportDeliveryRecord): Promise<{ inserted: boolean; record: DailyReportDeliveryRecord }>;
+};
+
+type EvidenceProjectionRepository = {
+  listPage(input?: { limit?: number; offset?: number; strategyId?: string; symbol?: string; status?: string }): Promise<{ items: Record<string, unknown>[]; total: number }>;
 };
 
 type CollectionProjection = {
@@ -149,6 +154,14 @@ export class V2OperationsService {
         moduleHealth.operations = "healthy";
         body.postgresqlHealth = "healthy";
       }
+      const evidence = this.repositories.evidence ?? {};
+      body.forwardTests = await countEvidence(evidence["forward-tests"]);
+      body.signals = await countEvidence(evidence.signals);
+      body.externalEvaluations = await countEvidence(evidence.evaluations);
+      body.lessons = await countEvidence(evidence.lessons);
+      body.lifecycleStates = await countEvidence(evidence.lifecycle);
+      body.courtroomVerdicts = await countEvidence(evidence["court-cases"]);
+      body.rankedCandidates = await countEvidence(evidence.strategies);
     } catch (error) {
       const availability = availabilityFromError(error);
       body.postgresqlHealth = availability;
@@ -188,6 +201,16 @@ export class V2OperationsService {
           availability: cycles.total ? "available" : "available_empty",
           items: cycles.items.map(item => ({ ...item, sourceModule: "orchestration" })),
           total: cycles.total,
+          repositoryPaged: true,
+        });
+      }
+      const evidenceRepository = this.repositories.evidence?.[collection];
+      if (evidenceRepository) {
+        const records = await evidenceRepository.listPage({ limit, offset, status: query.status, strategyId: query.strategyId, symbol: query.symbol });
+        return this.listResponse(collection, query, correlationId, {
+          availability: records.total ? "available" : "available_empty",
+          items: records.items.map(item => ({ ...item, sourceModule: item.sourceModule ?? collection })),
+          total: records.total,
           repositoryPaged: true,
         });
       }
@@ -360,6 +383,11 @@ function availabilityFromError(error: unknown): V2OperationsAvailability {
 
 function redactDestination(destination: string) {
   return createHash("sha256").update(destination).digest("hex").slice(0, 16);
+}
+
+async function countEvidence(repository: EvidenceProjectionRepository | undefined) {
+  if (!repository) return 0;
+  return (await repository.listPage({ limit: 1, offset: 0 })).total;
 }
 
 function commandToCollection(command: string): V2OperationsCollection | null {

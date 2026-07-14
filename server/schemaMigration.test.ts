@@ -11,6 +11,7 @@ const aiEvaluationMigration = readFileSync("migrations/0007_ai_evaluations_persi
 const timeSeriesMigration = readFileSync("migrations/0009_time_series_persistence.sql", "utf-8");
 const strategyEvidenceMigration = readFileSync("migrations/0010_strategy_evidence_persistence.sql", "utf-8");
 const v2OperationalMigration = readFileSync("migrations/0014_v2_operational_persistence.sql", "utf-8");
+const v2EvidenceMigration = readFileSync("migrations/0015_v2_evidence_persistence.sql", "utf-8");
 
 const requiredTables = [
   "users",
@@ -229,5 +230,36 @@ assert.match(v2OperationalMigration, /fencing_token\s+bigint\s+NOT NULL/i);
 assert.match(v2OperationalMigration, /UNIQUE\s+\(report_id,\s*destination,\s*delivery_attempt\)/i);
 assert.match(v2OperationalMigration, /BEGIN;/i);
 assert.match(v2OperationalMigration, /COMMIT;/i);
+
+for (const table of [
+  "v2_forward_tests",
+  "v2_research_signals",
+  "v2_external_evaluations",
+  "v2_research_journal_entries",
+  "v2_learning_lessons",
+  "v2_learning_revision_proposals",
+  "v2_strategy_revision_proposals",
+  "v2_strategy_lifecycle_decisions",
+  "v2_court_verdicts",
+  "v2_ranking_decisions",
+]) {
+  assert.match(v2EvidenceMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+for (const index of [
+  "idx_v2_forward_tests_lineage",
+  "idx_v2_research_signals_symbol_created",
+  "idx_v2_external_evaluations_signal_created",
+  "idx_v2_research_journal_supersedes",
+  "idx_v2_learning_lessons_supersedes",
+  "idx_v2_strategy_lifecycle_strategy_created",
+  "idx_v2_court_verdicts_verdict_created",
+  "idx_v2_ranking_decisions_created",
+]) {
+  assert.match(v2EvidenceMigration, new RegExp(`INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+assert.match(v2EvidenceMigration, /idempotency_key text NOT NULL UNIQUE/i);
+assert.match(v2EvidenceMigration, /lineage_event_ids jsonb NOT NULL/i);
+assert.match(v2EvidenceMigration, /BEGIN;/i);
+assert.match(v2EvidenceMigration, /COMMIT;/i);
 
 console.log("schema migration smoke tests passed");

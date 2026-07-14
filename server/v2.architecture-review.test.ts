@@ -37,7 +37,7 @@ function assertNoCrossModuleConcreteRepositoryImports() {
 
 function assertNoDirectSqlOutsideRepositories() {
   const violations = productionFiles
-    .filter(file => !/(^|\/)(pgRepository|repository)\.ts$/.test(relative(v2Root, file)))
+    .filter(file => !/(^|\/)(pgRepository|repository|evidenceRepository)\.ts$/.test(relative(v2Root, file)))
     .flatMap(file => {
       const matches = readFileSync(file, "utf8").match(/\b(SELECT|INSERT|UPDATE|DELETE)\s+/g) ?? [];
       return matches.map(match => `${rel(file)} contains ${match.trim()}`);

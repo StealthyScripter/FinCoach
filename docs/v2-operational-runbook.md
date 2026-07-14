@@ -16,3 +16,15 @@ Before an extended pilot, operators should confirm:
 - Failed delivery state remains failed until a distinct successful delivery attempt is recorded.
 
 Projection degradation is operationally significant but does not imply live-trading readiness. Live execution remains blocked regardless of projection health.
+
+## Evidence Repository Checks
+
+For V2.1 durable evidence mode, verify:
+
+- migration `0015_v2_evidence_persistence.sql` is applied;
+- PostgreSQL repositories are explicitly constructed for evidence modules that require durability;
+- in-memory repositories are used only for unit tests, deterministic fixtures, or explicitly ephemeral local runs;
+- operations projections receive the durable repositories they are expected to expose;
+- duplicate records return idempotent results only when the immutable payload is identical;
+- conflicting duplicates are treated as conflicts, not successful updates;
+- malformed persisted rows and unsupported schema versions fail closed.
