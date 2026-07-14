@@ -24,6 +24,8 @@ Local verification proves the tooling and bounded-memory behavior on sample data
 
 The replay verification runner writes artifacts and source cursors for campaign validation. Long-running cloud jobs must preserve output directories and checkpoints on persistent storage. Generated artifacts must not be committed.
 
+Completed historical runs can be resumed idempotently without rewriting successful artifacts. Partial artifact-only historical resume fails closed unless durable replay state is available; operators should preserve checkpoints and restart through the gated campaign workflow rather than editing artifacts.
+
 ## Release Boundary
 
 This release candidate remains demo-only. It is not a live-trading release and does not authorize broker execution, Telegram delivery, or external actionable signal publication.

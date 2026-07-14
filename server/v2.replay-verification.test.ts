@@ -46,6 +46,10 @@ assert.equal(medium.checkpointCount, 16);
 
 const ignored = execFileSync("git", ["check-ignore", "artifacts/v2-replay/test-short/summary.json"], { encoding: "utf8" }).trim();
 assert.equal(ignored, "artifacts/v2-replay/test-short/summary.json");
+const reportFromSummaryPath = execFileSync("./node_modules/.bin/tsx", ["scripts/v2-replay/generate-replay-report.ts", `${outputDirectory}/summary.json`], { encoding: "utf8" });
+assert.match(reportFromSummaryPath, /Replay Report/);
+const reportFromOutputDirectory = execFileSync("./node_modules/.bin/tsx", ["scripts/v2-replay/generate-replay-report.ts", "--output", outputDirectory], { encoding: "utf8" });
+assert.match(reportFromOutputDirectory, /Replay Report/);
 
 console.log("v2 replay verification tests passed", JSON.stringify({
   short: { events: first.inputEventCount, output: first.outputEventCount, checkpoints: first.checkpointCount, peakHeapMb: first.peakHeapMb },

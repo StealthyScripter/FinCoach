@@ -106,6 +106,8 @@ npm run v2:replay:resume -- --manifest artifacts/v2-replay/five-year/manifest.js
 
 Resume mode reuses the manifest and checkpoint directory. If the latest checkpoint is missing or corrupted, validation must fail instead of silently restarting from an unsafe point.
 
+If artifacts already record a completed historical run, resume is idempotent and leaves the successful summary intact. Partial artifact-only historical resume fails closed rather than overwriting prior results; preserve checkpoint state and investigate before retrying.
+
 ## Compare
 
 ```bash

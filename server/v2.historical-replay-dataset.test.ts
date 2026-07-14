@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
-import { execFileSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import { gzipSync } from "zlib";
 import { ReplayV2Service } from "./v2/replay";
 import {
@@ -131,6 +131,14 @@ assert.equal(result.inputEventCount, 4);
 assert.equal(result.safety.brokerCalls, 0);
 assert.equal(result.safety.telegramMessages, 0);
 assert.equal(validateReplayResult(result, [...requiredReplayArtifacts(), "dataset-manifest.json", "dataset-manifest.sha256", "partition-validation.json", "input-summary.json", "telemetry-snapshot.json"]).ok, true);
+writeFileSync(join(root, "run", "input-summary.json"), `${JSON.stringify({ cursor: { position: result.inputEventCount }, inputEventCount: result.inputEventCount }, null, 2)}\n`);
+execFileSync("./node_modules/.bin/tsx", ["scripts/v2-replay/resume-long-replay.ts", "--manifest", join(root, "run", "manifest.json")], { encoding: "utf8" });
+const preservedSummary = JSON.parse(readFileSync(join(root, "run", "summary.json"), "utf8"));
+assert.equal(preservedSummary.inputEventCount, result.inputEventCount);
+writeFileSync(join(root, "run", "input-summary.json"), `${JSON.stringify({ cursor: { position: 1 }, inputEventCount: result.inputEventCount }, null, 2)}\n`);
+const partialResume = spawnSync("./node_modules/.bin/tsx", ["scripts/v2-replay/resume-long-replay.ts", "--manifest", join(root, "run", "manifest.json")], { encoding: "utf8" });
+assert.notEqual(partialResume.status, 0);
+assert.match(partialResume.stderr, /partial historical resume requires durable replay state/);
 assert.equal(execFileSync("git", ["check-ignore", `${root}/run/summary.json`], { encoding: "utf8" }).trim(), `${root}/run/summary.json`);
 
 const hashes = [];
