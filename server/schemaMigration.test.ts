@@ -10,6 +10,7 @@ const ragMigration = readFileSync("migrations/0006_rag_corpus_persistence.sql", 
 const aiEvaluationMigration = readFileSync("migrations/0007_ai_evaluations_persistence.sql", "utf-8");
 const timeSeriesMigration = readFileSync("migrations/0009_time_series_persistence.sql", "utf-8");
 const strategyEvidenceMigration = readFileSync("migrations/0010_strategy_evidence_persistence.sql", "utf-8");
+const v2OperationalMigration = readFileSync("migrations/0014_v2_operational_persistence.sql", "utf-8");
 
 const requiredTables = [
   "users",
@@ -198,5 +199,35 @@ for (const table of [
 assert.match(strategyEvidenceMigration, /idx_strategy_evidence_records_strategy_timestamp/i);
 assert.match(strategyEvidenceMigration, /BEGIN;/i);
 assert.match(strategyEvidenceMigration, /COMMIT;/i);
+
+for (const table of [
+  "v2_orchestration_cycles",
+  "v2_orchestration_checkpoints",
+  "v2_orchestration_consumer_acknowledgements",
+  "v2_orchestration_retries",
+  "v2_orchestration_worker_leases",
+  "v2_orchestration_dead_letters",
+  "v2_pilot_lifecycle",
+  "v2_pilot_lifecycle_transitions",
+  "v2_pilot_scorecards",
+  "v2_pilot_reports",
+  "v2_operations_daily_reports",
+  "v2_operations_daily_report_deliveries",
+]) {
+  assert.match(v2OperationalMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+for (const index of [
+  "idx_v2_orchestration_worker_leases_expires",
+  "idx_v2_orchestration_retries_pending",
+  "idx_v2_orchestration_dead_letters_replay",
+  "idx_v2_pilot_scorecards_pilot_version",
+  "idx_v2_operations_daily_report_one_delivered",
+]) {
+  assert.match(v2OperationalMigration, new RegExp(`INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+assert.match(v2OperationalMigration, /fencing_token\s+bigint\s+NOT NULL/i);
+assert.match(v2OperationalMigration, /UNIQUE\s+\(report_id,\s*destination,\s*delivery_attempt\)/i);
+assert.match(v2OperationalMigration, /BEGIN;/i);
+assert.match(v2OperationalMigration, /COMMIT;/i);
 
 console.log("schema migration smoke tests passed");

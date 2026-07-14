@@ -46,7 +46,10 @@ const v2Files = filesUnder(join(process.cwd(), "server/v2")).filter(file => file
 for (const file of v2Files) {
   const source = readFileSync(file, "utf8");
   const relative = file.slice(process.cwd().length + 1);
-  assert.equal(/\b(sql|db)\s*`|SELECT\s+.+\s+FROM\s+v2_/i.test(source), false, `${relative} must not use direct V2 SQL outside repositories`);
+  const repositoryImplementation = /\/(repository|pgRepository)\.ts$/.test(relative);
+  if (!repositoryImplementation) {
+    assert.equal(/\b(sql|db)\s*`|SELECT\s+.+\s+FROM\s+v2_/i.test(source), false, `${relative} must not use direct V2 SQL outside repositories`);
+  }
   if (!relative.endsWith("/index.ts")) {
     assert.equal(/from "\.\.\/[^"]+\/repository"/.test(source), false, `${relative} must not import peer concrete repositories`);
   }

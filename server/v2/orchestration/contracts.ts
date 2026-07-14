@@ -61,6 +61,38 @@ export type WorkerLease = {
   expiresAt: number;
 };
 
+export type DurableWorkerLease = WorkerLease & {
+  leaseName: string;
+  fencingToken: number;
+};
+
+export type ConsumerAcknowledgement = {
+  acknowledgementId: string;
+  sourceEventId: string;
+  consumerId: string;
+  idempotencyKey: string;
+  resultHash: string;
+  correlationId: string;
+  causationId: string | null;
+  createdAt: string;
+};
+
+export type RetryState = {
+  retryId: string;
+  sourceEventId: string;
+  consumerId: string;
+  idempotencyKey: string;
+  attempt: number;
+  maxAttempts: number;
+  exhausted: boolean;
+  nextRetryAt: string | null;
+  lastErrorCode: OrchestrationErrorCode;
+  correlationId: string;
+  causationId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type OrchestrationErrorCode =
   | "invalid_event"
   | "unsupported_schema"

@@ -5,5 +5,6 @@ export * from "./checkpoint";
 export * from "./deadLetter";
 export * from "./health";
 export * from "./repository";
+export * from "./pgRepository";
 export * from "./router";
 export * from "./service";
