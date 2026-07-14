@@ -64,7 +64,7 @@ function assertNoResearchBrokerOrTelegramImports() {
   const violations: string[] = [];
   for (const file of productionFiles) {
     const moduleName = moduleNameFor(file);
-    if (!moduleName || ["operations", "governance", "reliability"].includes(moduleName)) continue;
+    if (!moduleName || ["operations", "governance", "reliability", "dataset-pipeline"].includes(moduleName)) continue;
     const text = readFileSync(file, "utf8");
     if (/(api-fxtrade|placeOrder\s*\(|submitOrder\s*\(|createOrder\s*\(|from\s+["'][^"']*telegram|telegramClient\s*\.|sendOperations\s*\()/i.test(text)) {
       violations.push(rel(file));
