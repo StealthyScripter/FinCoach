@@ -83,12 +83,16 @@ Campaign env files may set `BATCH_SIZE`. Smaller batches reduce retained replay-
 
 Release-candidate cloud execution uses the gated command sequence in `docs/v2-cloud-release-checklist.md`. Five-year and ten-year scripts must be driven by explicit campaign env files and historical dataset manifests. Do not use fixture mode for long historical campaigns.
 
+The preferred release-candidate entry point is `scripts/v2-replay/run-gated-cloud-release.sh`. It runs exactly one named gate per invocation, requires explicit operator continuation between gates, blocks broker/Telegram/external signal flags, and returns nonzero on the first failed command.
+
 Every historical campaign must be validated and reported after the run:
 
 ```bash
 npm run v2:replay:validate -- --output <OUTPUT_DIR>
 npm run v2:replay:report -- <OUTPUT_DIR>/summary.json
 ```
+
+The validator reads the output directory and rejects missing artifacts, malformed summaries, manifest hash mismatches, historical dataset hash mismatches, failed partition validation, input-summary count mismatches, unsafe safety state, and critical replay failures.
 
 For ten-year or multi-symbol campaigns, use the same flow with a manifest that records the expanded boundaries. Do not claim a campaign completed until the final `summary.json`, `failures.json`, and `report.md` are produced and validated.
 

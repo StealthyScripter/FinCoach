@@ -51,11 +51,29 @@ bash scripts/v2-replay/cloud-preflight.sh \
   --min-memory-gb <MIN_MEMORY_GB>
 ```
 
+The same gate can be run through the release coordinator:
+
+```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh preflight \
+  --expected-commit <EXPECTED_COMMIT> \
+  --dataset-manifest <DATASET_MANIFEST> \
+  --output <OUTPUT_ROOT>/preflight \
+  --min-free-disk-gb <MIN_DISK_GB> \
+  --min-memory-gb <MIN_MEMORY_GB>
+```
+
 ## Cloud Gate 1: Verify Mode
 
 ```bash
 OUTPUT_DIR=<OUTPUT_ROOT>/verify \
 bash scripts/v2-replay/run-cloud-verify.sh
+```
+
+Coordinator form:
+
+```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh verify \
+  --output <OUTPUT_ROOT>/verify
 ```
 
 ## Cloud Gate 2: Five-Year Single Symbol
@@ -66,6 +84,13 @@ Create an env file from `config/replay-campaigns/five-year-single.example.env`, 
 bash scripts/v2-replay/run-five-year-single.sh <CAMPAIGN_ENV>
 ```
 
+Coordinator form:
+
+```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh five-year-single \
+  --config <CAMPAIGN_ENV>
+```
+
 ## Cloud Gate 3: Repeat And Compare
 
 Run the five-year single-symbol campaign again with the same dataset, symbols, timeframes, seed, and date range, but a different output directory. Then compare summaries:
@@ -74,6 +99,14 @@ Run the five-year single-symbol campaign again with the same dataset, symbols, t
 bash scripts/v2-replay/compare-campaign-runs.sh \
   <OUTPUT_ROOT>/five-year-single-a/summary.json \
   <OUTPUT_ROOT>/five-year-single-b/summary.json
+```
+
+Coordinator form:
+
+```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh five-year-compare \
+  --left <OUTPUT_ROOT>/five-year-single-a/summary.json \
+  --right <OUTPUT_ROOT>/five-year-single-b/summary.json
 ```
 
 ## Cloud Gate 4: Five-Year Multi-Symbol
@@ -131,6 +164,13 @@ bash scripts/v2-replay/compare-campaign-runs.sh \
 ```bash
 npm run v2:replay:validate -- --output <OUTPUT_DIR>
 npm run v2:replay:report -- <OUTPUT_DIR>/summary.json
+```
+
+Coordinator form:
+
+```bash
+bash scripts/v2-replay/run-gated-cloud-release.sh finalize \
+  --output <OUTPUT_DIR>
 ```
 
 ## Stop Conditions

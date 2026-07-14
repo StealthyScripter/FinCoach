@@ -22,6 +22,8 @@ The verdict is not `ready_for_controlled_cloud_replay` because the five-year and
 - Replay checkpoints now carry a replay cursor plus a source cursor bound to the dataset manifest hash.
 - Streaming replay state no longer retains all delivered event IDs; it retains the latest source-event marker needed for duplicate protection.
 - Historical resume no longer falls back to fixture events.
+- Replay result validation now checks manifest hashes, historical dataset hashes, partition validation, and input-summary consistency instead of only checking artifact names.
+- A gated cloud release coordinator script now wraps the manual campaign stages without automatically advancing past a gate.
 
 ## Local Verification Summary
 
@@ -61,6 +63,8 @@ Do not continue past a failed gate.
 7. Cloud Gate 6: Ten-year single-symbol run.
 8. Cloud Gate 7: Ten-year multi-symbol run.
 9. Cloud Gate 8: Independent ten-year comparison.
+
+The preferred command wrapper is `scripts/v2-replay/run-gated-cloud-release.sh`. Each invocation runs one explicit stage and exits nonzero on failure.
 
 ## Rollback Guidance
 

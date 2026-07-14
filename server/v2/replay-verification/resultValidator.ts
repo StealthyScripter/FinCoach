@@ -1,4 +1,8 @@
 import type { ReplayVerificationFailure, ReplayVerificationResult } from "./contracts";
+import { readdirSync, readFileSync } from "fs";
+import { join } from "path";
+import { hashHistoricalDatasetManifest } from "./historicalDataset";
+import { hashReplayManifest } from "./manifest";
 
 const requiredArtifacts = [
   "manifest.json",
@@ -43,4 +47,58 @@ export function validateReplayResult(result: ReplayVerificationResult, artifacts
   if (result.safety.liveExecutionBlocked !== true || result.safety.brokerCalls !== 0 || result.safety.telegramMessages !== 0) failures.push({ code: "unsafe_replay_side_effect", severity: "critical", message: "Replay safety state failed" });
   const critical = failures.filter(failure => failure.severity === "critical");
   return { ok: critical.length === 0, failures };
+}
+
+export function validateReplayOutputDirectory(outputDirectory: string) {
+  const failures: ReplayVerificationFailure[] = [];
+  let result: ReplayVerificationResult | null = null;
+  let artifacts: string[] = [];
+  try {
+    artifacts = readdirSync(outputDirectory);
+  } catch (error) {
+    return { ok: false, failures: [{ code: "missing_output_directory", severity: "critical" as const, message: classify(error) }] };
+  }
+  try {
+    result = JSON.parse(readFileSync(join(outputDirectory, "summary.json"), "utf8"));
+  } catch (error) {
+    failures.push({ code: "malformed_summary_artifact", severity: "critical", message: classify(error) });
+  }
+  if (result) failures.push(...validateReplayResult(result, artifacts).failures);
+  try {
+    const manifest = JSON.parse(readFileSync(join(outputDirectory, "manifest.json"), "utf8"));
+    const expected = readFileSync(join(outputDirectory, "manifest.sha256"), "utf8").trim();
+    const actual = hashReplayManifest(manifest);
+    if (expected !== actual) failures.push({ code: "manifest_hash_mismatch", severity: "critical", message: "manifest.sha256 does not match manifest.json" });
+    if (result && result.manifestHash !== actual) failures.push({ code: "summary_manifest_hash_mismatch", severity: "critical", message: "summary manifestHash does not match manifest.json" });
+  } catch (error) {
+    failures.push({ code: "manifest_validation_failed", severity: "critical", message: classify(error) });
+  }
+  if (result?.inputMode === "historical") {
+    try {
+      const datasetManifest = JSON.parse(readFileSync(join(outputDirectory, "dataset-manifest.json"), "utf8"));
+      const expected = readFileSync(join(outputDirectory, "dataset-manifest.sha256"), "utf8").trim();
+      const actual = hashHistoricalDatasetManifest({ ...datasetManifest, manifestHash: undefined });
+      if (expected !== actual) failures.push({ code: "dataset_manifest_hash_mismatch", severity: "critical", message: "dataset-manifest.sha256 does not match dataset-manifest.json" });
+    } catch (error) {
+      failures.push({ code: "dataset_manifest_validation_failed", severity: "critical", message: classify(error) });
+    }
+    try {
+      const partitionValidation = JSON.parse(readFileSync(join(outputDirectory, "partition-validation.json"), "utf8"));
+      if (partitionValidation.ok !== true) failures.push({ code: "partition_validation_failed", severity: "critical", message: "partition validation artifact is not ok" });
+    } catch (error) {
+      failures.push({ code: "partition_validation_malformed", severity: "critical", message: classify(error) });
+    }
+    try {
+      const inputSummary = JSON.parse(readFileSync(join(outputDirectory, "input-summary.json"), "utf8"));
+      if (result && inputSummary.inputEventCount !== result.inputEventCount) failures.push({ code: "input_summary_count_mismatch", severity: "critical", message: "input-summary count does not match summary" });
+    } catch (error) {
+      failures.push({ code: "input_summary_malformed", severity: "critical", message: classify(error) });
+    }
+  }
+  const critical = failures.filter(failure => failure.severity === "critical");
+  return { ok: critical.length === 0, failures };
+}
+
+function classify(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }

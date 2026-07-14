@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, rmSync } from "fs";
+import { existsSync, rmSync, writeFileSync } from "fs";
 import { execFileSync } from "child_process";
-import { deterministicFixtureEvents, fixtureManifest, hashReplayManifest, ReplayVerificationService, requiredReplayArtifacts, validateReplayManifest, validateReplayResult } from "./v2/replay-verification";
+import { deterministicFixtureEvents, fixtureManifest, hashReplayManifest, ReplayVerificationService, requiredReplayArtifacts, validateReplayManifest, validateReplayOutputDirectory, validateReplayResult } from "./v2/replay-verification";
 
 const outputDirectory = "artifacts/v2-replay/test-short";
 rmSync(outputDirectory, { recursive: true, force: true });
@@ -31,6 +31,10 @@ for (const artifact of requiredReplayArtifacts()) {
   assert.equal(existsSync(`${outputDirectory}/${artifact}`), true, `${artifact} should exist`);
 }
 assert.equal(validateReplayResult(first, requiredReplayArtifacts()).ok, true);
+assert.equal(validateReplayOutputDirectory(outputDirectory).ok, true);
+writeFileSync(`${outputDirectory}/manifest.sha256`, `${"0".repeat(64)}\n`);
+assert.equal(validateReplayOutputDirectory(outputDirectory).ok, false);
+writeFileSync(`${outputDirectory}/manifest.sha256`, `${first.manifestHash}\n`);
 assert.equal(validateReplayResult({ ...first, safety: { liveExecutionBlocked: true, brokerCalls: 1, telegramMessages: 0 } }, requiredReplayArtifacts()).ok, false);
 assert.equal(service.run({ manifest: { ...manifest, datasetHashes: { fixture: "0".repeat(64) } }, sourceEvents: deterministicFixtureEvents(12) }).status, "failed");
 
