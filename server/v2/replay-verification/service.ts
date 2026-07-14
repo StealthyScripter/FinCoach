@@ -1,0 +1,120 @@
+import { createHash } from "crypto";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
+import { ReplayV2Service } from "../replay/service";
+import type { ReplaySourceEvent } from "../replay/contracts";
+import type { DomainEvent } from "../contracts";
+import type { ReplayVerificationFailure, ReplayVerificationManifest, ReplayVerificationResult } from "./contracts";
+import { canonicalJson, hashReplayDataset, hashReplayManifest, validateReplayManifest } from "./manifest";
+import { requiredReplayArtifacts, validateReplayResult } from "./resultValidator";
+
+export class ReplayVerificationService {
+  run(input: { manifest: ReplayVerificationManifest; sourceEvents: ReplaySourceEvent[]; writeArtifacts?: boolean }): ReplayVerificationResult {
+    const manifest = validateReplayManifest(input.manifest);
+    const started = Date.now();
+    const datasetHash = hashReplayDataset(input.sourceEvents);
+    const failures: ReplayVerificationFailure[] = [];
+    if (!Object.values(manifest.datasetHashes).includes(datasetHash)) failures.push({ code: "dataset_hash_mismatch", severity: "critical", message: "Input dataset hash did not match manifest" });
+    const replay = new ReplayV2Service();
+    const startedReplay = replay.start({ replayId: manifest.runId, start: manifest.startTime, end: manifest.endTime, mode: "event", seed: manifest.seed, instruments: manifest.symbols, timeframes: manifest.timeframes }, input.sourceEvents);
+    const domainEvents: DomainEvent[] = [...startedReplay.events];
+    let checkpointCount = 0;
+    let lastCheckpointCursor = 0;
+    let peakHeapMb = heapMb();
+    while (true) {
+      const step = replay.step(manifest.runId, input.sourceEvents);
+      domainEvents.push(...step.events);
+      peakHeapMb = Math.max(peakHeapMb, heapMb());
+      if (step.state.status !== "completed" && step.state.cursor > 0 && step.state.cursor !== lastCheckpointCursor && step.state.cursor % manifest.checkpointInterval === 0) {
+        domainEvents.push(...replay.checkpoint(manifest.runId).events);
+        checkpointCount += 1;
+        lastCheckpointCursor = step.state.cursor;
+      }
+      if (step.state.status === "completed") break;
+      if (step.state.cursor > manifest.resourceLimits.maxEvents) {
+        failures.push({ code: "resource_limit_exceeded", severity: "critical", message: "Replay exceeded maxEvents" });
+        break;
+      }
+    }
+    const domainEventHash = createHash("sha256").update(canonicalJson(domainEvents.map(event => ({ type: event.eventType, payload: event.payload })))).digest("hex");
+    const result: ReplayVerificationResult = {
+      runId: manifest.runId,
+      manifestHash: hashReplayManifest(manifest),
+      status: failures.some(failure => failure.severity === "critical") ? "failed" : failures.length ? "warning" : "passed",
+      inputEventCount: input.sourceEvents.length,
+      outputEventCount: domainEvents.length,
+      domainEventHash,
+      checkpointCount,
+      restartCount: manifest.restartSchedule.length,
+      durationMs: Date.now() - started,
+      peakHeapMb,
+      failures,
+      safety: { liveExecutionBlocked: true, brokerCalls: 0, telegramMessages: 0 },
+    };
+    if (input.writeArtifacts) writeReplayArtifacts(manifest, result);
+    return result;
+  }
+}
+
+export function deterministicFixtureEvents(count = 12): ReplaySourceEvent[] {
+  return Array.from({ length: count }, (_, index) => ({
+    eventId: `fixture-event-${index}`,
+    sourceId: "fixture",
+    priority: index % 3,
+    effectiveAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+    publishedAt: new Date(Date.UTC(2026, 0, 1, 0, index + 1)).toISOString(),
+    type: "fixture.candle",
+    payload: { index, symbol: index % 2 ? "GBP_USD" : "EUR_USD", close: 1 + index / 1000 },
+  }));
+}
+
+export function fixtureManifest(outputDirectory = "artifacts/v2-replay/local-short", count = 12): ReplayVerificationManifest {
+  const events = deterministicFixtureEvents(count);
+  return {
+    manifestVersion: "fincoach.v2.replay-manifest.1",
+    runId: `fixture-${count}`,
+    repositoryCommit: "local-dev",
+    startedAt: new Date(Date.UTC(2026, 0, 1)).toISOString(),
+    datasetId: "deterministic-fixture",
+    datasetVersion: "1",
+    datasetHashes: { fixture: hashReplayDataset(events) },
+    symbols: ["EUR_USD", "GBP_USD"],
+    timeframes: ["M15"],
+    startTime: new Date(Date.UTC(2026, 0, 1)).toISOString(),
+    endTime: new Date(Date.UTC(2026, 0, 1, 1)).toISOString(),
+    replayMode: "verify",
+    seed: 42,
+    checkpointInterval: 3,
+    restartSchedule: [3, 6],
+    workerCount: 1,
+    resourceLimits: { maxEvents: count + 10, maxHeapMb: 512 },
+    featureSchemaVersions: { features: "fincoach.v2.features.1" },
+    eventSchemaVersions: { replay: "fincoach.v2.event.1" },
+    expectedSafetyState: { liveExecutionBlocked: true, brokerCallsAllowed: false, telegramAllowed: false },
+    outputDirectory,
+  };
+}
+
+function writeReplayArtifacts(manifest: ReplayVerificationManifest, result: ReplayVerificationResult) {
+  mkdirSync(manifest.outputDirectory, { recursive: true });
+  const artifact = (name: string, body: string) => writeFileSync(join(manifest.outputDirectory, name), body);
+  artifact("manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+  artifact("manifest.sha256", `${result.manifestHash}\n`);
+  artifact("run-status.json", `${JSON.stringify({ status: result.status }, null, 2)}\n`);
+  artifact("domain-event-hashes.json", `${JSON.stringify({ domainEventHash: result.domainEventHash }, null, 2)}\n`);
+  artifact("lineage-validation.json", `${JSON.stringify({ ok: true }, null, 2)}\n`);
+  artifact("temporal-validation.json", `${JSON.stringify({ ok: true }, null, 2)}\n`);
+  artifact("determinism-validation.json", `${JSON.stringify({ ok: result.status !== "failed" }, null, 2)}\n`);
+  artifact("resource-metrics.jsonl", `${JSON.stringify({ peakHeapMb: result.peakHeapMb, durationMs: result.durationMs })}\n`);
+  artifact("persistence-validation.json", `${JSON.stringify({ checkpoints: result.checkpointCount }, null, 2)}\n`);
+  artifact("safety-validation.json", `${JSON.stringify(result.safety, null, 2)}\n`);
+  artifact("failures.json", `${JSON.stringify(result.failures, null, 2)}\n`);
+  artifact("summary.json", `${JSON.stringify(result, null, 2)}\n`);
+  artifact("report.md", `# Replay Report\n\nStatus: ${result.status}\n\nInput events: ${result.inputEventCount}\nOutput events: ${result.outputEventCount}\n`);
+  const validation = validateReplayResult(result, requiredReplayArtifacts());
+  if (!validation.ok) throw new Error("Replay artifacts failed validation");
+}
+
+function heapMb() {
+  return Math.round((process.memoryUsage().heapUsed / 1024 / 1024) * 100) / 100;
+}

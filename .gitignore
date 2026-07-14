@@ -11,6 +11,10 @@ tmp/
 exports/
 screenshots/private/
 artifacts/private/
+artifacts/v2-replay/
+artifacts/v2-metrics/
+replay-output/
+metrics-output/
 
 .env
 .env.local
