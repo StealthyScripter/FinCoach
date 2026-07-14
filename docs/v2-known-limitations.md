@@ -14,9 +14,11 @@ The historical replay source is bounded-memory and checkpoint-compatible, but th
 
 CSV is planned but not currently supported at runtime. Historical partitions must use JSONL or NDJSON. A manifest that advertises CSV is rejected.
 
-## Dataset Responsibility
+## Dataset Acquisition Boundary
 
-The operator must provide historical datasets with publication timestamps, effective timestamps, deterministic source ordering, content hashes, and manifest metadata. Records missing point-in-time visibility metadata are rejected rather than inferred.
+FinCoach now provides an OANDA-practice dataset builder for historical candles. The operator must still provide OANDA practice credentials, cloud storage, PostgreSQL, and enough runtime capacity. Non-OANDA historical datasets still require externally prepared manifests that satisfy the historical dataset contract.
+
+The OANDA builder currently supports historical candles, not economic releases, corporate events, or fundamental publication datasets. Those record types remain supported by the replay dataset contract, but they are not acquired from OANDA by this pipeline.
 
 ## Cloud Capacity
 

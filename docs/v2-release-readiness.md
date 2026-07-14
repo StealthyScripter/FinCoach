@@ -8,11 +8,13 @@ It is not certified for live trading, unattended broker execution, or production
 
 ## Verdict
 
-`ready_for_manual_cloud_deployment`
+`ready_for_oanda_dataset_build_and_cloud_replay`
+
+The OANDA historical dataset workflow is now automated for practice historical candles. Operators no longer need to hand-author OANDA candle manifests: FinCoach can acquire practice candles, normalize through the V2 market-data contract, write replay-ready partitions, hash them, generate the dataset manifest, and validate it before cloud replay gates begin.
 
 The release-blocking full-materialization defect has been corrected. Historical replay now uses a public bounded `ReplaySource` contract and the historical runner consumes dataset records incrementally. Local verification passed for fixture replay, historical sample replay, batch-size determinism, restart/resume behavior, PostgreSQL storage, and safety scans.
 
-This verdict means the human operator can deploy the release candidate and begin the gated cloud verification campaign. It does not mean the five-year or ten-year campaigns have passed.
+This verdict means the human operator can build OANDA practice historical candle datasets, validate their replay manifests, deploy the release candidate, and begin the gated cloud verification campaign. It does not mean the five-year or ten-year campaigns have passed.
 
 ## Resolved Blockers
 
@@ -25,6 +27,8 @@ This verdict means the human operator can deploy the release candidate and begin
 - Replay result validation now checks manifest hashes, historical dataset hashes, partition validation, and input-summary consistency instead of only checking artifact names.
 - A gated cloud release coordinator script now wraps the manual campaign stages without automatically advancing past a gate.
 - Completed historical resume is idempotent; partial artifact-only resume fails closed rather than overwriting successful artifacts.
+- OANDA practice historical candle acquisition is practice-only, bounded by request windows, restartable through committed window spools, and separated from deterministic replay execution.
+- Dataset partitions are written atomically from committed acquisition windows and validated before replay preflight.
 
 ## Local Verification Summary
 
@@ -57,15 +61,17 @@ Replay manifests and scripts require demo-safe state:
 
 Do not continue past a failed gate.
 
-1. Cloud Gate 0: Preflight.
-2. Cloud Gate 1: Verify mode.
-3. Cloud Gate 2: Five-year single symbol.
-4. Cloud Gate 3: Repeat and compare five-year single-symbol run.
-5. Cloud Gate 4: Five-year multi-symbol run.
-6. Cloud Gate 5: Restart campaign.
-7. Cloud Gate 6: Ten-year single-symbol run.
-8. Cloud Gate 7: Ten-year multi-symbol run.
-9. Cloud Gate 8: Independent ten-year comparison.
+1. Dataset Gate A: OANDA practice dataset build.
+2. Dataset Gate B: Dataset validation.
+3. Cloud Gate 0: Preflight.
+4. Cloud Gate 1: Verify mode.
+5. Cloud Gate 2: Five-year single symbol.
+6. Cloud Gate 3: Repeat and compare five-year single-symbol run.
+7. Cloud Gate 4: Five-year multi-symbol run.
+8. Cloud Gate 5: Restart campaign.
+9. Cloud Gate 6: Ten-year single-symbol run.
+10. Cloud Gate 7: Ten-year multi-symbol run.
+11. Cloud Gate 8: Independent ten-year comparison.
 
 The preferred command wrapper is `scripts/v2-replay/run-gated-cloud-release.sh`. Each invocation runs one explicit stage and exits nonzero on failure.
 
