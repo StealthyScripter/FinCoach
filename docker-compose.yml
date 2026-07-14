@@ -1,7 +1,8 @@
+name: fincoach-${APP_ENV:?APP_ENV is required}
+
 services:
   postgres:
     image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE is required}
-    container_name: ${POSTGRES_CONTAINER_NAME:?POSTGRES_CONTAINER_NAME is required}
     restart: ${POSTGRES_RESTART_POLICY:?POSTGRES_RESTART_POLICY is required}
 
     environment:
@@ -34,7 +35,7 @@ services:
       - work_mem=${POSTGRES_WORK_MEM:?POSTGRES_WORK_MEM is required}
 
     volumes:
-      - fincoach-postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
 
     healthcheck:
       test:
@@ -46,4 +47,5 @@ services:
       start_period: ${POSTGRES_HEALTHCHECK_START_PERIOD:?POSTGRES_HEALTHCHECK_START_PERIOD is required}
 
 volumes:
-  fincoach-postgres-data:
+  postgres-data:
+    name: fincoach-${APP_ENV:?APP_ENV is required}-postgres-data
