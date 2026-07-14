@@ -20,6 +20,8 @@ Availability states:
 
 `GET /api/v2/status` now includes persisted orchestration, pilot, and daily-report fields when durable repositories are provided: latest successful and failed cycles, retry counts, active and stale leases, dead-letter count, pilot state, latest scorecard, latest daily report, delivery state, PostgreSQL health, and module availability.
 
+`GET /api/v2/metrics` exposes the V2 telemetry snapshot for backend operations. It returns bounded metric labels, redacted operational events, telemetry health, and `liveExecutionBlocked: true`. It does not expose credentials, account IDs, Telegram chat IDs, raw provider payloads, or unbounded identifiers.
+
 Collection endpoints preserve the existing JSON envelope and pagination fields. Collections without a durable read projection return `items: []` with `availability: "not_configured"` instead of fabricated demo records.
 
 V2.1 operations projections can consume optional durable evidence repositories for forward tests, signals, external evaluations, journal entries, lessons, lifecycle decisions, courtroom verdicts, and ranking decisions. When those repositories are supplied, the same collection endpoints report `available` or `available_empty` from PostgreSQL-backed evidence instead of fixture data.

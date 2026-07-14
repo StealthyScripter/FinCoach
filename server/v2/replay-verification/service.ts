@@ -4,11 +4,14 @@ import { join } from "path";
 import { ReplayV2Service } from "../replay/service";
 import type { ReplaySourceEvent } from "../replay/contracts";
 import type { DomainEvent } from "../contracts";
+import type { V2TelemetryService } from "../telemetry";
 import type { ReplayVerificationFailure, ReplayVerificationManifest, ReplayVerificationResult } from "./contracts";
 import { canonicalJson, hashReplayDataset, hashReplayManifest, validateReplayManifest } from "./manifest";
 import { requiredReplayArtifacts, validateReplayResult } from "./resultValidator";
 
 export class ReplayVerificationService {
+  constructor(private readonly telemetry?: V2TelemetryService) {}
+
   run(input: { manifest: ReplayVerificationManifest; sourceEvents: ReplaySourceEvent[]; writeArtifacts?: boolean }): ReplayVerificationResult {
     const manifest = validateReplayManifest(input.manifest);
     const started = Date.now();
@@ -51,6 +54,11 @@ export class ReplayVerificationService {
       failures,
       safety: { liveExecutionBlocked: true, brokerCalls: 0, telegramMessages: 0 },
     };
+    this.telemetry?.counter("v2_replay_events_processed_total", input.sourceEvents.length, { module: "replay", operation: "verification", replayMode: manifest.replayMode, resultClass: result.status });
+    this.telemetry?.counter("v2_replay_domain_events_total", domainEvents.length, { module: "replay", operation: "verification", replayMode: manifest.replayMode, resultClass: result.status });
+    this.telemetry?.gauge("v2_replay_checkpoint_count", checkpointCount, { module: "replay", operation: "checkpoint", replayMode: manifest.replayMode });
+    this.telemetry?.histogram("v2_replay_duration_ms", result.durationMs, { module: "replay", operation: "verification", replayMode: manifest.replayMode, resultClass: result.status });
+    this.telemetry?.operationalEvent({ level: result.status === "failed" ? "error" : "info", module: "replay", operation: "verification", result: result.status, schemaVersion: manifest.manifestVersion, durationMs: result.durationMs, details: { runId: result.runId, brokerCalls: result.safety.brokerCalls, telegramMessages: result.safety.telegramMessages } });
     if (input.writeArtifacts) writeReplayArtifacts(manifest, result);
     return result;
   }

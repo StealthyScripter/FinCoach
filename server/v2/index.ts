@@ -9,6 +9,7 @@ export * from "./fundamentals";
 export * from "./observations";
 export * from "./replay";
 export * from "./replay-verification";
+export * from "./telemetry";
 export * from "./trader-emulators";
 export * from "./hypothesis";
 export * from "./rules";

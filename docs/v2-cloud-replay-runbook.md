@@ -38,6 +38,8 @@ The entrypoint:
 - validates result artifacts;
 - preserves output on termination.
 
+Replay verification records V2 telemetry counters, gauges, histograms, and redacted operational events when the runner supplies a telemetry service. Cloud reports should archive the telemetry snapshot with replay artifacts.
+
 ## Full Cloud Verification
 
 ```bash
@@ -57,6 +59,8 @@ npm run v2:replay:validate -- --output artifacts/v2-replay/five-year
 ```
 
 For ten-year or multi-symbol campaigns, use the same flow with a manifest that records the expanded boundaries. Do not claim a campaign completed until the final `summary.json`, `failures.json`, and `report.md` are produced and validated.
+
+Cloud final reports should include throughput, memory, checkpoint latency, retry and dead-letter counts, module latency distribution, temporal violations, deterministic mismatches, lineage failures, and safety state.
 
 ## Resume
 

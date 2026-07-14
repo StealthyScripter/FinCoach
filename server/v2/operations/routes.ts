@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { v2OperationsService, type V2OperationsService } from "./service";
 import type { V2OperationsCollection } from "./contracts";
+import { v2TelemetryService } from "../telemetry";
 
 const routes: [string, V2OperationsCollection][] = [
   ["/api/v2/observations", "observations"],
@@ -21,6 +22,7 @@ const routes: [string, V2OperationsCollection][] = [
 
 export function registerV2OperationsRoutes(app: Express, service: V2OperationsService = v2OperationsService) {
   app.get("/api/v2/status", async (req: Request, res: Response) => send(res, await service.statusAsync({ correlationId: correlationId(req) })));
+  app.get("/api/v2/metrics", async (_req: Request, res: Response) => res.status(200).json({ ...v2TelemetryService.snapshot(), liveExecutionBlocked: true }));
   for (const [path, collection] of routes) {
     app.get(path, async (req: Request, res: Response) => send(res, await service.listAsync(collection, {
       limit: numberParam(req.query.limit),

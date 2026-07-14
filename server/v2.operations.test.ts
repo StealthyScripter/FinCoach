@@ -37,6 +37,7 @@ const app = { routes: [] as string[], get(path: string) { this.routes.push(path)
 registerV2OperationsRoutes(app as never, operations);
 assert.deepEqual(app.routes, [
   "/api/v2/status",
+  "/api/v2/metrics",
   "/api/v2/observations",
   "/api/v2/hypotheses",
   "/api/v2/experiments",

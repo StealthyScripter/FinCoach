@@ -9,6 +9,7 @@ Live execution remains blocked during Version 2 operations.
 Before an extended pilot, operators should confirm:
 
 - `GET /api/v2/status` reports PostgreSQL health as healthy when durable repositories are configured.
+- `GET /api/v2/metrics` reports provider-neutral V2 telemetry health, bounded metrics, and redacted operational events.
 - Unconfigured collections explicitly show `not_configured`.
 - Empty durable collections show `available_empty`.
 - Malformed persisted payloads produce degraded module availability.
