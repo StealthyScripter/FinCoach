@@ -81,6 +81,15 @@ bash scripts/v2-replay/run-five-year-single.sh config/replay-campaigns/five-year
 
 Campaign env files may set `BATCH_SIZE`. Smaller batches reduce retained replay-source memory and increase source reads; larger batches reduce read overhead. Domain results must remain stable across batch size.
 
+Release-candidate cloud execution uses the gated command sequence in `docs/v2-cloud-release-checklist.md`. Five-year and ten-year scripts must be driven by explicit campaign env files and historical dataset manifests. Do not use fixture mode for long historical campaigns.
+
+Every historical campaign must be validated and reported after the run:
+
+```bash
+npm run v2:replay:validate -- --output <OUTPUT_DIR>
+npm run v2:replay:report -- <OUTPUT_DIR>/summary.json
+```
+
 For ten-year or multi-symbol campaigns, use the same flow with a manifest that records the expanded boundaries. Do not claim a campaign completed until the final `summary.json`, `failures.json`, and `report.md` are produced and validated.
 
 Cloud final reports should include throughput, memory, checkpoint latency, retry and dead-letter counts, module latency distribution, temporal violations, deterministic mismatches, lineage failures, and safety state.

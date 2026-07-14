@@ -1,0 +1,74 @@
+# FinCoach V2 Release Readiness
+
+## Scope
+
+This release candidate is certified only for controlled quantitative research, historical replay, deterministic cloud verification, and demo-only research operations.
+
+It is not certified for live trading, unattended broker execution, or production capital deployment.
+
+## Verdict
+
+`ready_with_documented_limitations`
+
+The release-blocking full-materialization defect has been corrected. Historical replay now uses a public bounded `ReplaySource` contract and the historical runner consumes dataset records incrementally. Local verification passed for fixture replay, historical sample replay, batch-size determinism, restart/resume behavior, PostgreSQL storage, and safety scans.
+
+The verdict is not `ready_for_controlled_cloud_replay` because the five-year and ten-year campaigns have not been executed in the separately provisioned cloud environment, and cloud-scale capacity remains unproven.
+
+## Resolved Blockers
+
+- Historical replay no longer requires constructing a full `ReplaySourceEvent[]` before replay starts.
+- Historical mode uses `HistoricalDatasetReplaySource`; fixture generation remains available only for fixture mode.
+- Runtime file support is explicit: JSONL/NDJSON with `none` or `gzip` compression. CSV is rejected until implemented.
+- Replay checkpoints now carry a replay cursor plus a source cursor bound to the dataset manifest hash.
+- Streaming replay state no longer retains all delivered event IDs; it retains the latest source-event marker needed for duplicate protection.
+- Historical resume no longer falls back to fixture events.
+
+## Local Verification Summary
+
+- `npm run check`: passed.
+- `npm test`: passed.
+- `npm run build`: passed.
+- `set -a; source .env; set +a; npm run test:pgstorage`: passed.
+- `server/v2.historical-replay-dataset.test.ts`: passed.
+- 20 repeated historical replay runs: passed.
+- PostgreSQL evidence repository test: passed.
+- PostgreSQL restart recovery test: passed.
+- Shell syntax validation for replay scripts: passed.
+- Safety scans found no broker, Telegram, or external signal path used by replay.
+
+## Release Safety
+
+Replay manifests and scripts require demo-safe state:
+
+- live execution blocked;
+- broker execution disabled;
+- Telegram delivery disabled;
+- external signal publication disabled;
+- dataset validation before historical replay;
+- PostgreSQL verification before cloud campaign execution;
+- nonzero exit on critical result validation failure.
+
+## Deterministic Cloud Gate Sequence
+
+Do not continue past a failed gate.
+
+1. Cloud Gate 0: Preflight.
+2. Cloud Gate 1: Verify mode.
+3. Cloud Gate 2: Five-year single symbol.
+4. Cloud Gate 3: Repeat and compare five-year single-symbol run.
+5. Cloud Gate 4: Five-year multi-symbol run.
+6. Cloud Gate 5: Restart campaign.
+7. Cloud Gate 6: Ten-year single-symbol run.
+8. Cloud Gate 7: Ten-year multi-symbol run.
+9. Cloud Gate 8: Independent ten-year comparison.
+
+## Rollback Guidance
+
+If a cloud gate fails:
+
+1. Stop the campaign.
+2. Preserve `manifest.json`, `manifest.sha256`, checkpoints, logs, and result artifacts.
+3. Run `npm run v2:replay:validate -- --output <OUTPUT_DIR>`.
+4. Classify the failure as environmental, data, deterministic, persistence, resource, safety, or FinCoach defect.
+5. Do not compare deterministic outputs across different commits.
+6. If code is corrected, create a new commit, new run ID, and new manifest.

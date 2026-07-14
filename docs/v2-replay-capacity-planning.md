@@ -15,3 +15,5 @@ Primary cost factors are dataset size, PostgreSQL growth, checkpoint frequency, 
 Historical replay source memory is bounded by `BATCH_SIZE` plus parser/readline buffers. Very small batches increase repeated source scans in the current release-candidate adapter; operators should start at `BATCH_SIZE=1000` and adjust only after observing throughput and memory.
 
 Preflight supports `FINCOACH_REPLAY_MIN_FREE_DISK_GB`, `FINCOACH_REPLAY_MIN_MEMORY_GB`, and `FINCOACH_REPLAY_MIN_POSTGRES_FREE_GB`. The script fails when configured minimums are not met.
+
+Local release verification exercised bounded streaming and restart behavior on fixture-scale and sample historical files. It did not execute five-year or ten-year historical campaigns. Treat the first five-year single-symbol campaign as the capacity baseline and record throughput, memory trend, database growth, checkpoint latency, and artifact growth before increasing symbol count or duration.

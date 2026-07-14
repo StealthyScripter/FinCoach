@@ -29,3 +29,9 @@ For V2.1 durable evidence mode, verify:
 - duplicate records return idempotent results only when the immutable payload is identical;
 - conflicting duplicates are treated as conflicts, not successful updates;
 - malformed persisted rows and unsupported schema versions fail closed.
+
+## Release-Candidate Replay Operation
+
+Historical replay release-candidate operation is limited to controlled research and cloud verification. Before any campaign, confirm live execution is blocked, broker execution is disabled, Telegram delivery is disabled, external signal publication is disabled, PostgreSQL is healthy, and the dataset manifest validates.
+
+Do not continue a cloud gate after a failed validator result. Preserve replay artifacts and checkpoints, classify the failure, and only resume from a manifest whose repository commit, dataset hash, and source cursor match the saved state.
