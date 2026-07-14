@@ -18,6 +18,8 @@ Replay input modes are explicit:
 - `fixture`: uses deterministic local fixture events.
 - `historical`: requires a historical dataset manifest, validates partition hashes, streams records through the historical dataset adapter, and must not call fixture event generation.
 
+Historical replay uses the public replay source contract. The runner requests bounded batches, defaults to batch size `1000`, records source read counts and maximum retained batch size, and persists the source cursor with replay progress. Changing batch size must not change domain output hashes.
+
 ## Local Scope
 
 Local development verification is bounded to deterministic fixtures and moderate stress runs that fit on a laptop. The local suite covers:
@@ -35,6 +37,8 @@ Local development verification is bounded to deterministic fixtures and moderate
 The local medium replay fixture currently uses 48 deterministic source events across `EUR_USD` and `GBP_USD` on `M15`. It is a tooling validation fixture, not a cloud capacity result.
 
 Local historical-file verification uses a small generated dataset fixture with two symbols, two timeframes, candles, an economic event, a revision, a late-arriving correction, multiple partitions, cursor resume, and hash-mismatch coverage. It is not a five-year or ten-year replay.
+
+Local streaming regression also generates a 250-record bounded dataset and verifies that maximum retained batch size stays below the requested batch size.
 
 ## Cloud Scope
 

@@ -68,6 +68,8 @@ Missing artifacts are critical failures.
 - `status`
 - `inputEventCount`
 - `outputEventCount`
+- `sourceReadCount`
+- `maxBatchRetained`
 - `domainEventHash`
 - `checkpointCount`
 - `restartCount`

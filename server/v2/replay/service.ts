@@ -17,6 +17,13 @@ export class ReplayV2Service {
     return { state, events: [event], sourceEvents: sorted };
   }
 
+  startFromSource(config: ReplayConfig, sourceHash: string) {
+    const state: ReplayState = { replayId: config.replayId, clock: config.start, cursor: 0, deliveredEventIds: [], seed: config.seed, status: "running", config };
+    this.repository.save(state);
+    const event = createDomainEvent({ eventType: ReplayV2EventTypes.ReplayStarted, sourceModule: "replay", payload: { replayId: config.replayId, sourceHash }, occurredAt: new Date(config.start) });
+    return { state, events: [event] };
+  }
+
   step(replayId: string, sourceEvents: ReplaySourceEvent[]) {
     const state = this.requireRunning(replayId);
     const sorted = sortReplayEvents(sourceEvents);
@@ -34,6 +41,20 @@ export class ReplayV2Service {
     return { state: advanced, delivered: [next], events: [createDomainEvent({ eventType: ReplayV2EventTypes.ReplayAdvanced, sourceModule: "replay", payload: { replayId, eventId: next.eventId, clock: advanced.clock } })] };
   }
 
+  advanceEvent(replayId: string, event: ReplaySourceEvent, sourceCursor?: unknown) {
+    const state = this.requireRunning(replayId);
+    const clock = new ReplayClock(Date.parse(state.clock));
+    clock.advanceTo(event.publishedAt);
+    if (clock.now() > state.config.end) return this.complete(state);
+    if (!visibleAt(event, clock.now())) {
+      return { state, delivered: [], events: [createDomainEvent({ eventType: ReplayV2EventTypes.ReplayFutureDataBlocked, sourceModule: "replay", payload: { replayId, eventId: event.eventId } })] };
+    }
+    if (state.deliveredEventIds.includes(event.eventId)) throw new Error("Replay resume would duplicate an event");
+    const advanced: ReplayState = { ...state, clock: clock.now(), cursor: state.cursor + 1, sourceCursor, deliveredEventIds: [...state.deliveredEventIds, event.eventId] };
+    this.repository.save(advanced);
+    return { state: advanced, delivered: [event], events: [createDomainEvent({ eventType: ReplayV2EventTypes.ReplayAdvanced, sourceModule: "replay", payload: { replayId, eventId: event.eventId, clock: advanced.clock } })] };
+  }
+
   checkpoint(replayId: string) {
     const state = this.repository.get(replayId);
     if (!state) throw new Error("Replay not found");
@@ -48,6 +69,7 @@ export class ReplayV2Service {
 
   pause(replayId: string) { const state = this.require(replayId); state.status = "paused"; this.repository.save(state); return createDomainEvent({ eventType: ReplayV2EventTypes.ReplayPaused, sourceModule: "replay", payload: { replayId } }); }
   cancel(replayId: string) { const state = this.require(replayId); state.status = "cancelled"; this.repository.save(state); return createDomainEvent({ eventType: ReplayV2EventTypes.ReplayCancelled, sourceModule: "replay", payload: { replayId } }); }
+  completeReplay(replayId: string) { return this.complete(this.requireRunning(replayId)); }
   get(replayId: string) { return this.repository.get(replayId); }
 
   private complete(state: ReplayState) {

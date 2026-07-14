@@ -3,7 +3,7 @@ import { z } from "zod";
 export const historicalPartitionSchema = z.object({
   partitionId: z.string().min(1),
   relativePath: z.string().min(1),
-  format: z.enum(["jsonl", "ndjson", "csv"]),
+  format: z.enum(["jsonl", "ndjson"]),
   compression: z.enum(["none", "gzip"]),
   symbol: z.string().min(1),
   timeframe: z.string().min(1),

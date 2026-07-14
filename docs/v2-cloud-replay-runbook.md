@@ -79,6 +79,8 @@ Historical campaign example:
 bash scripts/v2-replay/run-five-year-single.sh config/replay-campaigns/five-year-single.example.env
 ```
 
+Campaign env files may set `BATCH_SIZE`. Smaller batches reduce retained replay-source memory and increase source reads; larger batches reduce read overhead. Domain results must remain stable across batch size.
+
 For ten-year or multi-symbol campaigns, use the same flow with a manifest that records the expanded boundaries. Do not claim a campaign completed until the final `summary.json`, `failures.json`, and `report.md` are produced and validated.
 
 Cloud final reports should include throughput, memory, checkpoint latency, retry and dead-letter counts, module latency distribution, temporal violations, deterministic mismatches, lineage failures, and safety state.

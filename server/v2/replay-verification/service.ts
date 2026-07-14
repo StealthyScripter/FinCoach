@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { ReplayV2Service } from "../replay/service";
-import type { ReplaySourceEvent } from "../replay/contracts";
+import type { ReplaySource, ReplaySourceCursor, ReplaySourceEvent } from "../replay/contracts";
 import type { DomainEvent } from "../contracts";
 import type { V2TelemetryService } from "../telemetry";
 import type { ReplayVerificationFailure, ReplayVerificationManifest, ReplayVerificationResult } from "./contracts";
@@ -60,6 +60,87 @@ export class ReplayVerificationService {
     this.telemetry?.gauge("v2_replay_checkpoint_count", checkpointCount, { module: "replay", operation: "checkpoint", replayMode: manifest.replayMode });
     this.telemetry?.histogram("v2_replay_duration_ms", result.durationMs, { module: "replay", operation: "verification", replayMode: manifest.replayMode, resultClass: result.status });
     this.telemetry?.operationalEvent({ level: result.status === "failed" ? "error" : "info", module: "replay", operation: "verification", result: result.status, schemaVersion: manifest.manifestVersion, durationMs: result.durationMs, details: { runId: result.runId, brokerCalls: result.safety.brokerCalls, telegramMessages: result.safety.telegramMessages } });
+    if (input.writeArtifacts) writeReplayArtifacts(manifest, result);
+    return result;
+  }
+
+  async runFromSource(input: { manifest: ReplayVerificationManifest; source: ReplaySource; batchSize: number; initialCursor?: ReplaySourceCursor | null; writeArtifacts?: boolean }): Promise<ReplayVerificationResult & { sourceReadCount: number; maxBatchRetained: number; finalSourceCursor: ReplaySourceCursor | null }> {
+    const manifest = validateReplayManifest(input.manifest);
+    const started = Date.now();
+    const failures: ReplayVerificationFailure[] = [];
+    const replay = new ReplayV2Service();
+    const startedReplay = replay.startFromSource({ replayId: manifest.runId, start: manifest.startTime, end: manifest.endTime, mode: "event", seed: manifest.seed, instruments: manifest.symbols, timeframes: manifest.timeframes }, sourceHash(manifest));
+    const domainHash = createHash("sha256");
+    let hashed = 0;
+    const hashEvent = (event: DomainEvent) => {
+      domainHash.update(hashed ? "," : "[");
+      domainHash.update(canonicalJson({ type: event.eventType, payload: event.payload }));
+      hashed += 1;
+    };
+    startedReplay.events.forEach(hashEvent);
+    let inputEventCount = 0;
+    let outputEventCount = startedReplay.events.length;
+    let checkpointCount = 0;
+    let lastCheckpointCursor = 0;
+    let peakHeapMb = heapMb();
+    let sourceCursor = input.initialCursor ?? null;
+    let sourceReadCount = 0;
+    let maxBatchRetained = 0;
+    while (true) {
+      const batch = await input.source.readNext(sourceCursor, input.batchSize);
+      sourceReadCount += 1;
+      maxBatchRetained = Math.max(maxBatchRetained, batch.events.length);
+      for (const sourceEvent of batch.events) {
+        sourceCursor = batch.cursor;
+        const step = replay.advanceEvent(manifest.runId, sourceEvent, sourceCursor);
+        step.events.forEach(hashEvent);
+        inputEventCount += step.delivered.length;
+        outputEventCount += step.events.length;
+        peakHeapMb = Math.max(peakHeapMb, heapMb());
+        if (step.state.status !== "completed" && step.state.cursor > 0 && step.state.cursor !== lastCheckpointCursor && step.state.cursor % manifest.checkpointInterval === 0) {
+          replay.checkpoint(manifest.runId).events.forEach(event => { hashEvent(event); outputEventCount += 1; });
+          checkpointCount += 1;
+          lastCheckpointCursor = step.state.cursor;
+        }
+        if (step.state.cursor > manifest.resourceLimits.maxEvents) {
+          failures.push({ code: "resource_limit_exceeded", severity: "critical", message: "Replay exceeded maxEvents" });
+          break;
+        }
+      }
+      if (failures.some(failure => failure.severity === "critical")) break;
+      if (batch.end) {
+        const state = replay.get(manifest.runId);
+        if (state?.status === "running") {
+          const completed = replay.completeReplay(manifest.runId);
+          completed.events.forEach(hashEvent);
+          outputEventCount += completed.events.length;
+        }
+        break;
+      }
+    }
+    domainHash.update(hashed ? "]" : "[]");
+    const result = {
+      runId: manifest.runId,
+      inputMode: manifest.inputMode,
+      manifestHash: hashReplayManifest(manifest),
+      status: failures.some(failure => failure.severity === "critical") ? "failed" as const : failures.length ? "warning" as const : "passed" as const,
+      inputEventCount,
+      outputEventCount,
+      domainEventHash: domainHash.digest("hex"),
+      checkpointCount,
+      restartCount: manifest.restartSchedule.length,
+      durationMs: Date.now() - started,
+      peakHeapMb,
+      failures,
+      safety: { liveExecutionBlocked: true as const, brokerCalls: 0 as const, telegramMessages: 0 as const },
+      sourceReadCount,
+      maxBatchRetained,
+      finalSourceCursor: sourceCursor,
+    };
+    this.telemetry?.counter("v2_replay_events_processed_total", inputEventCount, { module: "replay", operation: "verification", replayMode: manifest.replayMode, resultClass: result.status });
+    this.telemetry?.counter("v2_replay_domain_events_total", outputEventCount, { module: "replay", operation: "verification", replayMode: manifest.replayMode, resultClass: result.status });
+    this.telemetry?.gauge("v2_replay_checkpoint_count", checkpointCount, { module: "replay", operation: "checkpoint", replayMode: manifest.replayMode });
+    this.telemetry?.histogram("v2_replay_duration_ms", result.durationMs, { module: "replay", operation: "verification", replayMode: manifest.replayMode, resultClass: result.status });
     if (input.writeArtifacts) writeReplayArtifacts(manifest, result);
     return result;
   }
@@ -127,4 +208,8 @@ function writeReplayArtifacts(manifest: ReplayVerificationManifest, result: Repl
 
 function heapMb() {
   return Math.round((process.memoryUsage().heapUsed / 1024 / 1024) * 100) / 100;
+}
+
+function sourceHash(manifest: ReplayVerificationManifest) {
+  return manifest.historicalDataset?.manifestHash ?? Object.values(manifest.datasetHashes).join(":");
 }
