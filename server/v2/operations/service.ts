@@ -1,18 +1,37 @@
 import { createHash, randomUUID } from "crypto";
 import { createDomainEvent } from "../contracts";
 import { orchestrationV2Service } from "../orchestration";
-import type { PgOrchestrationRepository } from "../orchestration/pgRepository";
-import type { PgDemoResearchPilotRepository } from "../pilot/pgRepository";
 import { V2PersistenceError } from "../persistence/errors";
 import type { V2DailyResearchReport, V2OperationsAvailability, V2OperationsCollection, V2OperationsQuery, V2OperationsResponse } from "./contracts";
 import { V2OperationsEventTypes } from "./events";
 import { InMemoryV2OperationsRepository, type DailyReportDeliveryRecord, type DailyReportRecord } from "./repository";
-import type { PgV2OperationsRepository } from "./pgRepository";
+import type { DurableWorkerLease, ResearchCycleRecord } from "../orchestration/contracts";
+import type { DemoResearchPilotRecord } from "../pilot/contracts";
 
 type ProjectionRepositories = {
-  operations?: PgV2OperationsRepository | InMemoryV2OperationsRepository;
-  orchestration?: PgOrchestrationRepository;
-  pilot?: PgDemoResearchPilotRepository;
+  operations?: DurableOperationsProjectionRepository | InMemoryV2OperationsRepository;
+  orchestration?: OrchestrationProjectionRepository;
+  pilot?: PilotProjectionRepository;
+};
+
+type OrchestrationProjectionRepository = {
+  latestCycle(status?: ResearchCycleRecord["status"]): Promise<ResearchCycleRecord | null>;
+  retryCounts(): Promise<{ pending: number; exhausted: number }>;
+  activeLeases(now: Date): Promise<DurableWorkerLease[]>;
+  staleLeases(now: Date): Promise<DurableWorkerLease[]>;
+  deadLetterCount(): Promise<number>;
+  listCycles(input: { limit: number; offset: number; status?: string }): Promise<{ items: ResearchCycleRecord[]; total: number }>;
+};
+
+type PilotProjectionRepository = {
+  list(): Promise<DemoResearchPilotRecord[]>;
+};
+
+type DurableOperationsProjectionRepository = {
+  latestReport(): Promise<DailyReportRecord | null>;
+  getReportByDate(reportDate: string): Promise<DailyReportRecord | null>;
+  saveReport(record: DailyReportRecord): Promise<{ inserted: boolean; record: DailyReportRecord }>;
+  saveDelivery(record: DailyReportDeliveryRecord): Promise<{ inserted: boolean; record: DailyReportDeliveryRecord }>;
 };
 
 type CollectionProjection = {
@@ -313,7 +332,7 @@ export class V2OperationsService {
     return this.repositories.operations instanceof InMemoryV2OperationsRepository ? this.repositories.operations : null;
   }
 
-  private asyncOperationsRepository(): PgV2OperationsRepository | null {
+  private asyncOperationsRepository(): DurableOperationsProjectionRepository | null {
     return this.repositories.operations && !(this.repositories.operations instanceof InMemoryV2OperationsRepository) ? this.repositories.operations : null;
   }
 
