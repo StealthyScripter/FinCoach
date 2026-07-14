@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { execFileSync } from "child_process";
 import { gzipSync } from "zlib";
+import { ReplayV2Service } from "./v2/replay";
 import {
   hashFile,
   hashHistoricalDatasetManifest,
@@ -165,6 +166,13 @@ const largeResult = await new ReplayVerificationService().runFromSource({ manife
 assert.equal(largeResult.inputEventCount, 250);
 assert.ok(largeResult.maxBatchRetained <= 7);
 assert.ok(largeResult.sourceReadCount >= 36);
+
+const replay = new ReplayV2Service();
+replay.startFromSource({ replayId: "stream-retention", start: largeRecords[0].publicationTime, end: largeRecords.at(-1)!.publicationTime, mode: "event", seed: 1, instruments: ["EUR_USD"], timeframes: ["M15"] }, largeHash);
+for (let index = 0; index < 25; index += 1) {
+  replay.advanceEvent("stream-retention", { eventId: `retained-${index}`, sourceId: "retention", priority: 1, effectiveAt: largeRecords[index].effectiveTime, publishedAt: largeRecords[index].publicationTime, type: "historical.candle", payload: {} }, { schemaVersion: "fincoach.v2.replay-source.historical-dataset.1", sourceId: "retention", position: index + 1, lastEventId: `retained-${index}`, lastOrderingKey: `retained-${index}` });
+}
+assert.ok((replay.get("stream-retention")?.deliveredEventIds.length ?? 0) <= 1);
 
 console.log("v2 historical replay dataset tests passed", JSON.stringify({ range: "2020-01-01T00:00:00.000Z/2020-01-01T03:00:00.000Z", symbols: ["EUR_USD", "GBP_USD"], timeframes: ["M15", "H1"], partitions: 3, input: result.inputEventCount, output: result.outputEventCount, checkpoints: result.checkpointCount, restarts: result.restartCount, deterministic: true, safety: result.safety }));
 

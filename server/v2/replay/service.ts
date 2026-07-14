@@ -49,8 +49,10 @@ export class ReplayV2Service {
     if (!visibleAt(event, clock.now())) {
       return { state, delivered: [], events: [createDomainEvent({ eventType: ReplayV2EventTypes.ReplayFutureDataBlocked, sourceModule: "replay", payload: { replayId, eventId: event.eventId } })] };
     }
-    if (state.deliveredEventIds.includes(event.eventId)) throw new Error("Replay resume would duplicate an event");
-    const advanced: ReplayState = { ...state, clock: clock.now(), cursor: state.cursor + 1, sourceCursor, deliveredEventIds: [...state.deliveredEventIds, event.eventId] };
+    const streaming = sourceCursor !== undefined;
+    const previousSourceCursor = state.sourceCursor as { lastEventId?: string } | undefined;
+    if (streaming ? previousSourceCursor?.lastEventId === event.eventId : state.deliveredEventIds.includes(event.eventId)) throw new Error("Replay resume would duplicate an event");
+    const advanced: ReplayState = { ...state, clock: clock.now(), cursor: state.cursor + 1, sourceCursor, deliveredEventIds: streaming ? [event.eventId] : [...state.deliveredEventIds, event.eventId] };
     this.repository.save(advanced);
     return { state: advanced, delivered: [event], events: [createDomainEvent({ eventType: ReplayV2EventTypes.ReplayAdvanced, sourceModule: "replay", payload: { replayId, eventId: event.eventId, clock: advanced.clock } })] };
   }
@@ -75,7 +77,7 @@ export class ReplayV2Service {
   private complete(state: ReplayState) {
     const completed = { ...state, status: "completed" as const };
     this.repository.save(completed);
-    return { state: completed, delivered: [], events: [createDomainEvent({ eventType: ReplayV2EventTypes.ReplayCompleted, sourceModule: "replay", payload: { replayId: state.replayId, delivered: state.deliveredEventIds.length } })] };
+    return { state: completed, delivered: [], events: [createDomainEvent({ eventType: ReplayV2EventTypes.ReplayCompleted, sourceModule: "replay", payload: { replayId: state.replayId, delivered: state.cursor } })] };
   }
   private requireRunning(replayId: string) { const state = this.require(replayId); if (state.status !== "running") throw new Error("Replay is not running"); return state; }
   private require(replayId: string) { const state = this.repository.get(replayId); if (!state) throw new Error("Replay not found"); return state; }

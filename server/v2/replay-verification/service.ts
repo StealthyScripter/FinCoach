@@ -7,6 +7,7 @@ import type { DomainEvent } from "../contracts";
 import type { V2TelemetryService } from "../telemetry";
 import type { ReplayVerificationFailure, ReplayVerificationManifest, ReplayVerificationResult } from "./contracts";
 import { canonicalJson, hashReplayDataset, hashReplayManifest, validateReplayManifest } from "./manifest";
+import { orderingKey } from "./replaySource";
 import { requiredReplayArtifacts, validateReplayResult } from "./resultValidator";
 
 export class ReplayVerificationService {
@@ -91,8 +92,9 @@ export class ReplayVerificationService {
       sourceReadCount += 1;
       maxBatchRetained = Math.max(maxBatchRetained, batch.events.length);
       for (const sourceEvent of batch.events) {
-        sourceCursor = batch.cursor;
-        const step = replay.advanceEvent(manifest.runId, sourceEvent, sourceCursor);
+        const eventCursor = { ...(batch.cursor ?? sourceCursor ?? { schemaVersion: input.source.schemaVersion, sourceId: input.source.sourceId, position: 0, lastEventId: null, lastOrderingKey: null }), position: (sourceCursor?.position ?? 0) + 1, lastEventId: sourceEvent.eventId, lastOrderingKey: orderingKey(sourceEvent) };
+        sourceCursor = eventCursor;
+        const step = replay.advanceEvent(manifest.runId, sourceEvent, eventCursor);
         step.events.forEach(hashEvent);
         inputEventCount += step.delivered.length;
         outputEventCount += step.events.length;
