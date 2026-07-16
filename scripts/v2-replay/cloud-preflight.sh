@@ -6,6 +6,8 @@ DATASET_MANIFEST="${DATASET_MANIFEST:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-artifacts/v2-replay/preflight}"
 MIN_FREE_DISK_GB="${FINCOACH_REPLAY_MIN_FREE_DISK_GB:-1}"
 MIN_MEMORY_GB="${FINCOACH_REPLAY_MIN_MEMORY_GB:-1}"
+DB_BACKUP_PATH="${FINCOACH_DB_BACKUP_PATH:-}"
+DB_BACKUP_SHA256_PATH="${FINCOACH_DB_BACKUP_SHA256_PATH:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -14,6 +16,8 @@ while [[ $# -gt 0 ]]; do
     --output) OUTPUT_DIR="$2"; shift 2 ;;
     --min-free-disk-gb) MIN_FREE_DISK_GB="$2"; shift 2 ;;
     --min-memory-gb) MIN_MEMORY_GB="$2"; shift 2 ;;
+    --backup) DB_BACKUP_PATH="$2"; shift 2 ;;
+    --checksum) DB_BACKUP_SHA256_PATH="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -24,12 +28,17 @@ if [[ -n "$EXPECTED_COMMIT" && "$commit" != "$EXPECTED_COMMIT"* ]]; then echo "u
 if [[ -z "${PACKAGED_DEPLOYMENT:-}" && -n "$(git status --short)" ]]; then echo "working tree is not clean" >&2; exit 1; fi
 node --version >/dev/null
 npm --version >/dev/null
-node -e 'const scripts=require("./package.json").scripts||{}; for (const name of ["v2:replay:prepare","v2:replay:run","v2:replay:validate"]) if (!scripts[name]) process.exit(1)'
+node -e 'const scripts=require("./package.json").scripts||{}; for (const name of ["v2:replay:prepare","v2:replay:run","v2:replay:validate","db:migrate:status","db:migrate:verify","db:restore:verify"]) if (!scripts[name]) process.exit(1)'
 test "${FINCOACH_LIVE_EXECUTION:-blocked}" != "enabled" || { echo "live execution enabled" >&2; exit 1; }
 test "${BROKER_EXECUTION_ENABLED:-false}" != "true" || { echo "broker execution enabled" >&2; exit 1; }
 test "${TELEGRAM_DELIVERY_ENABLED:-false}" != "true" || { echo "telegram delivery enabled" >&2; exit 1; }
 test "${EXTERNAL_SIGNAL_PUBLICATION_ENABLED:-false}" != "true" || { echo "external signal publication enabled" >&2; exit 1; }
 test -n "${DATABASE_URL:-}" || { echo "DATABASE_URL missing" >&2; exit 1; }
+test -n "$DB_BACKUP_PATH" || { echo "FINCOACH_DB_BACKUP_PATH or --backup is required" >&2; exit 1; }
+test -n "$DB_BACKUP_SHA256_PATH" || { echo "FINCOACH_DB_BACKUP_SHA256_PATH or --checksum is required" >&2; exit 1; }
+npm run db:restore:verify -- --backup "$DB_BACKUP_PATH" --checksum "$DB_BACKUP_SHA256_PATH" >/tmp/fincoach-db-restore-verify.json
+npm run db:migrate:status >/tmp/fincoach-db-migrate-status.json
+npm run db:migrate:verify >/dev/null
 mkdir -p "$OUTPUT_DIR"
 test -w "$OUTPUT_DIR" || { echo "output directory not writable" >&2; exit 1; }
 free_disk_gb="$(df -BG "$OUTPUT_DIR" | awk 'NR==2 { gsub(/G/, "", $4); print $4 }')"

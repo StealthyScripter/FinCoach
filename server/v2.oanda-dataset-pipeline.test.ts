@@ -8,6 +8,7 @@ import { HistoricalDatasetReplaySource, loadHistoricalDatasetManifest, ReplayVer
 async function main() {
 const output = "artifacts/v2-replay/oanda-dataset-test";
 rmSync(output, { recursive: true, force: true });
+for (const suffix of ["retry", "auth", "csv", "count", "unsupported"]) rmSync(`${output}-${suffix}`, { recursive: true, force: true });
 
 assert.equal(oandaGranularity("1m"), "M1");
 assert.equal(oandaGranularity("5m"), "M5");
@@ -127,6 +128,86 @@ assert.equal(replay.status, "passed", JSON.stringify(replay.failures));
 assert.equal(replay.safety.brokerCalls, 0);
 assert.equal(replay.safety.telegramMessages, 0);
 
+const retrySleeps: number[] = [];
+const transientClient = new TransientOandaClient();
+const retryResult = await new OandaHistoricalDatasetBuilder({ env: safeEnv(), client: transientClient, now: () => new Date("2026-01-01T00:00:00.000Z"), sleeper: async (ms) => { retrySleeps.push(ms); } }).build({
+  schemaVersion: "fincoach.v2.oanda-dataset-build-request.1",
+  provider: "oanda",
+  environment: "practice",
+  symbols: ["EUR_USD"],
+  timeframes: ["15m"],
+  startTime: "2020-01-03T21:00:00.000Z",
+  endTime: "2020-01-03T21:15:00.000Z",
+  priceComponent: "bid_ask",
+  outputDirectory: `${output}-retry`,
+  partitionPolicy: { strategy: "symbol_timeframe", format: "jsonl", compression: "none", maxRecordsPerPartition: 1000 },
+  resume: false,
+  overwrite: false,
+  maxCandlesPerRequest: 1,
+  rateLimitMs: 0,
+  maxRetries: 2,
+  allowIncompleteFinalCandle: false,
+});
+assert.equal(retryResult.validationStatus, "passed");
+assert.deepEqual(retrySleeps, [250]);
+
+await assert.rejects(new OandaHistoricalDatasetBuilder({ env: safeEnv(), client: new AuthFailureOandaClient(), now: () => new Date("2026-01-01T00:00:00.000Z"), sleeper: async () => { throw new Error("auth failure should not sleep"); } }).build({
+  schemaVersion: "fincoach.v2.oanda-dataset-build-request.1",
+  provider: "oanda",
+  environment: "practice",
+  symbols: ["EUR_USD"],
+  timeframes: ["15m"],
+  startTime: "2020-01-03T21:00:00.000Z",
+  endTime: "2020-01-03T21:15:00.000Z",
+  priceComponent: "bid_ask",
+  outputDirectory: `${output}-auth`,
+  partitionPolicy: { strategy: "symbol_timeframe", format: "jsonl", compression: "none", maxRecordsPerPartition: 1000 },
+  resume: false,
+  overwrite: false,
+  maxCandlesPerRequest: 1,
+  rateLimitMs: 0,
+  maxRetries: 2,
+  allowIncompleteFinalCandle: false,
+}), /401/);
+
+await assert.rejects(new OandaHistoricalDatasetBuilder({ env: safeEnv(), client, now: () => new Date("2026-01-01T00:00:00.000Z") }).build({
+  schemaVersion: "fincoach.v2.oanda-dataset-build-request.1",
+  provider: "oanda",
+  environment: "practice",
+  symbols: ["EUR_USD"],
+  timeframes: ["15m"],
+  startTime: "2020-01-03T21:00:00.000Z",
+  endTime: "2020-01-03T21:15:00.000Z",
+  priceComponent: "bid_ask",
+  outputDirectory: `${output}-csv`,
+  partitionPolicy: { strategy: "symbol_timeframe", format: "csv" as "jsonl", compression: "none", maxRecordsPerPartition: 1000 },
+  resume: false,
+  overwrite: false,
+  maxCandlesPerRequest: 1,
+  rateLimitMs: 0,
+  maxRetries: 2,
+  allowIncompleteFinalCandle: false,
+}), /Invalid enum value|invalid/i);
+
+await assert.rejects(new OandaHistoricalDatasetBuilder({ env: safeEnv(), client, now: () => new Date("2026-01-01T00:00:00.000Z") }).build({
+  schemaVersion: "fincoach.v2.oanda-dataset-build-request.1",
+  provider: "oanda",
+  environment: "practice",
+  symbols: ["EUR_USD"],
+  timeframes: ["15m"],
+  startTime: "2020-01-03T21:00:00.000Z",
+  endTime: "2020-01-03T21:15:00.000Z",
+  priceComponent: "bid_ask",
+  outputDirectory: `${output}-count`,
+  partitionPolicy: { strategy: "symbol_timeframe", format: "jsonl", compression: "none", maxRecordsPerPartition: 1000 },
+  resume: false,
+  overwrite: false,
+  maxCandlesPerRequest: 5001,
+  rateLimitMs: 0,
+  maxRetries: 2,
+  allowIncompleteFinalCandle: false,
+}), /too_big|Number must be less than or equal to 5000|5000/i);
+
 await assert.rejects(new OandaHistoricalDatasetBuilder({ env: safeEnv(), client, now: () => new Date("2026-01-01T00:00:00.000Z") }).build({ ...{
   schemaVersion: "fincoach.v2.oanda-dataset-build-request.1" as const,
   provider: "oanda" as const,
@@ -171,6 +252,25 @@ class MockOandaClient implements OandaHistoricalClient {
     const candles: OandaRawCandle[] = [0, 1, 1, 2].map((index) => candle(input.instrument, new Date(start + index * step).toISOString(), index));
     candles.push({ ...candle(input.instrument, new Date(start + 3 * step).toISOString(), 3), complete: false });
     return { candles, requestId: `request-${this.calls.length}`, retryAfterMs: null };
+  }
+}
+
+class TransientOandaClient extends MockOandaClient {
+  failed = false;
+  async fetchCandles(input: { instrument: string; granularity: string; from: string; to: string; price: string; count: number }) {
+    if (!this.failed) {
+      this.failed = true;
+      const error = new Error("socket hang up");
+      (error as Error & { code: string }).code = "ECONNRESET";
+      throw error;
+    }
+    return super.fetchCandles(input);
+  }
+}
+
+class AuthFailureOandaClient extends MockOandaClient {
+  async fetchCandles() {
+    throw new Error("OANDA historical candles failed with status 401");
   }
 }
 

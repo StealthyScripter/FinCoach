@@ -12,6 +12,8 @@ set -a
 source .env
 set +a
 npm run test:pgstorage
-npm run db:push
+npm run db:restore:verify -- --backup "${FINCOACH_DB_BACKUP_PATH:?set FINCOACH_DB_BACKUP_PATH}" --checksum "${FINCOACH_DB_BACKUP_SHA256_PATH:?set FINCOACH_DB_BACKUP_SHA256_PATH}"
+npm run db:migrate:status
+npm run db:migrate:verify
 npm run v2:replay:verify
 npm run v2:replay:validate -- --output "$REPLAY_OUTPUT_DIR"

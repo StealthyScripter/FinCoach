@@ -7,9 +7,15 @@ Usage:
   scripts/v2-replay/run-gated-cloud-release.sh <stage> [args]
 
 Stages:
-  preflight              --expected-commit <commit> --dataset-manifest <path> --output <dir> --min-free-disk-gb <gb> --min-memory-gb <gb>
+  backup                 --output-dir <dir>
+  backup-verify          --backup <dump> --checksum <sha256>
+  migration-status
+  migration-baseline     --backup <dump> --checksum <sha256> [--all-equivalent]
+  migration-apply        --backup <dump> --checksum <sha256>
+  migration-verify
   dataset-build          --config <env-file>
   dataset-validate       --dataset-manifest <path>
+  preflight              --expected-commit <commit> --dataset-manifest <path> --output <dir> --min-free-disk-gb <gb> --min-memory-gb <gb> --backup <dump> --checksum <sha256>
   verify                 --output <dir>
   five-year-single       --config <env-file>
   five-year-repeat       --config <env-file>
@@ -110,7 +116,42 @@ case "$stage" in
     output="$(required_arg --output "$@")"
     min_disk="$(required_arg --min-free-disk-gb "$@")"
     min_memory="$(required_arg --min-memory-gb "$@")"
-    run bash scripts/v2-replay/cloud-preflight.sh --expected-commit "$expected_commit" --dataset-manifest "$dataset_manifest" --output "$output" --min-free-disk-gb "$min_disk" --min-memory-gb "$min_memory"
+    backup="$(required_arg --backup "$@")"
+    checksum="$(required_arg --checksum "$@")"
+    run bash scripts/v2-replay/cloud-preflight.sh --expected-commit "$expected_commit" --dataset-manifest "$dataset_manifest" --output "$output" --min-free-disk-gb "$min_disk" --min-memory-gb "$min_memory" --backup "$backup" --checksum "$checksum"
+    ;;
+  backup)
+    output_dir="$(required_arg --output-dir "$@")"
+    run_env FINCOACH_DB_BACKUP_DIR "$output_dir" npm run db:backup
+    ;;
+  backup-verify)
+    backup="$(required_arg --backup "$@")"
+    checksum="$(required_arg --checksum "$@")"
+    run npm run db:restore:verify -- --backup "$backup" --checksum "$checksum"
+    ;;
+  migration-status)
+    run npm run db:migrate:status
+    ;;
+  migration-baseline)
+    backup="$(required_arg --backup "$@")"
+    checksum="$(required_arg --checksum "$@")"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      printf 'DRY_RUN npm run db:migrate:baseline -- --all-equivalent --backup %q --checksum %q\n' "$backup" "$checksum"
+    else
+      npm run db:migrate:baseline -- --all-equivalent --backup "$backup" --checksum "$checksum"
+    fi
+    ;;
+  migration-apply)
+    backup="$(required_arg --backup "$@")"
+    checksum="$(required_arg --checksum "$@")"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      printf 'DRY_RUN FINCOACH_DB_BACKUP_PATH=%q FINCOACH_DB_BACKUP_SHA256_PATH=%q npm run db:migrate\n' "$backup" "$checksum"
+    else
+      FINCOACH_DB_BACKUP_PATH="$backup" FINCOACH_DB_BACKUP_SHA256_PATH="$checksum" npm run db:migrate
+    fi
+    ;;
+  migration-verify)
+    run npm run db:migrate:verify
     ;;
   dataset-build)
     config="$(required_arg --config "$@")"

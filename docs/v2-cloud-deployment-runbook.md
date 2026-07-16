@@ -46,10 +46,17 @@ source .env
 set +a
 
 npm run test:pgstorage
-npm run db:push
+npm run db:backup
+export FINCOACH_DB_BACKUP_PATH=<ABSOLUTE_BACKUP_DUMP_OUTSIDE_REPO>
+export FINCOACH_DB_BACKUP_SHA256_PATH=<ABSOLUTE_BACKUP_SHA256>
+npm run db:restore:verify -- --backup "$FINCOACH_DB_BACKUP_PATH" --checksum "$FINCOACH_DB_BACKUP_SHA256_PATH"
+npm run db:migrate:assess
+npm run db:migrate
+npm run db:migrate:status
+npm run db:migrate:verify
 ```
 
-`npm run db:push` is the repository migration command currently exposed for this deployment path.
+Never run schema push against production. `npm run db:migrate` is the only production deployment migration-apply command. If `db:migrate:assess` shows `schema_equivalent_without_ledger`, use `npm run db:migrate:baseline` instead of applying SQL. Do not choose baseline automatically.
 
 ## Gated Release Campaign
 

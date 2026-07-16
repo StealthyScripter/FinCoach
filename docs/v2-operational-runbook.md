@@ -4,6 +4,17 @@ Operators should monitor queue depth, active leases, stale lease recovery, open 
 
 Live execution remains blocked during Version 2 operations.
 
+## Database Migration Checks
+
+Production migration state is operationally blocking. Before replay, pilot, or cloud verification gates:
+
+- `npm run db:migrate:status` must show no partial migrations, no checksum mismatches, and no unexpected pending migrations.
+- `npm run db:migrate:verify` must pass noninteractively.
+- `npm run db:backup` must be run before applying any pending migration, and `FINCOACH_DB_BACKUP_PATH` plus `FINCOACH_DB_BACKUP_SHA256_PATH` must point to a verified backup artifact for `npm run db:migrate`.
+- destructive DDL is rejected unless an incident-approved `FINCOACH_DB_BREAK_GLASS_DESTRUCTIVE_DDL=true` break-glass process is used.
+
+Schema push is local-disposable tooling only and is not part of operations.
+
 ## Read Projection Checks
 
 Before an extended pilot, operators should confirm:

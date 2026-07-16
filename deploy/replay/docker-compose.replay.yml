@@ -11,6 +11,9 @@ services:
       TELEGRAM_DELIVERY_ENABLED: "false"
       EXTERNAL_SIGNAL_PUBLICATION_ENABLED: "false"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL outside the repository}
+      FINCOACH_DB_BACKUP_PATH: ${FINCOACH_DB_BACKUP_PATH:-}
+      FINCOACH_DB_BACKUP_SHA256_PATH: ${FINCOACH_DB_BACKUP_SHA256_PATH:-}
+      FINCOACH_DB_BACKUP_MAX_AGE_HOURS: ${FINCOACH_DB_BACKUP_MAX_AGE_HOURS:-24}
     volumes:
       - /data/fincoach/datasets:/data/fincoach/datasets:ro
       - /var/lib/fincoach/replay:/var/lib/fincoach/replay

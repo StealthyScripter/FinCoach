@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
-import { execFileSync, spawnSync } from "child_process";
+import { execFileSync } from "child_process";
 import { gzipSync } from "zlib";
 import { ReplayV2Service } from "./v2/replay";
 import {
@@ -131,14 +131,22 @@ assert.equal(result.inputEventCount, 4);
 assert.equal(result.safety.brokerCalls, 0);
 assert.equal(result.safety.telegramMessages, 0);
 assert.equal(validateReplayResult(result, [...requiredReplayArtifacts(), "dataset-manifest.json", "dataset-manifest.sha256", "partition-validation.json", "input-summary.json", "telemetry-snapshot.json"]).ok, true);
-writeFileSync(join(root, "run", "input-summary.json"), `${JSON.stringify({ cursor: { position: result.inputEventCount }, inputEventCount: result.inputEventCount }, null, 2)}\n`);
+const completedCursorSource = new HistoricalDatasetReplaySource({ manifest: loaded.manifest, manifestHash: loaded.manifestHash, rootDirectory: loaded.rootDirectory, start: replayManifest.startTime, end: replayManifest.endTime, symbols: ["EUR_USD"], timeframes: ["M15"] });
+const completedCursor = (await completedCursorSource.readNext(null, 100)).cursor;
+writeFileSync(join(root, "run", "input-summary.json"), `${JSON.stringify({ cursor: completedCursor, inputEventCount: result.inputEventCount }, null, 2)}\n`);
 execFileSync("./node_modules/.bin/tsx", ["scripts/v2-replay/resume-long-replay.ts", "--manifest", join(root, "run", "manifest.json")], { encoding: "utf8" });
 const preservedSummary = JSON.parse(readFileSync(join(root, "run", "summary.json"), "utf8"));
 assert.equal(preservedSummary.inputEventCount, result.inputEventCount);
-writeFileSync(join(root, "run", "input-summary.json"), `${JSON.stringify({ cursor: { position: 1 }, inputEventCount: result.inputEventCount }, null, 2)}\n`);
-const partialResume = spawnSync("./node_modules/.bin/tsx", ["scripts/v2-replay/resume-long-replay.ts", "--manifest", join(root, "run", "manifest.json")], { encoding: "utf8" });
-assert.notEqual(partialResume.status, 0);
-assert.match(partialResume.stderr, /partial historical resume requires durable replay state/);
+const baselineSource = new HistoricalDatasetReplaySource({ manifest: loaded.manifest, manifestHash: loaded.manifestHash, rootDirectory: loaded.rootDirectory, start: replayManifest.startTime, end: replayManifest.endTime, symbols: ["EUR_USD"], timeframes: ["M15"] });
+const uninterrupted = await new ReplayVerificationService().runFromSource({ manifest: replayManifest, source: baselineSource, batchSize: 2 });
+const partialCursorSource = new HistoricalDatasetReplaySource({ manifest: loaded.manifest, manifestHash: loaded.manifestHash, rootDirectory: loaded.rootDirectory, start: replayManifest.startTime, end: replayManifest.endTime, symbols: ["EUR_USD"], timeframes: ["M15"] });
+const partialCursor = (await partialCursorSource.readNext(null, 1)).cursor;
+writeFileSync(join(root, "run", "summary.json"), `${JSON.stringify({ ...preservedSummary, status: "failed" }, null, 2)}\n`);
+writeFileSync(join(root, "run", "input-summary.json"), `${JSON.stringify({ cursor: partialCursor, inputEventCount: result.inputEventCount }, null, 2)}\n`);
+const partialResume = execFileSync("./node_modules/.bin/tsx", ["scripts/v2-replay/resume-long-replay.ts", "--manifest", join(root, "run", "manifest.json"), "--batch-size", "1"], { encoding: "utf8" });
+assert.match(partialResume, /"resumed":true/);
+const resumedSummary = JSON.parse(readFileSync(join(root, "run", "summary.json"), "utf8"));
+assert.equal(resumedSummary.status, "passed");
 assert.equal(execFileSync("git", ["check-ignore", `${root}/run/summary.json`], { encoding: "utf8" }).trim(), `${root}/run/summary.json`);
 
 const hashes = [];
@@ -151,6 +159,7 @@ for (const batchSize of [1, 2, 10, 100]) {
   hashes.push(streaming.domainEventHash);
 }
 assert.equal(new Set(hashes).size, 1);
+assert.equal(resumedSummary.domainEventHash, uninterrupted.domainEventHash);
 
 const cursorSource = new HistoricalDatasetReplaySource({ manifest: loaded.manifest, manifestHash: loaded.manifestHash, rootDirectory: loaded.rootDirectory, start: replayManifest.startTime, end: replayManifest.endTime, symbols: ["EUR_USD"], timeframes: ["M15"] });
 const firstBatch = await cursorSource.readNext(null, 2);

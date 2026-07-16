@@ -35,8 +35,17 @@ source .env
 set +a
 
 npm run test:pgstorage
-npm run db:push
+npm run db:backup
+export FINCOACH_DB_BACKUP_PATH=<ABSOLUTE_BACKUP_DUMP_OUTSIDE_REPO>
+export FINCOACH_DB_BACKUP_SHA256_PATH=<ABSOLUTE_BACKUP_SHA256>
+npm run db:restore:verify -- --backup "$FINCOACH_DB_BACKUP_PATH" --checksum "$FINCOACH_DB_BACKUP_SHA256_PATH"
+npm run db:migrate:assess
+npm run db:migrate
+npm run db:migrate:status
+npm run db:migrate:verify
 ```
+
+If assessment reports equivalent schema without ledger rows, run the explicit `migration-baseline` cloud gate. If it reports real pending migrations, run `migration-apply`. Do not run both for the same decision point.
 
 ## Cloud Gate 0: Preflight
 

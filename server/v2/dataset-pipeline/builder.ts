@@ -12,7 +12,7 @@ const BUILDER_VERSION = "fincoach.v2.oanda-dataset-builder.1";
 
 export class OandaHistoricalDatasetBuilder {
   private readonly marketData = new MarketDataV2Service();
-  constructor(private readonly input: { env?: OandaDatasetBuildEnv; client?: OandaHistoricalClient; fetchImpl?: typeof fetch; now?: () => Date } = {}) {}
+  constructor(private readonly input: { env?: OandaDatasetBuildEnv; client?: OandaHistoricalClient; fetchImpl?: typeof fetch; now?: () => Date; sleeper?: (ms: number) => Promise<void> } = {}) {}
 
   async build(requestInput: HistoricalDatasetBuildRequest): Promise<HistoricalDatasetBuildResult> {
     const request = historicalDatasetBuildRequestSchema.parse(requestInput);
@@ -47,7 +47,7 @@ export class OandaHistoricalDatasetBuilder {
           const windowFile = join(windowsDirectory, `${hashString(windowKey)}.jsonl`);
           windowFiles.push({ order: windowKey, path: windowFile });
           if (completedWindows.has(windowKey) && existsSync(windowFile)) continue;
-          const page = await fetchWithRetry(client, { instrument: providerSymbol, granularity, from: window.from, to: window.to, price: oandaPriceParameter(request.priceComponent), count: request.maxCandlesPerRequest }, request.maxRetries);
+          const page = await fetchWithRetry(client, { instrument: providerSymbol, granularity, from: window.from, to: window.to, price: oandaPriceParameter(request.priceComponent), count: request.maxCandlesPerRequest }, request.maxRetries, this.input.sleeper);
           if (page.requestId) requestIdLog.push(page.requestId);
           const records = page.candles.flatMap((raw, index) => {
             try {
@@ -63,7 +63,7 @@ export class OandaHistoricalDatasetBuilder {
           requestsCompleted += 1;
           completedWindows.add(windowKey);
           writeFileSync(checkpointPath, `${JSON.stringify({ schemaVersion: "fincoach.v2.oanda-dataset-checkpoint.1", configHash, datasetId, datasetVersion, completedWindows: [...completedWindows].sort(), requestsCompleted, updatedAt: now(this.input).toISOString() }, null, 2)}\n`);
-          await waitForRateLimit(request.rateLimitMs);
+          await pause(request.rateLimitMs, this.input.sleeper);
         }
       }
     }
@@ -100,17 +100,42 @@ export class OandaHistoricalDatasetBuilder {
   }
 }
 
-async function fetchWithRetry(client: OandaHistoricalClient, input: Parameters<OandaHistoricalClient["fetchCandles"]>[0], maxRetries: number) {
+async function fetchWithRetry(client: OandaHistoricalClient, input: Parameters<OandaHistoricalClient["fetchCandles"]>[0], maxRetries: number, sleeper?: (ms: number) => Promise<void>) {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    const page = await client.fetchCandles(input);
-    if (page.retryAfterMs != null) {
-      if (attempt === maxRetries) throw new Error("OANDA rate limit retry budget exhausted");
-      await waitForRateLimit(page.retryAfterMs);
-      continue;
+    try {
+      const page = await client.fetchCandles(input);
+      if (page.retryAfterMs != null) {
+        if (attempt === maxRetries) throw new Error("OANDA rate limit retry budget exhausted");
+        await pause(page.retryAfterMs, sleeper);
+        continue;
+      }
+      return page;
+    } catch (error) {
+      if (!isRetryableOandaError(error)) throw error;
+      if (attempt === maxRetries) throw new Error(`OANDA retry budget exhausted: ${error instanceof Error ? error.message : String(error)}`);
+      await pause(backoffMs(attempt), sleeper);
     }
-    return page;
   }
   throw new Error("OANDA retry budget exhausted");
+}
+
+function isRetryableOandaError(error: unknown) {
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code) : "";
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\b(401|403|404)\b/.test(message)) return false;
+  if (/auth|permission|unsupported instrument|malformed|integrity|live endpoint|order endpoint/i.test(message)) return false;
+  if (/\b(500|502|503|504)\b/.test(message)) return true;
+  return ["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND", "ECONNREFUSED"].includes(code) || /timeout|temporar|network|socket hang up/i.test(message);
+}
+
+function backoffMs(attempt: number) {
+  return Math.min(30_000, 250 * 2 ** attempt);
+}
+
+async function pause(ms: number, sleeper?: (ms: number) => Promise<void>) {
+  if (ms <= 0) return;
+  if (sleeper) return sleeper(ms);
+  return waitForRateLimit(ms);
 }
 
 function normalizeOandaCandle(service: MarketDataV2Service, raw: OandaRawCandle, symbol: string, providerSymbol: string, timeframe: V2Timeframe, price: "mid" | "bid" | "ask" | "bid_ask", sequence: number) {

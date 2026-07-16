@@ -5,6 +5,9 @@ const script = "scripts/v2-replay/run-gated-cloud-release.sh";
 
 const help = execFileSync("bash", [script, "--help"], { encoding: "utf8" });
 assert.match(help, /five-year-single/);
+assert.match(help, /backup-verify/);
+assert.match(help, /migration-baseline/);
+assert.match(help, /migration-apply/);
 assert.match(help, /dataset-build/);
 assert.match(help, /ten-year-compare/);
 
@@ -27,9 +30,26 @@ assert.match(datasetBuild, /five-year-single\.example\.env/);
 const datasetValidate = execFileSync("bash", [script, "dataset-validate", "--dataset-manifest", "/data/manifest.json", "--dry-run"], { encoding: "utf8" });
 assert.match(datasetValidate, /v2:dataset:validate/);
 
-const preflight = execFileSync("bash", [script, "preflight", "--expected-commit", "abc1234", "--dataset-manifest", "/data/manifest.json", "--output", "/tmp/out path", "--min-free-disk-gb", "1", "--min-memory-gb", "1", "--dry-run"], { encoding: "utf8" });
+const backup = execFileSync("bash", [script, "backup", "--output-dir", "/tmp/backups", "--dry-run"], { encoding: "utf8" });
+assert.match(backup, /FINCOACH_DB_BACKUP_DIR=\/tmp\/backups/);
+assert.match(backup, /db:backup/);
+
+const backupVerify = execFileSync("bash", [script, "backup-verify", "--backup", "/tmp/backup.dump", "--checksum", "/tmp/backup.dump.sha256", "--dry-run"], { encoding: "utf8" });
+assert.match(backupVerify, /db:restore:verify/);
+assert.match(backupVerify, /backup\.dump\.sha256/);
+
+const migrationApply = execFileSync("bash", [script, "migration-apply", "--backup", "/tmp/backup.dump", "--checksum", "/tmp/backup.dump.sha256", "--dry-run"], { encoding: "utf8" });
+assert.match(migrationApply, /FINCOACH_DB_BACKUP_PATH=\/tmp\/backup\.dump/);
+assert.match(migrationApply, /db:migrate/);
+
+const migrationBaseline = execFileSync("bash", [script, "migration-baseline", "--backup", "/tmp/backup.dump", "--checksum", "/tmp/backup.dump.sha256", "--dry-run"], { encoding: "utf8" });
+assert.match(migrationBaseline, /db:migrate:baseline/);
+assert.match(migrationBaseline, /--all-equivalent/);
+
+const preflight = execFileSync("bash", [script, "preflight", "--expected-commit", "abc1234", "--dataset-manifest", "/data/manifest.json", "--output", "/tmp/out path", "--min-free-disk-gb", "1", "--min-memory-gb", "1", "--backup", "/tmp/backup.dump", "--checksum", "/tmp/backup.dump.sha256", "--dry-run"], { encoding: "utf8" });
 assert.match(preflight, /cloud-preflight\.sh/);
 assert.ok(preflight.includes("/tmp/out\\ path"));
+assert.match(preflight, /backup\.dump\.sha256/);
 
 const compare = execFileSync("bash", [script, "five-year-compare", "--left", "/tmp/a summary.json", "--right", "/tmp/b summary.json", "--dry-run"], { encoding: "utf8" });
 assert.match(compare, /compare-campaign-runs\.sh/);

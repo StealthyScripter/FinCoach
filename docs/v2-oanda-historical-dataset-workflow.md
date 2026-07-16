@@ -80,6 +80,22 @@ bash scripts/v2-replay/build-oanda-dataset.sh \
   --config config/replay-campaigns/five-year-single.example.env
 ```
 
+Direct resume and status commands:
+
+```bash
+npm run v2:dataset:oanda:resume -- \
+  --symbols EUR_USD \
+  --timeframes M15,H1 \
+  --start 2020-01-01T00:00:00.000Z \
+  --end 2024-12-31T23:59:59.999Z \
+  --price bid_ask \
+  --output /data/fincoach/datasets/eurusd-five-year \
+  --compression gzip
+
+npm run v2:dataset:status -- --output /data/fincoach/datasets/eurusd-five-year
+npm run v2:dataset:validate -- --manifest /data/fincoach/datasets/eurusd-five-year/manifest.json
+```
+
 Gated cloud workflow:
 
 ```bash

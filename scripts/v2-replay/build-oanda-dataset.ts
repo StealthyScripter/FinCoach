@@ -7,6 +7,7 @@ import { verifyOandaPracticeEnvironment } from "../../server/v2/dataset-pipeline
 if (has("--help") || has("-h")) {
   console.log(`Usage:
   npm run v2:dataset:oanda:build -- --symbols EUR_USD --timeframes M15,H1 --start <iso> --end <iso> --price bid_ask --output <dir> [--compression gzip] [--resume] [--dry-run]
+  npm run v2:dataset:oanda:resume -- --symbols EUR_USD --timeframes M15,H1 --start <iso> --end <iso> --price bid_ask --output <dir>
   npm run v2:dataset:status -- --output <dir>
   npm run v2:dataset:resume -- --output <dir>
   npm run v2:dataset:validate -- --manifest <dir>/manifest.json`);
