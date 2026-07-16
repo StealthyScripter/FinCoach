@@ -14,9 +14,13 @@ Rollback must preserve immutable evidence, historical migrations, unresolved fai
 
 1. Stop application writers.
 2. Preserve the database and migration logs.
-3. Do not edit or rewrite applied migrations.
-4. Restore from the last verified backup if required.
-5. Re-run the migration command only after identifying the failed migration boundary.
+3. Run `npm run db:migrate:status` and preserve the `fincoach_schema_migrations` rows.
+4. Do not edit or rewrite applied migrations.
+5. If a row is marked `running`, treat it as a partial migration incident and do not retry until the failed migration boundary is identified.
+6. Restore from the last verified backup only after restoring that backup into a temporary database and comparing `npm run db:incident:assess` output against production.
+7. Re-run `npm run db:migrate` only after `FINCOACH_DB_BACKUP_PATH` and `FINCOACH_DB_BACKUP_SHA256_PATH` point to a verified backup artifact and `npm run db:migrate:verify` can pass or identifies only expected pending migrations.
+
+Never use schema push as rollback or repair tooling.
 
 ## Failed Replay Startup
 

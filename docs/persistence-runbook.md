@@ -27,19 +27,25 @@ Use this override when a database URL exists in the shell but you want the local
 
 ## Apply Schema
 
-Use one of these approaches:
+Production and shared databases must use the tracked migration runner:
 
 ```bash
-npm run db:push
+npm run db:backup
+export FINCOACH_DB_BACKUP_PATH=/outside/repo/fincoach-<timestamp>.dump
+export FINCOACH_DB_BACKUP_SHA256_PATH=/outside/repo/fincoach-<timestamp>.dump.sha256
+npm run db:restore:verify -- --backup "$FINCOACH_DB_BACKUP_PATH" --checksum "$FINCOACH_DB_BACKUP_SHA256_PATH"
+npm run db:migrate
+npm run db:migrate:verify
 ```
 
-or apply the versioned SQL migration directly:
+For inspection without applying changes:
 
 ```bash
-psql "$DATABASE_URL" -f migrations/0001_marketpilot_core.sql
-psql "$DATABASE_URL" -f migrations/0002_execution_reliability.sql
-psql "$DATABASE_URL" -f migrations/0003_execution_governance.sql
+npm run db:migrate -- --dry-run
+npm run db:migrate:status
 ```
+
+`npm run db:push` is guarded repository tooling only. It still cannot prevent a developer from invoking `npx drizzle-kit push` manually, so production policy and deployment scripts prohibit direct schema push.
 
 ## Implemented Adapter Coverage
 
