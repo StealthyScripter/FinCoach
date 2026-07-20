@@ -9,6 +9,7 @@ import { startDemoRunScheduler } from "./demoRunScheduler";
 import { demoOnlyPolicyService } from "./execution/demoOnlyPolicy";
 import { startTelegramOperations } from "./telegram";
 import { getFinCoachV2Runtime } from "./v2/runtime/composition";
+import { structuredLogger } from "./structuredLogger";
 
 const app = express();
 const httpServer = createServer(app);
@@ -39,7 +40,16 @@ export function log(message: string, source = "express") {
   });
 
   console.log(`${formattedTime} [${source}] ${message}`);
+  structuredLogger.application({ level: "info", module: source, event: "console_log", message });
 }
+
+process.on("uncaughtException", (error) => {
+  structuredLogger.application({ level: "fatal", module: "process", event: "uncaught_exception", message: "Uncaught exception", error });
+});
+
+process.on("unhandledRejection", (reason) => {
+  structuredLogger.application({ level: "fatal", module: "process", event: "unhandled_rejection", message: "Unhandled promise rejection", error: reason });
+});
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -71,17 +81,25 @@ app.use((req, res, next) => {
 (async () => {
   const demoOnlyEnvironment = demoOnlyPolicyService.validateEnvironment();
   if (!demoOnlyEnvironment.safe) {
+    structuredLogger.audit({ level: "fatal", event: "startup_safety_check_failed", message: "MarketPilot demo-only safety check failed", violations: demoOnlyEnvironment.violations });
     throw new Error(`MarketPilot demo-only safety check failed: ${demoOnlyEnvironment.violations.join(", ") || "demo-only mode disabled"}`);
   }
+  structuredLogger.audit({ level: "info", event: "startup_safety_check_passed", message: "MarketPilot demo-only safety check passed" });
   await strategyEvidenceStore.bootstrap();
   const v2Runtime = getFinCoachV2Runtime();
   await v2Runtime.initialize();
   await registerRoutes(httpServer, app);
   await v2Runtime.start();
   startDemoRunScheduler();
-  void startTelegramOperations();
+  void startTelegramOperations().then((result) => {
+    structuredLogger.telegram({ level: result.started ? "info" : "warn", event: result.started ? "telegram_operations_started" : "telegram_operations_not_started", message: result.started ? "Telegram operations started" : "Telegram operations not started", reason: "reason" in result ? result.reason : undefined, validation: result.validation });
+  }).catch((error) => {
+    structuredLogger.telegram({ level: "error", event: "telegram_operations_start_failed", message: "Telegram operations failed to start", error });
+  });
   const shutdown = (signal: string) => {
+    structuredLogger.audit({ level: "info", event: "graceful_shutdown_started", message: "Process graceful shutdown started", signal });
     void v2Runtime.stop(`process_${signal.toLowerCase()}`).finally(() => {
+      structuredLogger.audit({ level: "info", event: "graceful_shutdown_completed", message: "Process graceful shutdown completed", signal });
       process.exit(0);
     });
   };
@@ -93,6 +111,7 @@ app.use((req, res, next) => {
     const message = err.message || "Internal Server Error";
 
     res.status(status).json({ message });
+    structuredLogger.application({ level: "error", module: "express", event: "http_request_failed", message, status, error: err });
     throw err;
   });
 
@@ -119,6 +138,7 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      structuredLogger.audit({ level: "info", event: "application_listening", message: "FinCoach server listening", port });
     },
   );
 })();

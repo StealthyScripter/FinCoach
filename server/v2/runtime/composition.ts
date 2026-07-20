@@ -19,6 +19,7 @@ import { PgHypothesisRepository } from "../hypothesis/pgRepository";
 import { PgExperimentRepository } from "../experiments/pgRepository";
 import { PgBacktestRepository } from "../backtesting/pgRepository";
 import { PgStrategyDefinitionRepository } from "../rules/pgRepository";
+import type { OrchestrationErrorCode } from "../orchestration/contracts";
 import { ObservationsV2Service, evidence as observationEvidence } from "../observations";
 import { HypothesisV2Service } from "../hypothesis";
 import { rulesV2Compiler } from "../rules";
@@ -32,6 +33,7 @@ import { loadV2RuntimeConfig, type V2RuntimeConfig, type V2RuntimeConfigValidati
 import { memorySnapshot } from "./memory";
 import { PgV2RuntimeRepository } from "./repository";
 import { eventLogService } from "../../eventLogService";
+import { structuredLogger } from "../../structuredLogger";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
 
@@ -63,20 +65,30 @@ export class FinCoachV2Runtime {
     if (!validation.ok) {
       this.state = validation.config.runtimeEnabled ? "blocked" : "disabled";
       configureV2OperationsService(this.createOperationsService(null));
+      structuredLogger.v2({
+        level: validation.config.runtimeEnabled ? "error" : "info",
+        event: "v2_runtime_configuration_checked",
+        message: validation.config.runtimeEnabled ? "V2 runtime configuration failed" : "V2 runtime disabled by configuration",
+        runtimeInstanceId: this.bootId,
+        configuration: { ok: validation.ok, errors: validation.errors, warnings: validation.warnings, config: redactedConfig(validation.config) },
+      });
       if (validation.config.runtimeEnabled) throw new Error(`V2 runtime configuration failed: ${validation.errors.join("; ")}`);
       return this.status();
     }
     if (!validation.config.runtimeEnabled) {
       this.state = "disabled";
       configureV2OperationsService(this.createOperationsService(null));
+      structuredLogger.v2({ level: "info", event: "v2_runtime_disabled", message: "V2 runtime disabled by configuration", runtimeInstanceId: this.bootId, configuration: { config: redactedConfig(validation.config), warnings: validation.warnings } });
       return this.status();
     }
+    structuredLogger.v2({ level: "info", event: "v2_runtime_initializing", message: "V2 runtime initialization started", runtimeInstanceId: this.bootId, configuration: { config: redactedConfig(validation.config), warnings: validation.warnings } });
     this.pool = new Pool({ connectionString: this.env.DATABASE_URL });
     this.repositories = createRepositories(this.pool);
     await this.verifyDatabase();
     await this.recordBoot();
     configureV2OperationsService(this.createOperationsService(this.repositories));
     this.state = "initialized";
+    structuredLogger.v2({ level: "info", event: "v2_runtime_initialized", message: "V2 runtime initialized", runtimeInstanceId: this.bootId });
     return this.status();
   }
 
@@ -85,12 +97,14 @@ export class FinCoachV2Runtime {
     if (!this.repositories) await this.initialize();
     if (!this.config.autostart) {
       this.state = "idle";
+      structuredLogger.v2({ level: "info", event: "v2_runtime_idle", message: "V2 runtime initialized without autostart", runtimeInstanceId: this.bootId });
       return this.status();
     }
     if (this.timer) return this.status();
     this.state = "running";
     const schedule = () => {
       this.nextScheduledCycleAt = new Date(Date.now() + this.config.cadenceMs).toISOString();
+      structuredLogger.v2({ level: "info", event: "v2_cycle_scheduled", message: "Next V2 research cycle scheduled", runtimeInstanceId: this.bootId, nextScheduledCycleAt: this.nextScheduledCycleAt, cadenceMs: this.config.cadenceMs });
       this.timer = setTimeout(() => {
         this.timer = null;
         void this.runOnce({ requestedBy: "v2-autostart" }).finally(schedule);
@@ -102,6 +116,7 @@ export class FinCoachV2Runtime {
   }
 
   async stop(reason = "runtime_stop") {
+    structuredLogger.v2({ level: "info", event: "v2_runtime_stopping", message: "V2 runtime stopping", runtimeInstanceId: this.bootId, reason });
     this.state = "stopping";
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
@@ -109,6 +124,7 @@ export class FinCoachV2Runtime {
     await this.pool?.end().catch(() => undefined);
     this.state = "stopped";
     this.lastRunResult = { stopped: true, reason };
+    structuredLogger.v2({ level: "info", event: "v2_runtime_stopped", message: "V2 runtime stopped", runtimeInstanceId: this.bootId, reason });
     return this.status();
   }
 
@@ -124,23 +140,37 @@ export class FinCoachV2Runtime {
       this.state = this.config.runtimeEnabled ? "blocked" : "disabled";
       this.lastError = blockedReason(this.config);
       this.lastRunResult = { completed: false, reason: this.lastError };
+      structuredLogger.v2({
+        level: "warn",
+        event: "research_cycle_blocked",
+        message: "V2 research cycle blocked by configuration",
+        runtimeInstanceId: this.bootId,
+        requestedBy: input.requestedBy ?? "manual",
+        reason: this.lastError,
+      });
       return this.lastRunResult;
     }
     if (!this.repositories) await this.initialize();
     const repositories = this.requireRepositories();
-    if (this.activeCycle) return { completed: false, reason: "cycle_already_active" };
+    if (this.activeCycle) {
+      structuredLogger.v2({ level: "warn", event: "research_cycle_suppressed", message: "V2 research cycle suppressed because one is already active", runtimeInstanceId: this.bootId, requestedBy: input.requestedBy ?? "manual" });
+      return { completed: false, reason: "cycle_already_active" };
+    }
     const correlationId = randomUUID();
     const workerId = `v2-runtime-${process.pid}-${this.bootId}`;
+    const startedAt = Date.now();
     const lease = await repositories.orchestration.acquireLease({ leaseName: "fincoach-v2-runtime", workerId, now: new Date(), ttlMs: this.config.leaseTtlMs, correlationId });
     if (!lease) {
       this.state = "blocked";
       this.lastError = "runtime_lease_unavailable";
       this.lastRunResult = { completed: false, reason: this.lastError };
+      structuredLogger.v2({ level: "warn", event: "research_cycle_blocked", message: "V2 research cycle could not acquire runtime lease", correlationId, runtimeInstanceId: this.bootId, requestedBy: input.requestedBy ?? "manual", reason: this.lastError });
       return this.lastRunResult;
     }
     this.activeCycle = true;
     const now = new Date();
     const cycleId = `cycle-${now.toISOString()}-${randomUUID().slice(0, 8)}`;
+    structuredLogger.v2({ level: "info", event: "research_cycle_started", message: "V2 research cycle started", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, workerId, leaseName: lease.leaseName });
     await repositories.orchestration.saveCycle({ cycleId, status: "requested", requestedBy: input.requestedBy ?? "manual", idempotencyKey: cycleId, correlationId, createdAt: now.toISOString(), updatedAt: now.toISOString() });
     await repositories.orchestration.updateCycleStatus({ cycleId, status: "running" });
     try {
@@ -151,13 +181,16 @@ export class FinCoachV2Runtime {
       this.lastError = null;
       this.lastRunResult = { ...result, cycleId, completed: true };
       this.state = this.config.autostart ? "running" : "idle";
+      structuredLogger.v2({ level: "info", event: "research_cycle_completed", message: "V2 research cycle completed", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, durationMs: Date.now() - startedAt, result });
       return this.lastRunResult;
     } catch (error) {
       await repositories.orchestration.updateCycleStatus({ cycleId, status: "failed" }).catch(() => undefined);
-      await repositories.orchestration.saveRetry({ sourceEventId: cycleId, consumerId: "v2-runtime-cycle", idempotencyKey: `${cycleId}:retry`, attempt: 1, maxAttempts: this.config.retryBudget, exhausted: this.config.retryBudget <= 1, nextRetryAt: null, lastErrorCode: "unknown_failure", correlationId, causationId: null });
+      const nextRetryAt = null;
+      await repositories.orchestration.saveRetry({ sourceEventId: cycleId, consumerId: "v2-runtime-cycle", idempotencyKey: `${cycleId}:retry`, attempt: 1, maxAttempts: this.config.retryBudget, exhausted: this.config.retryBudget <= 1, nextRetryAt, lastErrorCode: classifyRuntimeErrorCode(error), correlationId, causationId: null });
       this.lastError = error instanceof Error ? error.message : "unknown";
       this.lastRunResult = { cycleId, completed: false, reason: this.lastError };
       this.state = "failed";
+      structuredLogger.v2Error({ level: "error", event: "research_cycle_failed", message: "Research cycle failed", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, durationMs: Date.now() - startedAt, retryAttempt: 1, nextRetryAt, error });
       return this.lastRunResult;
     } finally {
       this.activeCycle = false;
@@ -359,6 +392,7 @@ export class FinCoachV2Runtime {
       await repositories.ranking.save({ ...ranked.decision, schemaVersion: "fincoach.v2.ranking.1", lineageEventIds: rankingCandidates.flatMap(candidate => candidate.lineageEventIds) });
       rankedCount = ranked.decision.candidates.length;
     }
+    structuredLogger.v2({ level: "info", event: "research_cycle_lineage_persisted", message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, observations: observationsCount, hypotheses: hypothesesCount, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount });
     v2TelemetryService.counter("v2_research_cycles_total", 1, { module: "orchestration", operation: "runOnce", resultClass: "success" });
     return { observations: observationsCount, hypotheses: hypothesesCount, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, signals: 0, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
   }
@@ -457,6 +491,13 @@ function blockedReason(config: V2RuntimeConfig) {
 
 function redactedConfig(config: V2RuntimeConfig) {
   return { ...config, liveExecutionEnabled: config.liveExecutionEnabled };
+}
+
+function classifyRuntimeErrorCode(error: unknown): OrchestrationErrorCode {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/Cannot use a pool after calling end on the pool/i.test(message)) return "persistence_failure";
+  if (/timeout/i.test(message)) return "retryable_dependency_failure";
+  return "unknown_failure";
 }
 
 function normalizeTimeframe(value: string): V2Timeframe {

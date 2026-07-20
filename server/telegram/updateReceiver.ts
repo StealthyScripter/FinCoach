@@ -3,6 +3,7 @@ import { telegramMetrics } from "./metrics";
 import { telegramTransport, type TelegramTransport } from "./transport";
 import { loadTelegramConfig } from "./telegramClient";
 import { telegramUpdateCursor, type TelegramUpdateCursor } from "./updateCursor";
+import { structuredLogger } from "../structuredLogger";
 
 type TelegramApiUpdate = {
   update_id: number;
@@ -41,14 +42,17 @@ export class TelegramUpdateReceiver {
     if (this.running) return this;
     if (!this.config.notificationsEnabled || !this.config.botToken) {
       console.warn("Telegram update receiver not started: bot token or notifications are not configured");
+      structuredLogger.telegram({ level: "warn", event: "telegram_update_receiver_not_started", message: "Telegram update receiver not started", reason: "bot_token_or_notifications_not_configured" });
       return this;
     }
     this.running = true;
     this.stopped = false;
+    structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_started", message: "Telegram update receiver started" });
     this.loop = this.pollLoop();
     void this.loop.catch((error) => {
       this.running = false;
       console.warn(`Telegram update receiver stopped unexpectedly: ${error instanceof Error ? error.message : String(error)}`);
+      structuredLogger.telegram({ level: "error", event: "telegram_update_receiver_stopped_unexpectedly", message: "Telegram update receiver stopped unexpectedly", error });
     });
     this.registerShutdownHandlers();
     return this;
@@ -68,11 +72,13 @@ export class TelegramUpdateReceiver {
     this.running = false;
     this.inFlight?.abort();
     await this.loop?.catch(() => undefined);
+    structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_stopped", message: "Telegram update receiver stopped" });
   }
 
   private async pollLoop() {
     let offset = await this.cursor.loadOffset().catch((error) => {
       console.warn(`Telegram update cursor load failed; starting from latest available offset: ${error instanceof Error ? error.message : String(error)}`);
+      structuredLogger.telegram({ level: "error", event: "telegram_update_cursor_load_failed", message: "Telegram update cursor load failed", error });
       return 0;
     });
     let attempt = 0;
@@ -82,6 +88,7 @@ export class TelegramUpdateReceiver {
         const updates = await this.getUpdates(offset);
         attempt = 0;
         if (updates.length > 0) telegramMetrics.increment("updatesReceived", updates.length);
+        if (updates.length > 0) structuredLogger.telegram({ level: "info", event: "telegram_updates_received", message: "Telegram updates received", updateCount: updates.length, offset });
         for (const update of updates) {
           if (this.stopped) break;
           if (this.seenUpdateIds.has(update.update_id)) {
@@ -95,6 +102,7 @@ export class TelegramUpdateReceiver {
             await this.transport.handle(normalized);
           } else {
             telegramMetrics.increment("updatesIgnored");
+            structuredLogger.telegram({ level: "info", event: "telegram_update_ignored", message: "Telegram update ignored", updateId: update.update_id, reason: "not_normalizable" });
           }
           await this.cursor.saveProcessed(update.update_id);
           offset = Math.max(offset, update.update_id + 1);
@@ -107,6 +115,7 @@ export class TelegramUpdateReceiver {
         const retryAfter = retryAfterSeconds(error);
         const delayMs = retryAfter ? retryAfter * 1000 : backoff(attempt += 1);
         console.warn(`Telegram update polling failed; retrying in ${Math.round(delayMs / 1000)}s: ${error instanceof Error ? error.message : String(error)}`);
+        structuredLogger.telegram({ level: "error", event: "telegram_polling_failed", message: "Telegram update polling failed", retryAttempt: attempt, nextRetryAt: new Date(Date.now() + delayMs).toISOString(), retryDelayMs: delayMs, error });
         await sleep(delayMs);
       }
     }
