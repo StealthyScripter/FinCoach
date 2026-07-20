@@ -35,6 +35,7 @@ export class EventLogService {
       createdAt,
     };
     this.events.push(event);
+    this.enforceRetention();
     if (this.store) {
       const persistence = this.store.append(event);
       this.pending.add(persistence);
@@ -83,6 +84,10 @@ export class EventLogService {
     this.events.length = 0;
   }
 
+  retentionSize() {
+    return this.events.length;
+  }
+
   async flushPersistence() {
     await Promise.all(Array.from(this.pending));
     if (this.persistenceFailures > 0) throw new Error(this.lastPersistenceError ?? "Event persistence is incomplete");
@@ -107,9 +112,19 @@ export class EventLogService {
       lastError: this.lastPersistenceError,
     };
   }
+
+  private enforceRetention() {
+    const limit = retentionLimit("FINCOACH_EVENT_LOG_RETENTION_LIMIT", 5000);
+    if (this.events.length > limit) this.events.splice(0, this.events.length - limit);
+  }
 }
 
 export const eventLogService = new EventLogService(eventLogStore);
+
+function retentionLimit(name: string, fallback: number) {
+  const parsed = Number(process.env[name]);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function hashPayload(payload: Record<string, unknown>) {
   return createHash("sha256").update(JSON.stringify(stable(payload))).digest("hex");

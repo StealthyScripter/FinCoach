@@ -38,6 +38,7 @@ registerV2OperationsRoutes(app as never, operations);
 assert.deepEqual(app.routes, [
   "/api/v2/status",
   "/api/v2/metrics",
+  "/api/v2/runtime/status",
   "/api/v2/observations",
   "/api/v2/hypotheses",
   "/api/v2/experiments",
@@ -55,7 +56,7 @@ assert.deepEqual(app.routes, [
 ]);
 
 const telegram = new TelegramCommandRouter({ TELEGRAM_ALLOWED_USER_ID: "operator" } as NodeJS.ProcessEnv);
-assert.match(await telegram.handle({ command: "/v2_status", actorId: "operator", chatId: "chat" }), /Version 2 Status/);
+assert.match(await telegram.handle({ command: "/v2_status", actorId: "operator", chatId: "chat" }), /V2 Status/);
 assert.match(await telegram.handle({ command: "/lessons", actorId: "operator", chatId: "chat" }), /lessons/);
 assert.match(await telegram.handle({ command: "/v2_status", actorId: "intruder", chatId: "chat" }), /unauthorized/);
 assert.match(await telegram.handle({ command: "/enable_live", actorId: "operator", chatId: "chat" }), /demo-only/);

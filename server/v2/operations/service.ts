@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "crypto";
 import { createDomainEvent } from "../contracts";
 import { orchestrationV2Service } from "../orchestration";
 import { V2PersistenceError } from "../persistence/errors";
-import type { V2DailyResearchReport, V2OperationsAvailability, V2OperationsCollection, V2OperationsQuery, V2OperationsResponse } from "./contracts";
+import type { V2DailyResearchReport, V2ModuleAvailabilityDetail, V2OperationsAvailability, V2OperationsCollection, V2OperationsQuery, V2OperationsResponse } from "./contracts";
 import { V2OperationsEventTypes } from "./events";
 import { InMemoryV2OperationsRepository, type DailyReportDeliveryRecord, type DailyReportRecord } from "./repository";
 import type { DurableWorkerLease, ResearchCycleRecord } from "../orchestration/contracts";
@@ -14,6 +14,8 @@ type ProjectionRepositories = {
   pilot?: PilotProjectionRepository;
   evidence?: Partial<Record<V2OperationsCollection, EvidenceProjectionRepository>>;
 };
+
+type V2RuntimeStatusProvider = () => Record<string, unknown>;
 
 type OrchestrationProjectionRepository = {
   latestCycle(status?: ResearchCycleRecord["status"]): Promise<ResearchCycleRecord | null>;
@@ -65,7 +67,11 @@ const collectionAvailability: Record<V2OperationsCollection, V2OperationsAvailab
 };
 
 export class V2OperationsService {
-  constructor(private readonly repositories: ProjectionRepositories = { operations: new InMemoryV2OperationsRepository() }) {}
+  constructor(
+    private readonly repositories: ProjectionRepositories = { operations: new InMemoryV2OperationsRepository() },
+    private readonly moduleAvailabilityDetails: Partial<Record<V2OperationsCollection | "operations" | "pilot", V2ModuleAvailabilityDetail>> = {},
+    private readonly runtimeStatusProvider?: V2RuntimeStatusProvider,
+  ) {}
 
   status(query: { correlationId?: string } = {}): V2OperationsResponse<Record<string, unknown>> {
     const correlationId = query.correlationId ?? randomUUID();
@@ -80,7 +86,8 @@ export class V2OperationsService {
         telegram: "healthy",
         api: "healthy",
       },
-      moduleAvailability: defaultAvailability(),
+      moduleAvailability: defaultAvailability(this.moduleAvailabilityDetails),
+      moduleAvailabilityDetails: defaultAvailabilityDetails(this.moduleAvailabilityDetails),
       latestSuccessfulCycle: null,
       latestFailedCycle: null,
       latestSuccessfulCheckpoint: null,
@@ -109,6 +116,16 @@ export class V2OperationsService {
       liveExecutionBlocked: true,
       postgresqlHealth: this.hasDurableRepositories() ? "unknown" : "not_configured",
       providerHealth: "not_configured",
+      infrastructureHealth: "healthy",
+      databaseHealth: this.hasDurableRepositories() ? "unknown" : "not_configured",
+      runtimeState: "disabled",
+      researchState: "disabled",
+      paperExecutionState: "disabled",
+      demoBrokerState: "disabled",
+      telegramPublicationState: "disabled",
+      configurationState: "incomplete",
+      economicEvidenceState: "not_configured",
+      ...(this.runtimeStatusProvider?.() ?? {}),
     };
     return { status: 200, body, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "status" })] };
   }
@@ -153,8 +170,17 @@ export class V2OperationsService {
         moduleAvailability.operations = latestReport ? "available" : "available_empty";
         moduleHealth.operations = "healthy";
         body.postgresqlHealth = "healthy";
+        body.databaseHealth = "healthy";
       }
       const evidence = this.repositories.evidence ?? {};
+      for (const collection of Object.keys(evidence) as V2OperationsCollection[]) {
+        const count = await countEvidence(evidence[collection]);
+        moduleAvailability[collection] = count > 0 ? "available" : "available_empty";
+      }
+      body.observationsCreated = await countEvidence(evidence.observations);
+      body.hypothesesCreated = await countEvidence(evidence.hypotheses);
+      body.experimentsQueued = await countEvidence(evidence.experiments);
+      body.backtestsCompleted = await countEvidence(evidence.backtests);
       body.forwardTests = await countEvidence(evidence["forward-tests"]);
       body.signals = await countEvidence(evidence.signals);
       body.externalEvaluations = await countEvidence(evidence.evaluations);
@@ -172,6 +198,10 @@ export class V2OperationsService {
     }
     body.moduleHealth = moduleHealth;
     body.moduleAvailability = moduleAvailability;
+    body.moduleAvailabilityDetails = Object.fromEntries(Object.entries(moduleAvailability).map(([module, state]) => {
+      const configured = this.moduleAvailabilityDetails[module as V2OperationsCollection | "operations" | "pilot"];
+      return [module, configured?.state === state ? configured : { state, reason: reasonForAvailability(state) }];
+    }));
     return { ...base, body };
   }
 
@@ -368,8 +398,18 @@ export class V2OperationsService {
   }
 }
 
-function defaultAvailability(): Record<V2OperationsCollection | "operations" | "pilot", V2OperationsAvailability> {
-  return { ...collectionAvailability, operations: "available_empty", pilot: "not_configured" };
+function defaultAvailability(overrides: Partial<Record<V2OperationsCollection | "operations" | "pilot", V2ModuleAvailabilityDetail>> = {}): Record<V2OperationsCollection | "operations" | "pilot", V2OperationsAvailability> {
+  const base: Record<V2OperationsCollection | "operations" | "pilot", V2OperationsAvailability> = { ...collectionAvailability, operations: "available_empty", pilot: "not_configured" };
+  for (const [key, value] of Object.entries(overrides)) base[key as V2OperationsCollection | "operations" | "pilot"] = value.state;
+  return base;
+}
+
+function defaultAvailabilityDetails(overrides: Partial<Record<V2OperationsCollection | "operations" | "pilot", V2ModuleAvailabilityDetail>> = {}): Record<V2OperationsCollection | "operations" | "pilot", V2ModuleAvailabilityDetail> {
+  const availability = defaultAvailability(overrides);
+  return Object.fromEntries(Object.entries(availability).map(([module, state]) => [
+    module,
+    overrides[module as V2OperationsCollection | "operations" | "pilot"] ?? { state, reason: reasonForAvailability(state) },
+  ])) as Record<V2OperationsCollection | "operations" | "pilot", V2ModuleAvailabilityDetail>;
 }
 
 function availabilityFromError(error: unknown): V2OperationsAvailability {
@@ -407,4 +447,23 @@ function commandToCollection(command: string): V2OperationsCollection | null {
   } as Record<string, V2OperationsCollection | undefined>)[command] ?? null;
 }
 
-export const v2OperationsService = new V2OperationsService();
+function reasonForAvailability(state: V2OperationsAvailability) {
+  return ({
+    available: "repository_bound_records_present",
+    available_empty: "repository_bound_no_records",
+    disabled: "module_disabled_by_configuration",
+    blocked: "module_blocked_by_runtime_gate",
+    degraded: "module_or_projection_degraded",
+    stale: "module_data_stale",
+    not_configured: "repository_not_injected",
+    temporarily_unavailable: "dependency_temporarily_unavailable",
+    schema_incompatible: "migration_or_schema_incompatible",
+  } satisfies Record<V2OperationsAvailability, string>)[state];
+}
+
+export let v2OperationsService = new V2OperationsService();
+
+export function configureV2OperationsService(service: V2OperationsService) {
+  v2OperationsService = service;
+  return v2OperationsService;
+}

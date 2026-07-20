@@ -734,6 +734,7 @@ function summarizeResearchPipeline(): DemoRunResearchPipelineSummary {
   const status = strategyResearchSchedulerService.snapshot();
   return {
     status: status.health.status,
+    reason: status.lastSkipReason,
     cyclesRun: status.health.cyclesRun,
     patternsDetected: status.counts.patternsDetected,
     hypothesesCreated: status.counts.hypothesesCreated,

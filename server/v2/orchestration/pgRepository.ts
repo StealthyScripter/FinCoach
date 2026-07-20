@@ -139,6 +139,23 @@ export class PgOrchestrationRepository {
     }
   }
 
+  async updateCycleStatus(input: { cycleId: string; status: ResearchCycleRecord["status"]; now?: string }): Promise<ResearchCycleRecord> {
+    try {
+      const updatedAt = input.now ?? new Date().toISOString();
+      const result = await this.db.query(
+        `UPDATE v2_orchestration_cycles
+         SET status = $2, updated_at = $3
+         WHERE cycle_id = $1
+         RETURNING *`,
+        [input.cycleId, input.status, updatedAt],
+      );
+      if (!result.rowCount) throw new V2PersistenceError("persistence_integrity_failure", "Research cycle not found for status update");
+      return mapCycle(result.rows[0]);
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
   async listCycles(input: { limit: number; offset: number; status?: string }): Promise<{ items: ResearchCycleRecord[]; total: number }> {
     try {
       const where = input.status ? "WHERE status = $3" : "";

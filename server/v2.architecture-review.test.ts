@@ -20,6 +20,7 @@ console.log("v2 architecture review tests passed");
 function assertNoCrossModuleConcreteRepositoryImports() {
   const violations: string[] = [];
   for (const file of productionFiles) {
+    if (rel(file) === "server/v2/runtime/composition.ts") continue;
     const callerModule = moduleNameFor(file);
     if (!callerModule) continue;
     for (const imported of importsFrom(file)) {

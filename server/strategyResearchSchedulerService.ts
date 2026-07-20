@@ -81,7 +81,7 @@ export type StrategyResearchPipelineStatus = {
   allowedStrategies: string[];
   patternFamilies: string[];
   health: {
-    status: "idle" | "healthy" | "blocked";
+    status: "idle" | "running" | "completed" | "paused" | "blocked" | "failed" | "disabled" | "healthy";
     cyclesRun: number;
     safetyBlocks: number;
     liveExecutionEnabled: false;
@@ -277,13 +277,15 @@ export class StrategyResearchSchedulerService {
     const modeSafe = this.env.MARKETPILOT_RUN_MODE?.trim() === "demo_observation";
     const runStateSafe = !input.runState || input.runState === "running";
     if (!modeSafe || !runStateSafe) {
-      const reason = !modeSafe ? "MARKETPILOT_RUN_MODE is not demo_observation." : `Demo run is ${input.runState}.`;
+      const completed = input.runState === "completed" || input.runState === "stopped";
+      const paused = input.runState === "paused";
+      const reason = !modeSafe ? "MARKETPILOT_RUN_MODE is not demo_observation." : completed ? "demo_run_completed" : paused ? "demo_run_paused" : `Demo run is ${input.runState}.`;
       this.status = {
         ...this.status,
         enabled: modeSafe,
         running: false,
         lastSkipReason: reason,
-        health: { ...this.status.health, status: "blocked", safetyBlocks: this.status.health.safetyBlocks + 1 },
+        health: { ...this.status.health, status: completed ? "idle" : paused ? "paused" : "blocked", safetyBlocks: completed || paused ? this.status.health.safetyBlocks : this.status.health.safetyBlocks + 1 },
       };
       return { ...this.snapshot(), eventsCreated: 0 };
     }

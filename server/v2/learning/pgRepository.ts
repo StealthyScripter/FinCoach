@@ -31,6 +31,7 @@ export class PgLearningRepository {
   saveLesson(lesson: LearningLesson) { return this.lessons.save(lesson).then(result => ({ inserted: result.inserted, lesson: result.record, conflict: result.conflict })); }
   saveProposal(proposal: StrategyRevisionProposal) { return this.proposals.save(proposal).then(result => ({ inserted: result.inserted, proposal: result.record, conflict: result.conflict })); }
   async listLessons(input: { limit?: number; offset?: number } = {}) { return (await this.lessons.list(input)).items; }
+  listPage(input: { limit?: number; offset?: number } = {}) { return this.lessons.list(input); }
   async listProposals(input: { limit?: number; offset?: number; strategyId?: string } = {}) { return (await this.proposals.list(input)).items; }
   async snapshot() { return { lessons: await this.listLessons(), proposals: await this.listProposals() }; }
   health() { return this.lessons.health(); }

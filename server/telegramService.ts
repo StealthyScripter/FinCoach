@@ -1001,7 +1001,7 @@ export class TelegramBotService {
   private queueDigestAlert(alert: TelegramLifecycleAlert | Alert) {
     if (this.digestAlerts.some((item) => item.id === alert.id)) return;
     this.digestAlerts.unshift({ ...alert });
-    if (this.digestAlerts.length > 25) this.digestAlerts.length = 25;
+    if (this.digestAlerts.length > retentionLimit("FINCOACH_TELEGRAM_DIGEST_RETENTION_LIMIT", 25)) this.digestAlerts.length = retentionLimit("FINCOACH_TELEGRAM_DIGEST_RETENTION_LIMIT", 25);
   }
 
   private describeAlert(alert: TelegramLifecycleAlert | Alert) {
@@ -1114,6 +1114,7 @@ export class TelegramBotService {
       expiresAt,
       finalDecision: "requested",
     });
+    this.enforceRetention();
     this.audit.recordCommand({
       eventType: "telegram.command_requested",
       actorId,
@@ -1126,6 +1127,21 @@ export class TelegramBotService {
       payload: { intent, summary, codeHash, expiresAt },
     });
     return this.formatter.confirmationCard(summary, code, expiresAt);
+  }
+
+  private enforceRetention() {
+    const pendingLimit = retentionLimit("FINCOACH_TELEGRAM_PENDING_RETENTION_LIMIT", 100);
+    while (this.pendingConfirmations.size > pendingLimit) {
+      const oldest = this.pendingConfirmations.keys().next().value;
+      if (!oldest) break;
+      this.pendingConfirmations.delete(oldest);
+    }
+    const notifiedLimit = retentionLimit("FINCOACH_TELEGRAM_NOTIFIED_RETENTION_LIMIT", 1000);
+    while (this.notifiedAlertIds.size > notifiedLimit) {
+      const oldest = this.notifiedAlertIds.keys().next().value;
+      if (!oldest) break;
+      this.notifiedAlertIds.delete(oldest);
+    }
   }
 
   private async confirm(code: string, actorId: string, chatId: number) {
@@ -1608,6 +1624,11 @@ function formatDuration(seconds: number) {
 
 function formatCurrency(value: number) {
   return value >= 0 ? `+$${value.toFixed(2)}` : `-$${Math.abs(value).toFixed(2)}`;
+}
+
+function retentionLimit(name: string, fallback: number) {
+  const parsed = Number(process.env[name]);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function toExplanation(investigation: Awaited<ReturnType<typeof marketMoveInvestigationService.investigate>>): any {

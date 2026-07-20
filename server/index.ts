@@ -8,6 +8,7 @@ import { strategyEvidenceStore } from "./execution/strategyEvidenceStore";
 import { startDemoRunScheduler } from "./demoRunScheduler";
 import { demoOnlyPolicyService } from "./execution/demoOnlyPolicy";
 import { startTelegramOperations } from "./telegram";
+import { getFinCoachV2Runtime } from "./v2/runtime/composition";
 
 const app = express();
 const httpServer = createServer(app);
@@ -73,9 +74,19 @@ app.use((req, res, next) => {
     throw new Error(`MarketPilot demo-only safety check failed: ${demoOnlyEnvironment.violations.join(", ") || "demo-only mode disabled"}`);
   }
   await strategyEvidenceStore.bootstrap();
+  const v2Runtime = getFinCoachV2Runtime();
+  await v2Runtime.initialize();
   await registerRoutes(httpServer, app);
+  await v2Runtime.start();
   startDemoRunScheduler();
   void startTelegramOperations();
+  const shutdown = (signal: string) => {
+    void v2Runtime.stop(`process_${signal.toLowerCase()}`).finally(() => {
+      process.exit(0);
+    });
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

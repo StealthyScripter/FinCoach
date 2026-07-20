@@ -153,7 +153,8 @@ export type DemoRunTelemetry = {
 };
 
 export type DemoRunResearchPipelineSummary = {
-  status: "idle" | "healthy" | "blocked";
+  status: "idle" | "running" | "completed" | "paused" | "blocked" | "failed" | "disabled" | "healthy";
+  reason?: string | null;
   cyclesRun: number;
   patternsDetected: number;
   hypothesesCreated: number;

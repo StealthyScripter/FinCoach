@@ -23,6 +23,9 @@ const manualSummarySchema = z.object({
 export async function startTelegramOperations() {
   const config = loadTelegramConfig();
   const validation = validateTelegramConfig(config);
+  if (process.env.FINCOACH_TELEGRAM_TRANSPORT !== "long_polling") {
+    return { started: false, validation, reason: "telegram_transport_not_long_polling" };
+  }
   if (!config.notificationsEnabled || !config.botToken || !config.chatId) {
     return { started: false, validation };
   }

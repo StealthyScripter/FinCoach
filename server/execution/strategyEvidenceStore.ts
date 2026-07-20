@@ -586,6 +586,18 @@ export class StrategyEvidenceStore {
     if (record.kind === "rejected_signal") {
       this.rejectedSignals.set(record.id, cloneRecord(record));
     }
+    this.enforceRetention();
+  }
+
+  private enforceRetention() {
+    const recordLimit = retentionLimit("FINCOACH_STRATEGY_EVIDENCE_RETENTION_LIMIT", 5000);
+    if (this.records.length > recordLimit) this.records.splice(0, this.records.length - recordLimit);
+    const rejectedLimit = retentionLimit("FINCOACH_REJECTED_SIGNAL_RETENTION_LIMIT", 1000);
+    while (this.rejectedSignals.size > rejectedLimit) {
+      const oldest = this.rejectedSignals.keys().next().value;
+      if (!oldest) break;
+      this.rejectedSignals.delete(oldest);
+    }
   }
 
   private async persist(record: StrategyEvidenceRecord) {
@@ -667,6 +679,11 @@ function summarizeRegime(input: StrategyValidationInput) {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function retentionLimit(name: string, fallback: number) {
+  const parsed = Number(process.env[name]);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function cloneRecord(record: StrategyEvidenceRecord): StrategyEvidenceRecord {

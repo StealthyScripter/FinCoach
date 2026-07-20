@@ -19,8 +19,12 @@ assert.equal(blocked.counts.experimentsCreated, 0);
 assert.match(blocked.lastSkipReason ?? "", /demo_observation/);
 
 const paused = await scheduler.runOnce({ runState: "paused", now: new Date("2026-01-01T08:00:00.000Z") });
-assert.equal(paused.health.status, "blocked");
+assert.equal(paused.health.status, "paused");
 assert.match(paused.lastSkipReason ?? "", /paused/);
+
+const completed = await scheduler.runOnce({ runState: "completed", now: new Date("2026-01-01T08:05:00.000Z") });
+assert.equal(completed.health.status, "idle");
+assert.equal(completed.lastSkipReason, "demo_run_completed");
 
 const result = await scheduler.runOnce({ runState: "running", now: new Date("2026-01-01T08:30:00.000Z") });
 assert.equal(result.health.status, "healthy");
