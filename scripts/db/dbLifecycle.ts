@@ -23,6 +23,7 @@ export type BackupVerificationOptions = {
   requireOutsideRepository?: boolean;
   repositoryRoot?: string;
   mustPredate?: Date;
+  postgresToolSelection?: PostgresToolSelection;
 };
 
 export type PostgresToolSelection = {
@@ -31,6 +32,19 @@ export type PostgresToolSelection = {
   serverMajor: number;
   clientMajor: number;
   clientVersion: string;
+  dumpBin: string;
+  restoreBin: string;
+  dumpVersion: string;
+  restoreVersion: string;
+  explicit: boolean;
+};
+
+type CommandResult = Pick<ReturnType<typeof spawnSync>, "status" | "stdout" | "stderr">;
+type CommandRunner = (command: string, args: string[], options?: Parameters<typeof spawnSync>[2]) => CommandResult;
+
+type ToolResolutionOptions = {
+  env?: NodeJS.ProcessEnv;
+  runCommand?: CommandRunner;
 };
 
 export function sha256File(path: string) {
@@ -69,7 +83,7 @@ export function verifyBackupArtifact(options: BackupVerificationOptions): Backup
   const expectedChecksum = readChecksumFile(checksumPath);
   if (actualChecksum !== expectedChecksum) throw new Error("backup checksum mismatch");
 
-  const list = pgRestoreListWithPolicy(backupPath);
+  const list = pgRestoreListWithPolicy(backupPath, options.postgresToolSelection);
   const entries = list.split("\n").filter((line) => line.trim() && !line.startsWith(";")).length;
   if (entries <= 0) throw new Error("backup archive catalog is empty");
 
@@ -146,27 +160,65 @@ export function pgRestoreList(path: string) {
   return execFileSync("pg_restore", ["--list", path], { encoding: "utf8" });
 }
 
-export async function resolvePostgresTools(databaseUrl: string, queryServerVersion: () => Promise<number>): Promise<PostgresToolSelection> {
+export async function resolvePostgresTools(databaseUrl: string, queryServerVersion: () => Promise<number>, options: ToolResolutionOptions = {}): Promise<PostgresToolSelection> {
   const serverMajor = Math.floor((await queryServerVersion()) / 10000);
-  const explicitDump = process.env.FINCOACH_PG_DUMP_BIN;
-  const explicitRestore = process.env.FINCOACH_PG_RESTORE_BIN;
-  if (explicitDump && explicitRestore) {
-    const version = toolVersion(explicitDump, ["--version"]);
-    const clientMajor = parsePgMajor(version);
-    if (clientMajor < serverMajor) throw new Error(`configured PostgreSQL client is older than server: client ${clientMajor}, server ${serverMajor}`);
-    return { mode: "host", container: null, serverMajor, clientMajor, clientVersion: version };
+  const env = options.env ?? process.env;
+  const runCommand = options.runCommand ?? runSpawn;
+  const explicitDump = clean(env.FINCOACH_PG_DUMP_BIN);
+  const explicitRestore = clean(env.FINCOACH_PG_RESTORE_BIN);
+  const explicitDocker = clean(env.FINCOACH_POSTGRES_CONTAINER);
+  const toolMode = clean(env.FINCOACH_POSTGRES_TOOL_MODE);
+  if (explicitDump || explicitRestore) {
+    return hostSelection({
+      dumpBin: explicitDump ?? "pg_dump",
+      restoreBin: explicitRestore ?? "pg_restore",
+      serverMajor,
+      explicit: true,
+      runCommand,
+      olderMessage: "configured PostgreSQL client is older than server",
+    });
   }
-  const container = process.env.FINCOACH_POSTGRES_CONTAINER ?? detectHealthyPostgresContainer();
-  if (container) {
-    const version = toolVersion("docker", ["exec", container, "pg_dump", "--version"]);
-    const clientMajor = parsePgMajor(version);
-    if (clientMajor < serverMajor) throw new Error(`Docker PostgreSQL client is older than server: client ${clientMajor}, server ${serverMajor}`);
-    return { mode: "docker", container, serverMajor, clientMajor, clientVersion: version };
+  if (toolMode === "docker" || explicitDocker) {
+    const container = explicitDocker ?? detectHealthyPostgresContainer(runCommand);
+    if (!container) throw new Error("Docker PostgreSQL client requested, but no PostgreSQL container was configured or detected");
+    return dockerSelection({ container, serverMajor, explicit: true, runCommand });
   }
-  const hostVersion = toolVersion(explicitDump ?? "pg_dump", ["--version"]);
-  const hostMajor = parsePgMajor(hostVersion);
-  if (hostMajor < serverMajor) throw new Error(`host PostgreSQL client is older than server: client ${hostMajor}, server ${serverMajor}; set FINCOACH_POSTGRES_CONTAINER or FINCOACH_PG_DUMP_BIN/FINCOACH_PG_RESTORE_BIN`);
-  return { mode: "host", container: null, serverMajor, clientMajor: hostMajor, clientVersion: hostVersion };
+  const host = tryHostSelection({ dumpBin: "pg_dump", restoreBin: "pg_restore", serverMajor, explicit: false, runCommand });
+  if (host.ok) return host.selection;
+  const container = detectHealthyPostgresContainer(runCommand);
+  if (container) return dockerSelection({ container, serverMajor, explicit: false, runCommand });
+  if (host.error && /older than server/.test(host.error.message)) throw host.error;
+  throw new Error("no suitable PostgreSQL client found; install a compatible host pg_dump/pg_restore or set FINCOACH_POSTGRES_CONTAINER");
+}
+
+function hostSelection(input: { dumpBin: string; restoreBin: string; serverMajor: number; explicit: boolean; runCommand: CommandRunner; olderMessage: string }): PostgresToolSelection {
+  const dumpVersion = toolVersion(input.dumpBin, ["--version"], input.runCommand);
+  const restoreVersion = toolVersion(input.restoreBin, ["--version"], input.runCommand);
+  const dumpMajor = parsePgMajor(dumpVersion);
+  const restoreMajor = parsePgMajor(restoreVersion);
+  const clientMajor = Math.min(dumpMajor, restoreMajor);
+  if (clientMajor < input.serverMajor) {
+    throw new Error(`${input.olderMessage}: dump client ${dumpMajor}, restore client ${restoreMajor}, server ${input.serverMajor}; install PostgreSQL ${input.serverMajor} client tools or set FINCOACH_PG_DUMP_BIN/FINCOACH_PG_RESTORE_BIN`);
+  }
+  return { mode: "host", container: null, serverMajor: input.serverMajor, clientMajor, clientVersion: restoreVersion, dumpBin: input.dumpBin, restoreBin: input.restoreBin, dumpVersion, restoreVersion, explicit: input.explicit };
+}
+
+function tryHostSelection(input: { dumpBin: string; restoreBin: string; serverMajor: number; explicit: boolean; runCommand: CommandRunner }): { ok: true; selection: PostgresToolSelection } | { ok: false; error: Error | null } {
+  try {
+    return { ok: true, selection: hostSelection({ ...input, olderMessage: "host PostgreSQL client is older than server" }) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
+  }
+}
+
+function dockerSelection(input: { container: string; serverMajor: number; explicit: boolean; runCommand: CommandRunner }): PostgresToolSelection {
+  const dumpVersion = toolVersion("docker", ["exec", input.container, "pg_dump", "--version"], input.runCommand);
+  const restoreVersion = toolVersion("docker", ["exec", input.container, "pg_restore", "--version"], input.runCommand);
+  const dumpMajor = parsePgMajor(dumpVersion);
+  const restoreMajor = parsePgMajor(restoreVersion);
+  const clientMajor = Math.min(dumpMajor, restoreMajor);
+  if (clientMajor < input.serverMajor) throw new Error(`Docker PostgreSQL client is older than server: dump client ${dumpMajor}, restore client ${restoreMajor}, server ${input.serverMajor}`);
+  return { mode: "docker", container: input.container, serverMajor: input.serverMajor, clientMajor, clientVersion: restoreVersion, dumpBin: "pg_dump", restoreBin: "pg_restore", dumpVersion, restoreVersion, explicit: input.explicit };
 }
 
 export function runPgDumpToFile(selection: PostgresToolSelection, databaseUrl: string, outputPath: string) {
@@ -177,21 +229,18 @@ export function runPgDumpToFile(selection: PostgresToolSelection, databaseUrl: s
     writeFileSync(outputPath, result.stdout);
     return;
   }
-  const dumpBin = process.env.FINCOACH_PG_DUMP_BIN ?? "pg_dump";
+  const dumpBin = selection.dumpBin || process.env.FINCOACH_PG_DUMP_BIN || "pg_dump";
   const result = spawnSync(dumpBin, ["--format=custom", "--no-owner", "--no-acl", "--file", outputPath, databaseUrl], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`pg_dump failed: ${redactOutput(`${result.stderr ?? ""}${result.stdout ?? ""}`, databaseUrl) || `exit ${result.status}`}`);
 }
 
 export function pgRestoreListWithPolicy(path: string, selection?: PostgresToolSelection) {
-  if (!selection && (process.env.FINCOACH_POSTGRES_CONTAINER || detectHealthyPostgresContainer())) {
-    selection = { mode: "docker", container: process.env.FINCOACH_POSTGRES_CONTAINER ?? detectHealthyPostgresContainer(), serverMajor: 0, clientMajor: 0, clientVersion: "auto-detected docker pg_restore" };
-  }
   if (selection?.mode === "docker") {
     const result = spawnSync("docker", ["exec", "-i", selection.container!, "pg_restore", "--list"], { input: readFileSync(path), encoding: "utf8", maxBuffer: 50 * 1024 * 1024 });
     if (result.status !== 0) throw new Error(`pg_restore --list failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
     return result.stdout;
   }
-  const restoreBin = process.env.FINCOACH_PG_RESTORE_BIN ?? "pg_restore";
+  const restoreBin = selection?.restoreBin || process.env.FINCOACH_PG_RESTORE_BIN || "pg_restore";
   const result = spawnSync(restoreBin, ["--list", path], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`pg_restore --list failed: ${result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`}`);
   return result.stdout;
@@ -204,21 +253,21 @@ export function runPgRestoreToDatabase(selection: PostgresToolSelection, databas
     if (result.status !== 0) throw new Error(`pg_restore failed: ${redactOutput(result.stderr.toString(), databaseUrl) || `exit ${result.status}`}`);
     return;
   }
-  const restoreBin = process.env.FINCOACH_PG_RESTORE_BIN ?? "pg_restore";
+  const restoreBin = selection.restoreBin || process.env.FINCOACH_PG_RESTORE_BIN || "pg_restore";
   const result = spawnSync(restoreBin, ["--no-owner", "--no-privileges", "--dbname", databaseUrl, backupPath], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`pg_restore failed: ${redactOutput(`${result.stderr ?? ""}${result.stdout ?? ""}`, databaseUrl) || `exit ${result.status}`}`);
 }
 
-function detectHealthyPostgresContainer() {
-  const ps = spawnSync("docker", ["ps", "--format", "{{.Names}} {{.Image}} {{.Status}}"], { encoding: "utf8" });
+function detectHealthyPostgresContainer(runCommand: CommandRunner = runSpawn) {
+  const ps = runCommand("docker", ["ps", "--format", "{{.Names}} {{.Image}} {{.Status}}"], { encoding: "utf8" });
   if (ps.status !== 0) return null;
   const rows = ps.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
   const match = rows.find((line) => /postgres/i.test(line) && /healthy/i.test(line)) ?? rows.find((line) => /postgres/i.test(line));
   return match?.split(/\s+/)[0] ?? null;
 }
 
-function toolVersion(command: string, args: string[]) {
-  const result = spawnSync(command, args, { encoding: "utf8" });
+function toolVersion(command: string, args: string[], runCommand: CommandRunner = runSpawn) {
+  const result = runCommand(command, args, { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`unable to inspect PostgreSQL client version for ${command}`);
   return `${result.stdout}${result.stderr}`.trim();
 }
@@ -227,6 +276,15 @@ function parsePgMajor(version: string) {
   const match = version.match(/(\d+)(?:\.\d+)?/);
   if (!match) throw new Error(`unable to parse PostgreSQL client version: ${version}`);
   return Number(match[1]);
+}
+
+function runSpawn(command: string, args: string[], options?: Parameters<typeof spawnSync>[2]) {
+  return spawnSync(command, args, options);
+}
+
+function clean(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function redactOutput(output: string, databaseUrl: string) {

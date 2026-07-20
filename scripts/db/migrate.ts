@@ -329,7 +329,7 @@ async function runBackup() {
       schemaTableCounts: { currentSchemaTables: identity.table_count ?? null },
     };
     writeFileSync(`${output}.metadata.json`, `${JSON.stringify(metadata, null, 2)}\n`);
-    const evidence = verifyBackupArtifact({ backupPath: output, checksumPath, requireOutsideRepository: true });
+    const evidence = verifyBackupArtifact({ backupPath: output, checksumPath, requireOutsideRepository: true, postgresToolSelection: toolSelection! });
     console.log(JSON.stringify({ ...metadata, verification: evidence }, null, 2));
   } catch (error) {
     if (existsSync(tempOutput)) unlinkSync(tempOutput);
@@ -343,7 +343,6 @@ async function runRestoreVerify() {
   const backupPath = valueAfter("--backup");
   if (!backupPath) throw new Error("--backup is required");
   const checksumPath = valueAfter("--checksum") ?? process.env.FINCOACH_DB_BACKUP_SHA256_PATH;
-  const evidence = verifyBackupArtifact({ backupPath, checksumPath, requireOutsideRepository: false });
   const source = new URL(url);
   const originalDatabase = source.pathname.replace(/^\//, "");
   const tempDatabase = `fincoach_restore_verify_${Date.now()}_${process.pid}`.toLowerCase();
@@ -359,6 +358,7 @@ async function runRestoreVerify() {
   try {
     const versionRow = await admin.query("SELECT current_setting('server_version_num')::int AS server_version_num");
     const toolSelection = await resolvePostgresTools(url, async () => Number(versionRow.rows[0].server_version_num));
+    const evidence = verifyBackupArtifact({ backupPath, checksumPath, requireOutsideRepository: false, postgresToolSelection: toolSelection });
     if (originalDatabase === tempDatabase) throw new Error("restore verification refused to target configured database");
     await admin.query(`CREATE DATABASE ${quoteIdent(tempDatabase)}`);
     created = true;
