@@ -23,6 +23,7 @@ metrics-output/
 .venv
 venv/
 venv*
+logs/*
 
 backfill-*.json
 
