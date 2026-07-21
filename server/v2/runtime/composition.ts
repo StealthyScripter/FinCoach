@@ -34,6 +34,8 @@ import { memorySnapshot } from "./memory";
 import { PgV2RuntimeRepository } from "./repository";
 import { eventLogService } from "../../eventLogService";
 import { structuredLogger } from "../../structuredLogger";
+import { createDomainEvent, type DomainEvent } from "../contracts";
+import { OrchestrationV2EventTypes } from "../orchestration/events";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
 
@@ -172,9 +174,10 @@ export class FinCoachV2Runtime {
     const cycleId = `cycle-${now.toISOString()}-${randomUUID().slice(0, 8)}`;
     structuredLogger.v2({ level: "info", event: "research_cycle_started", message: "V2 research cycle started", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, workerId, leaseName: lease.leaseName });
     await repositories.orchestration.saveCycle({ cycleId, status: "requested", requestedBy: input.requestedBy ?? "manual", idempotencyKey: cycleId, correlationId, createdAt: now.toISOString(), updatedAt: now.toISOString() });
+    const cycleRequested = createDomainEvent({ eventType: OrchestrationV2EventTypes.ResearchCycleRequested, sourceModule: "orchestration", correlationId, causationId: null, payload: { cycleId, requestedBy: input.requestedBy ?? "manual" } });
     await repositories.orchestration.updateCycleStatus({ cycleId, status: "running" });
     try {
-      const result = await this.runResearchPath({ cycleId, correlationId, now });
+      const result = await this.runResearchPath({ cycleId, cycleEventId: cycleRequested.eventId, correlationId, now });
       await repositories.orchestration.updateCycleStatus({ cycleId, status: "completed" });
       await repositories.orchestration.checkpoint({ consumerId: "v2-runtime-cycle", sourceEventId: cycleId, idempotencyKey: cycleId, checkpointedAt: new Date().toISOString(), attempt: 1, correlationId });
       this.lastRunAt = new Date().toISOString();
@@ -264,7 +267,7 @@ export class FinCoachV2Runtime {
     }).catch(() => undefined);
   }
 
-  private async runResearchPath(input: { cycleId: string; correlationId: string; now: Date }) {
+  private async runResearchPath(input: { cycleId: string; cycleEventId: string; correlationId: string; now: Date }) {
     const repositories = this.requireRepositories();
     const observations = new ObservationsV2Service();
     const hypotheses = new HypothesisV2Service();
@@ -283,21 +286,22 @@ export class FinCoachV2Runtime {
     for (const symbol of this.config.symbols.slice(0, this.config.maxObservationsPerCycle)) {
       const timeframe = normalizeTimeframe(this.config.timeframes[0]);
       const candles = demoCandles(symbol, timeframe, input.now, 80);
-      const contextEventId = `${input.cycleId}:${symbol}:context`;
+      const contextEventId = input.cycleEventId;
       const obs = observations.create({
         symbol,
         timeframe,
         observedAt: input.now.toISOString(),
         contextEventId,
-        upstreamEventIds: [input.cycleId],
+        upstreamEventIds: [input.cycleEventId],
         correlationId: input.correlationId,
-        causationId: input.cycleId,
+        causationId: input.cycleEventId,
         evidence: [
           observationEvidence("chart", contextEventId, "volatility.compression", true, input.now.toISOString()),
           observationEvidence("chart", contextEventId, "structure.breakOfStructure", true, input.now.toISOString()),
         ],
       });
       for (const observation of obs.observations.slice(0, this.config.maxObservationsPerCycle - observationsCount)) {
+        const observationEventId = firstEventId(obs.events, "observations", observation.observationId);
         await repositories.observations.save(observation);
         observationsCount += 1;
         const hypothesis = hypotheses.generate({
@@ -315,10 +319,11 @@ export class FinCoachV2Runtime {
           sourceObservationIds: [observation.observationId],
           sourceTraderAnalysisIds: [],
           correlationId: input.correlationId,
-          causationId: observation.observationId,
+          causationId: observationEventId,
           createdAt: input.now.toISOString(),
         });
         if (!hypothesis.hypothesis) continue;
+        const hypothesisEventId = firstEventId(hypothesis.events, "hypothesis", hypothesis.hypothesis.hypothesisId);
         await repositories.hypotheses.save(hypothesis.hypothesis);
         hypothesesCount += 1;
         if (hypothesesCount > this.config.maxHypothesesPerCycle) break;
@@ -342,10 +347,11 @@ export class FinCoachV2Runtime {
           supportedRegimes: ["demo"],
           requiredFeatureDefinitions: [],
           correlationId: input.correlationId,
-          causationId: hypothesis.hypothesis.hypothesisId,
+          causationId: hypothesisEventId,
           createdAt: input.now.toISOString(),
         });
         if (!compiled.strategy) continue;
+        const strategyEventId = firstEventId(compiled.events, "rules", compiled.strategy.strategyId);
         await repositories.strategies.save(compiled.strategy);
         strategiesCount += 1;
         const experiment = experiments.create({
@@ -361,12 +367,14 @@ export class FinCoachV2Runtime {
           priority: 1,
           maxAttempts: this.config.retryBudget,
           correlationId: input.correlationId,
-          causationId: compiled.strategy.strategyId,
+          causationId: strategyEventId,
           createdAt: input.now.toISOString(),
         });
+        const experimentEventId = firstEventId(experiment.events, "experiments", experiment.experiment.experimentId);
         await repositories.experiments.save(experiment.experiment);
         experimentsCount += 1;
-        const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [observation.observationId, hypothesis.hypothesis.hypothesisId, compiled.strategy.strategyId, experiment.experiment.experimentId], correlationId: input.correlationId, causationId: experiment.experiment.experimentId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
+        const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [observationEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
+        const backtestEventId = firstEventId(backtest.events, "backtesting", backtest.result.backtestId);
         await repositories.backtests.save(backtest.result);
         backtestsCount += 1;
         const court = courtroom.open({
@@ -375,20 +383,21 @@ export class FinCoachV2Runtime {
           hypothesisId: hypothesis.hypothesis.hypothesisId,
           experimentIds: [experiment.experiment.experimentId],
           backtests: [backtest.result],
-          defenseExhibits: [{ exhibitId: `${backtest.result.backtestId}:defense`, sourceEventId: backtest.result.backtestId, kind: "defense", summary: "Deterministic bounded backtest result." }],
-          prosecutionExhibits: backtest.result.aggregateMetrics.tradeCount < 30 ? [{ exhibitId: `${backtest.result.backtestId}:sample`, sourceEventId: backtest.result.backtestId, kind: "prosecution", summary: "Insufficient sample depth." }] : [],
-          riskExhibits: [{ exhibitId: `${backtest.result.backtestId}:cost`, sourceEventId: backtest.result.backtestId, kind: "risk", summary: "Transaction costs applied." }],
+          defenseExhibits: [{ exhibitId: `${backtest.result.backtestId}:defense`, sourceEventId: backtestEventId, kind: "defense", summary: "Deterministic bounded backtest result." }],
+          prosecutionExhibits: backtest.result.aggregateMetrics.tradeCount < 30 ? [{ exhibitId: `${backtest.result.backtestId}:sample`, sourceEventId: backtestEventId, kind: "prosecution", summary: "Insufficient sample depth." }] : [],
+          riskExhibits: [{ exhibitId: `${backtest.result.backtestId}:cost`, sourceEventId: backtestEventId, kind: "risk", summary: "Transaction costs applied." }],
           correlationId: input.correlationId,
-          causationId: backtest.result.backtestId,
+          causationId: backtestEventId,
         });
-        await repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtest.result.backtestId, experiment.experiment.experimentId, hypothesis.hypothesis.hypothesisId] });
+        const courtEventId = firstEventId(court.events, "courtroom", court.courtCase.caseId);
+        await repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtestEventId, experimentEventId, hypothesisEventId] });
         verdictsCount += 1;
-        rankingCandidates.push(candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, hypothesis.hypothesis.hypothesisId, backtest.result, timeframe));
+        rankingCandidates.push(candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, hypothesis.hypothesis.hypothesisId, backtest.result, timeframe, courtEventId));
         if (experimentsCount >= this.config.maxExperimentsPerCycle || backtestsCount >= this.config.maxBacktestsPerCycle) break;
       }
     }
     if (rankingCandidates.length) {
-      const ranked = ranking.rank({ candidates: rankingCandidates, maxFocusedCount: 1, correlationId: input.correlationId, causationId: input.cycleId, generatedAt: new Date().toISOString() });
+      const ranked = ranking.rank({ candidates: rankingCandidates, maxFocusedCount: 1, correlationId: input.correlationId, causationId: rankingCandidates[0].lineageEventIds.at(-1) ?? input.cycleEventId, generatedAt: new Date().toISOString() });
       await repositories.ranking.save({ ...ranked.decision, schemaVersion: "fincoach.v2.ranking.1", lineageEventIds: rankingCandidates.flatMap(candidate => candidate.lineageEventIds) });
       rankedCount = ranked.decision.candidates.length;
     }
@@ -519,7 +528,13 @@ function demoCandles(symbol: string, timeframe: V2Timeframe, now: Date, count: n
   });
 }
 
-function candidateFromBacktest(courtCaseId: string, courtVerdict: RankingCandidateInput["courtVerdict"], strategyId: string, strategyVersion: number, hypothesisId: string, result: BacktestResult, timeframe: string): RankingCandidateInput {
+function firstEventId(events: readonly DomainEvent[], sourceModule: string, parentEntityId: string) {
+  const event = events[0];
+  if (!event) throw new Error(`Missing ${sourceModule} domain event for ${parentEntityId}`);
+  return event.eventId;
+}
+
+function candidateFromBacktest(courtCaseId: string, courtVerdict: RankingCandidateInput["courtVerdict"], strategyId: string, strategyVersion: number, hypothesisId: string, result: BacktestResult, timeframe: string, courtEventId: string): RankingCandidateInput {
   const metrics = result.aggregateMetrics;
   return {
     strategyId,
@@ -543,7 +558,7 @@ function candidateFromBacktest(courtCaseId: string, courtVerdict: RankingCandida
     },
     similarityConfidence: 0.5,
     evidenceFreshness: 1,
-    lineageEventIds: [result.backtestId],
+    lineageEventIds: [...result.lineageEventIds, courtEventId],
     assetClass: "forex",
     timeframe,
     horizon: "short",

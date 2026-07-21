@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "fs";
 import { join } from "path";
 import { StructuredLogger, serializeError } from "./structuredLogger";
+import { createDomainEvent } from "./v2/contracts";
 
 const root = "/tmp/fincoach-structured-logger-test";
 rmSync(root, { recursive: true, force: true });
@@ -55,5 +56,25 @@ mkdirSync(root, { recursive: true });
 }
 
 assert.equal(serializeError(new Error("Cannot use a pool after calling end on the pool")).code, "database_pool_closed");
+
+{
+  let captured: unknown = null;
+  try {
+    createDomainEvent({
+      eventType: "MarketObservationCreated",
+      sourceModule: "observations",
+      correlationId: "00000000-0000-4000-8000-000000000001",
+      causationId: "cycle-2026-07-20T00:00:00.000Z-deadbeef",
+      payload: { observationId: "obs-1" },
+    });
+  } catch (error) {
+    captured = error;
+  }
+  const serialized = serializeError(captured) as { code?: string; issues?: Array<{ offendingField?: string; offendingValue?: string }>; validationContext?: { objectType?: string } };
+  assert.equal(serialized.code, "validation_failed");
+  assert.equal(serialized.validationContext?.objectType, "DomainEvent");
+  assert.equal(serialized.issues?.[0]?.offendingField, "causationId");
+  assert.equal(serialized.issues?.[0]?.offendingValue, "cycle-2026-07-20T00:00:00.000Z-deadbeef");
+}
 
 console.log("structured logger tests passed");

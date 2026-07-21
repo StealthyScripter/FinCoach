@@ -131,11 +131,15 @@ export const structuredLogger = new StructuredLogger();
 
 export function serializeError(error: unknown) {
   if (!(error instanceof Error)) return { name: "Error", code: "unknown", message: redact(String(error)) };
+  const zodIssues = zodIssueDetails(error);
+  const validationContext = (error as Error & { validationContext?: unknown }).validationContext;
   return {
     name: error.name,
     code: classifyErrorCode(error),
     message: redact(error.message),
     stack: error.stack ? redact(error.stack) : undefined,
+    issues: zodIssues,
+    validationContext,
   };
 }
 
@@ -159,10 +163,37 @@ function redact(value: string) {
 }
 
 function classifyErrorCode(error: Error) {
+  if (error.name === "ZodError") return "validation_failed";
   if (/Cannot use a pool after calling end on the pool/i.test(error.message)) return "database_pool_closed";
   if (/timeout/i.test(error.message)) return "timeout";
   if (/rate limit|429/i.test(error.message)) return "rate_limited";
   return (error as Error & { code?: string }).code ?? "unknown_failure";
+}
+
+function zodIssueDetails(error: Error) {
+  const issues = (error as Error & { issues?: unknown }).issues;
+  const validationContext = (error as Error & { validationContext?: Record<string, unknown> }).validationContext;
+  if (!Array.isArray(issues)) return undefined;
+  return issues.map((issue) => {
+    const record = issue && typeof issue === "object" ? issue as Record<string, unknown> : {};
+    const path = Array.isArray(record.path) ? record.path.map(String) : [];
+    return {
+      path,
+      message: typeof record.message === "string" ? record.message : undefined,
+      code: typeof record.code === "string" ? record.code : undefined,
+      offendingField: path.join(".") || undefined,
+      offendingValue: path.length && validationContext ? valueAt(validationContext, path) : undefined,
+    };
+  });
+}
+
+function valueAt(value: unknown, path: string[]) {
+  let current = value;
+  for (const item of path) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[item];
+  }
+  return current;
 }
 
 function stableStringify(value: unknown) {

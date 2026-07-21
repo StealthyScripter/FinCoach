@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 
 export const FINCOACH_V2_SCHEMA_VERSION = "fincoach.v2.event.1" as const;
 
@@ -94,7 +94,22 @@ export function createDomainEvent<TPayload extends Record<string, unknown>>(
     payload: deepFreeze({ ...input.payload }),
     metadata: deepFreeze({ ...(input.metadata ?? {}) }),
   };
-  return deepFreeze(domainEventSchema.parse(event)) as DomainEvent<TPayload>;
+  try {
+    return deepFreeze(domainEventSchema.parse(event)) as DomainEvent<TPayload>;
+  } catch (error) {
+    if (error instanceof ZodError) {
+      (error as ZodError & { validationContext?: Record<string, unknown> }).validationContext = {
+        objectType: "DomainEvent",
+        eventType: input.eventType,
+        sourceModule: input.sourceModule,
+        eventId: event.eventId,
+        correlationId: event.correlationId,
+        causationId: event.causationId,
+        parentEntityIds: input.payload,
+      };
+    }
+    throw error;
+  }
 }
 
 export function validateDomainEvent(event: unknown): DomainEvent {
