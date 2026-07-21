@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { TelegramCommandRouter } from "./telegram/commandRouter";
+import { PgOrchestrationRepository } from "./v2/orchestration/pgRepository";
 import { V2OperationsEventTypes, V2OperationsService, registerV2OperationsRoutes } from "./v2/operations";
 
 const operations = new V2OperationsService();
@@ -61,5 +62,60 @@ assert.match(await telegram.handle({ command: "/lessons", actorId: "operator", c
 assert.match(await telegram.handle({ command: "/v2_status", actorId: "intruder", chatId: "chat" }), /unauthorized/);
 assert.match(await telegram.handle({ command: "/enable_live", actorId: "operator", chatId: "chat" }), /demo-only/);
 assert.equal("rankStrategies" in operations || "placeOrder" in operations || "sendTelegram" in operations, false);
+
+{
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const later = new Date("2026-07-21T13:00:00.000Z");
+  const repository = new PgOrchestrationRepository({
+    query: async (sql: string) => {
+      assert.match(sql, /FROM v2_orchestration_retries r/);
+      assert.match(sql, /r\.next_retry_at IS NOT NULL/);
+      assert.match(sql, /v2_orchestration_consumer_acknowledgements/);
+      assert.match(sql, /v2_orchestration_dead_letters/);
+      const rows = retryProjectionFixture();
+      const pending = rows.retries.filter(retry => {
+        if (retry.exhausted) return false;
+        if (retry.next_retry_at === null) return false;
+        if (rows.acknowledgements.some(ack => ack.source_event_id === retry.source_event_id && ack.consumer_id === retry.consumer_id)) return false;
+        if (rows.deadLetters.some(dead => dead.source_event_id === retry.source_event_id)) return false;
+        if (retry.consumer_id === "v2-runtime-cycle" && rows.cycles.some(cycle => cycle.status === "completed" && cycle.updated_at > retry.updated_at)) return false;
+        return true;
+      }).length;
+      const exhausted = rows.retries.filter(retry => {
+        if (!retry.exhausted) return false;
+        if (rows.acknowledgements.some(ack => ack.source_event_id === retry.source_event_id && ack.consumer_id === retry.consumer_id)) return false;
+        if (rows.deadLetters.some(dead => dead.source_event_id === retry.source_event_id)) return false;
+        return true;
+      }).length;
+      return { rows: [{ pending, exhausted }], rowCount: 1 };
+    },
+  } as never);
+  const counts = await repository.retryCounts();
+  assert.deepEqual(counts, { pending: 2, exhausted: 1 });
+
+  function retryProjectionFixture() {
+    return {
+      retries: [
+        // Failed retryable cycle with a retry schedule: pending.
+        { source_event_id: "event-retryable-due", consumer_id: "consumer", exhausted: false, next_retry_at: now, updated_at: now },
+        // Scheduled future retry: still pending because work is scheduled and unresolved.
+        { source_event_id: "event-scheduled-future", consumer_id: "consumer", exhausted: false, next_retry_at: later, updated_at: now },
+        // Successful retry: acknowledgement resolves the retry projection.
+        { source_event_id: "event-acknowledged", consumer_id: "consumer", exhausted: false, next_retry_at: now, updated_at: now },
+        // Superseded historical runtime failure: later successful cycle replaces it.
+        { source_event_id: "cycle-old-failure", consumer_id: "v2-runtime-cycle", exhausted: false, next_retry_at: now, updated_at: now },
+        // Exhausted retry: counted separately.
+        { source_event_id: "event-exhausted", consumer_id: "consumer", exhausted: true, next_retry_at: null, updated_at: now },
+        // Dead-letter transition: counted by deadLetterCount, not retry counts.
+        { source_event_id: "event-dead-lettered", consumer_id: "consumer", exhausted: false, next_retry_at: now, updated_at: now },
+        // Null nextRetryAt historical failure: not pending because no retry is scheduled.
+        { source_event_id: "cycle-null-next-retry", consumer_id: "v2-runtime-cycle", exhausted: false, next_retry_at: null, updated_at: now },
+      ],
+      acknowledgements: [{ source_event_id: "event-acknowledged", consumer_id: "consumer" }],
+      deadLetters: [{ source_event_id: "event-dead-lettered" }],
+      cycles: [{ status: "completed", updated_at: later }],
+    };
+  }
+}
 
 console.log("v2 phase 24 operations tests passed");

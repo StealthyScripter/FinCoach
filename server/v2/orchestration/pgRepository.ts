@@ -285,14 +285,39 @@ export class PgOrchestrationRepository {
 
   async retryCounts(): Promise<{ pending: number; exhausted: number }> {
     try {
-      const result = await this.db.query("SELECT exhausted, count(*)::int AS count FROM v2_orchestration_retries GROUP BY exhausted");
-      let pending = 0;
-      let exhausted = 0;
-      for (const row of result.rows) {
-        if (row.exhausted) exhausted = Number(row.count);
-        else pending = Number(row.count);
-      }
-      return { pending, exhausted };
+      const result = await this.db.query(
+        `SELECT
+          count(*) FILTER (
+            WHERE r.exhausted = false
+              AND r.next_retry_at IS NOT NULL
+              AND ack.acknowledgement_id IS NULL
+              AND dead.dead_letter_id IS NULL
+              AND NOT (
+                r.consumer_id = 'v2-runtime-cycle'
+                AND EXISTS (
+                  SELECT 1
+                  FROM v2_orchestration_cycles completed_cycle
+                  WHERE completed_cycle.status = 'completed'
+                    AND completed_cycle.updated_at > r.updated_at
+                )
+              )
+          )::int AS pending,
+          count(*) FILTER (
+            WHERE r.exhausted = true
+              AND ack.acknowledgement_id IS NULL
+              AND dead.dead_letter_id IS NULL
+          )::int AS exhausted
+         FROM v2_orchestration_retries r
+         LEFT JOIN v2_orchestration_consumer_acknowledgements ack
+          ON ack.source_event_id = r.source_event_id
+          AND ack.consumer_id = r.consumer_id
+         LEFT JOIN v2_orchestration_dead_letters dead
+          ON dead.source_event_id = r.source_event_id`,
+      );
+      return {
+        pending: Number(result.rows[0]?.pending ?? 0),
+        exhausted: Number(result.rows[0]?.exhausted ?? 0),
+      };
     } catch (error) {
       throw classifyPostgresError(error);
     }
