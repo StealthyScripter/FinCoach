@@ -81,7 +81,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
       releaseLease: async () => undefined,
     },
     runtime: { health: async () => undefined, recordBoot: async () => undefined },
-    observations: { save: save(saved.observations) },
+    observations: { save: save(saved.observations), eligibleForHypothesis: async () => [], eligibleSemanticGroups: async () => [] },
     hypotheses: { save: save(saved.hypotheses) },
     strategies: { save: save(saved.strategies) },
     experiments: { save: save(saved.experiments) },

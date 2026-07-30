@@ -211,7 +211,7 @@ function minimalRepositories() {
       releaseLease: async () => undefined,
     },
     runtime: { health: async () => undefined, recordBoot: async () => undefined },
-    observations: { save, list: async () => [] },
+    observations: { save, list: async () => [], eligibleForHypothesis: async () => [], eligibleSemanticGroups: async () => [] },
     hypotheses: { save },
     strategies: { save },
     experiments: { save },
@@ -257,6 +257,10 @@ function e2eRepositories(saved: {
     runtime: { health: async () => undefined, recordBoot: async () => undefined },
     observations: {
       save: saveTo(saved.observations),
+      eligibleSemanticGroups: async () => {
+        const current = saved.observations[0] as import("./v2/observations").MarketObservation | undefined;
+        return current ? [{ symbol: current.symbol, timeframe: current.timeframe, detectorId: current.detectorId, observationType: current.observationType, strategyFamily: current.strategyFamily }] : [];
+      },
       eligibleForHypothesis: async (input: { now: Date }) => {
         const current = saved.observations[0] as import("./v2/observations").MarketObservation;
         const prior = {

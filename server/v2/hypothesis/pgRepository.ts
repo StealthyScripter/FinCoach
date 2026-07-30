@@ -21,7 +21,7 @@ export class PgHypothesisRepository {
 
   async save(hypothesis: ResearchHypothesis) {
     const saved = await this.evidence.save({ ...hypothesis, lineageEventIds: hypothesis.evidenceEventIds });
-    return { inserted: saved.inserted, hypothesis: saved.record, existing: saved.inserted ? null : saved.record };
+    return { inserted: saved.inserted, hypothesis: saved.record, record: saved.record, existing: saved.inserted ? null : saved.record, conflict: saved.conflict };
   }
 
   get(id: string) { return this.evidence.get(id); }

@@ -29,20 +29,14 @@ const tempStrategy = {
 try {
   const envExample = readFileSync(".env.example", "utf-8");
   for (const expected of [
+    "MARKETPILOT_DEMO_ONLY=true",
     "MARKETPILOT_RUN_MODE=demo_observation",
-    "TELEGRAM_BOT_TOKEN=",
-    "TELEGRAM_ALLOWED_USER_ID=",
-    "TELEGRAM_WEBHOOK_SECRET=",
-    "TELEGRAM_WEBHOOK_URL=",
+    "FINCOACH_TELEGRAM_TRANSPORT=disabled",
+    "TELEGRAM_NOTIFICATIONS_ENABLED=false",
+    "TELEGRAM_SIGNALS_ENABLED=false",
+    "DATABASE_URL=",
     "OPENAI_API_KEY=",
-    "OPENAI_MODEL=",
     "OANDA_API_TOKEN=",
-    "OANDA_ACCOUNT_ID=",
-    "METATRADER_BRIDGE_URL=",
-    "METATRADER_BRIDGE_SECRET=",
-    "TRADINGVIEW_WEBHOOK_SECRET=",
-    "FRED_API_KEY=",
-    "QDRANT_URL=",
   ]) {
     assert.ok(envExample.includes(expected), `expected .env.example to include ${expected}`);
   }

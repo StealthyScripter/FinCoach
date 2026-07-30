@@ -1,0 +1,2994 @@
+{
+  "summary": {
+    "purpose": "minimal local developer configuration",
+    "exampleVariableCount": 5,
+    "defaultBootRequiresSecrets": false
+  },
+  "variables": [
+    {
+      "variable": "APP_BASE_URL",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:29",
+        "env-audit-report.json:4716"
+      ]
+    },
+    {
+      "variable": "APP_ENV",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:1",
+        "docker-compose.yml:51",
+        "env-audit-report.json:43"
+      ]
+    },
+    {
+      "variable": "DATABASE_URL",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "deploy/replay/docker-compose.replay.yml:13",
+        "docs/broker-sandbox-v3.5.md:54",
+        "docs/limited-autonomy-governance-v5.md:39",
+        "docs/marketpilot-execution-plan.md:200",
+        "docs/marketpilot-execution-plan.md:203",
+        "docs/persistence-runbook.md:5",
+        "docs/persistence-runbook.md:14",
+        "docs/persistence-runbook.md:63",
+        "docs/persistence-runbook.md:67",
+        "docs/persistence-runbook.md:68",
+        "docs/persistence-runbook.md:70",
+        "docs/persistence-runbook.md:87",
+        "docs/persistence-runbook.md:90",
+        "docs/persistence-runbook.md:101",
+        "docs/persistence-runbook.md:105",
+        "docs/v2-cloud-deployment-runbook.md:13",
+        "docs/v2-cloud-replay-runbook.md:7",
+        "docs/v2-cloud-replay-runbook.md:70",
+        "docs/v2-release-readiness.md:46",
+        "drizzle.config.ts:3",
+        "env-audit-report.json:210",
+        "script/oanda-practice-validation.ts:338",
+        "scripts/db/dbLifecycle.ts:140",
+        "scripts/db/guard-drizzle-push.ts:16",
+        "scripts/db/guard-drizzle-push.ts:17"
+      ]
+    },
+    {
+      "variable": "FINCOACH_ALLOW_DISPOSABLE_DB_MIGRATION_WITHOUT_BACKUP",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:588",
+        "env-audit-report.json:4287",
+        "env-audit-report.json:4418",
+        "env-audit-report.json:4595",
+        "scripts/db/migrationSafety.ts:60"
+      ]
+    },
+    {
+      "variable": "FINCOACH_ALLOW_LOCAL_SCHEMA_PUSH",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:606",
+        "env-audit-report.json:4288",
+        "env-audit-report.json:4419",
+        "env-audit-report.json:4596",
+        "scripts/db/dbLifecycle.ts:133"
+      ]
+    },
+    {
+      "variable": "FINCOACH_CLOUD_DEPLOYMENT",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:624",
+        "env-audit-report.json:4289",
+        "env-audit-report.json:4420",
+        "env-audit-report.json:4597",
+        "scripts/db/dbLifecycle.ts:134"
+      ]
+    },
+    {
+      "variable": "FINCOACH_DB_BACKUP_DIR",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:642",
+        "env-audit-report.json:4290",
+        "env-audit-report.json:4421",
+        "env-audit-report.json:4598",
+        "scripts/db/migrate.ts:290"
+      ]
+    },
+    {
+      "variable": "FINCOACH_DB_BACKUP_MAX_AGE_HOURS",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "deploy/replay/docker-compose.replay.yml:16",
+        "env-audit-report.json:660",
+        "env-audit-report.json:4291",
+        "env-audit-report.json:4422",
+        "env-audit-report.json:4599",
+        "scripts/db/dbLifecycle.ts:90",
+        "scripts/db/migrationSafety.ts:70"
+      ]
+    },
+    {
+      "variable": "FINCOACH_DB_BACKUP_PATH",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "deploy/replay/docker-compose.replay.yml:14",
+        "docs/persistence-runbook.md:36",
+        "docs/v2-cloud-deployment-runbook.md:52",
+        "docs/v2-cloud-release-checklist.md:41",
+        "docs/v2-deployment-rollback.md:21",
+        "docs/v2-migration-recovery.md:15",
+        "docs/v2-migration-recovery.md:27",
+        "docs/v2-operational-runbook.md:13",
+        "docs/v2-production-migration-policy.md:9",
+        "docs/v2-production-migration-policy.md:23",
+        "env-audit-report.json:680",
+        "env-audit-report.json:4292",
+        "env-audit-report.json:4423",
+        "env-audit-report.json:4600",
+        "scripts/db/migrate.ts:170",
+        "scripts/db/migrationSafety.ts:65",
+        "scripts/v2-replay/cloud-preflight.sh:9",
+        "scripts/verify-v2-cloud-replay.sh:15"
+      ]
+    },
+    {
+      "variable": "FINCOACH_DB_BACKUP_SHA256_PATH",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "deploy/replay/docker-compose.replay.yml:15",
+        "docs/persistence-runbook.md:36",
+        "docs/v2-cloud-deployment-runbook.md:52",
+        "docs/v2-cloud-release-checklist.md:41",
+        "docs/v2-deployment-rollback.md:21",
+        "docs/v2-migration-recovery.md:15",
+        "docs/v2-migration-recovery.md:27",
+        "docs/v2-operational-runbook.md:13",
+        "docs/v2-production-migration-policy.md:9",
+        "docs/v2-production-migration-policy.md:24",
+        "env-audit-report.json:711",
+        "env-audit-report.json:4293",
+        "env-audit-report.json:4424",
+        "env-audit-report.json:4601",
+        "scripts/db/migrate.ts:171",
+        "scripts/db/migrate.ts:345",
+        "scripts/db/migrationSafety.ts:69",
+        "scripts/v2-replay/cloud-preflight.sh:10",
+        "scripts/verify-v2-cloud-replay.sh:15"
+      ]
+    },
+    {
+      "variable": "FINCOACH_DB_BREAK_GLASS_DESTRUCTIVE_DDL",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:743",
+        "env-audit-report.json:4294",
+        "env-audit-report.json:4425",
+        "env-audit-report.json:4602",
+        "scripts/db/migrate.ts:54"
+      ]
+    },
+    {
+      "variable": "FINCOACH_DB_MIGRATION_LOCK_TIMEOUT_MS",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:761",
+        "env-audit-report.json:4295",
+        "env-audit-report.json:4426",
+        "env-audit-report.json:4603",
+        "scripts/db/migrate.ts:270"
+      ]
+    },
+    {
+      "variable": "FINCOACH_DEMO_BROKER_EXECUTION_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:779",
+        "env-audit-report.json:4296",
+        "env-audit-report.json:4427",
+        "server/v2/runtime/config.ts:71"
+      ]
+    },
+    {
+      "variable": "FINCOACH_ENV",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:796",
+        "env-audit-report.json:4297",
+        "env-audit-report.json:4428",
+        "env-audit-report.json:4604",
+        "scripts/db/dbLifecycle.ts:134"
+      ]
+    },
+    {
+      "variable": "FINCOACH_EVENT_LOG_RETENTION_LIMIT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:814",
+        "env-audit-report.json:4298",
+        "env-audit-report.json:4429",
+        "env-audit-report.json:4605",
+        "server/eventLogService.ts:117"
+      ]
+    },
+    {
+      "variable": "FINCOACH_LIVE_EXECUTION",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/v2-oanda-historical-dataset-workflow.md:11",
+        "env-audit-report.json:832",
+        "env-audit-report.json:4299",
+        "env-audit-report.json:4430",
+        "env-audit-report.json:4606",
+        "scripts/v2-replay/build-oanda-dataset.sh:30",
+        "scripts/v2-replay/cloud-entrypoint.sh:11",
+        "scripts/v2-replay/cloud-preflight.sh:32",
+        "scripts/v2-replay/run-gated-cloud-release.sh:60",
+        "scripts/v2-replay/run-gated-cloud-release.sh:66",
+        "server/v2/dataset-pipeline/oanda.ts:28"
+      ]
+    },
+    {
+      "variable": "FINCOACH_LIVE_EXECUTION_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/v2-research-pipeline-operations.md:20",
+        "env-audit-report.json:856",
+        "env-audit-report.json:4431",
+        "server/v2/runtime/config.ts:72"
+      ]
+    },
+    {
+      "variable": "FINCOACH_LOG_DIR",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:873",
+        "env-audit-report.json:4300",
+        "env-audit-report.json:4432",
+        "env-audit-report.json:4607",
+        "server/structuredLogger.ts:63"
+      ]
+    },
+    {
+      "variable": "FINCOACH_LOG_MAX_BYTES",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:891",
+        "env-audit-report.json:4301",
+        "env-audit-report.json:4433",
+        "env-audit-report.json:4608",
+        "server/structuredLogger.ts:64"
+      ]
+    },
+    {
+      "variable": "FINCOACH_LOG_RETENTION_DAYS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:909",
+        "env-audit-report.json:4302",
+        "env-audit-report.json:4434",
+        "env-audit-report.json:4609",
+        "server/structuredLogger.ts:65"
+      ]
+    },
+    {
+      "variable": "FINCOACH_PAPER_EXECUTION_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:927",
+        "env-audit-report.json:4303",
+        "env-audit-report.json:4435",
+        "server/v2/runtime/config.ts:70"
+      ]
+    },
+    {
+      "variable": "FINCOACH_PG_DUMP_BIN",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/v2-database-backup-verification.md:5",
+        "docs/v2-production-migration-policy.md:31",
+        "env-audit-report.json:944",
+        "env-audit-report.json:4304",
+        "env-audit-report.json:4436",
+        "env-audit-report.json:4610",
+        "scripts/db/dbLifecycle.ts:167",
+        "scripts/db/dbLifecycle.ts:232"
+      ]
+    },
+    {
+      "variable": "FINCOACH_PG_RESTORE_BIN",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/v2-database-backup-verification.md:5",
+        "docs/v2-production-migration-policy.md:31",
+        "env-audit-report.json:965",
+        "env-audit-report.json:4305",
+        "env-audit-report.json:4437",
+        "env-audit-report.json:4611",
+        "scripts/db/dbLifecycle.ts:168",
+        "scripts/db/dbLifecycle.ts:243",
+        "scripts/db/dbLifecycle.ts:256"
+      ]
+    },
+    {
+      "variable": "FINCOACH_POSTGRES_CONTAINER",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/v2-database-backup-verification.md:5",
+        "docs/v2-production-migration-policy.md:31",
+        "env-audit-report.json:987",
+        "env-audit-report.json:4306",
+        "env-audit-report.json:4438",
+        "env-audit-report.json:4612",
+        "scripts/db/dbLifecycle.ts:169"
+      ]
+    },
+    {
+      "variable": "FINCOACH_POSTGRES_TOOL_MODE",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1007",
+        "env-audit-report.json:4307",
+        "env-audit-report.json:4439",
+        "env-audit-report.json:4613",
+        "scripts/db/dbLifecycle.ts:170"
+      ]
+    },
+    {
+      "variable": "FINCOACH_REJECTED_SIGNAL_RETENTION_LIMIT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1025",
+        "env-audit-report.json:4308",
+        "env-audit-report.json:4440",
+        "env-audit-report.json:4614",
+        "server/execution/strategyEvidenceStore.ts:595"
+      ]
+    },
+    {
+      "variable": "FINCOACH_REPLAY_MIN_FREE_DISK_GB",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/v2-replay-capacity-planning.md:17",
+        "env-audit-report.json:1043",
+        "env-audit-report.json:4309",
+        "env-audit-report.json:4441",
+        "env-audit-report.json:4615",
+        "scripts/v2-replay/cloud-preflight.sh:7",
+        "scripts/v2-replay/run-cloud-verify.sh:5"
+      ]
+    },
+    {
+      "variable": "FINCOACH_REPLAY_MIN_MEMORY_GB",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/v2-replay-capacity-planning.md:17",
+        "env-audit-report.json:1063",
+        "env-audit-report.json:4310",
+        "env-audit-report.json:4442",
+        "env-audit-report.json:4616",
+        "scripts/v2-replay/cloud-preflight.sh:8",
+        "scripts/v2-replay/run-cloud-verify.sh:5"
+      ]
+    },
+    {
+      "variable": "FINCOACH_REPLAY_MIN_POSTGRES_FREE_GB",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/v2-replay-capacity-planning.md:17",
+        "env-audit-report.json:1083",
+        "env-audit-report.json:4311",
+        "env-audit-report.json:4443",
+        "env-audit-report.json:4617"
+      ]
+    },
+    {
+      "variable": "FINCOACH_STRATEGY_EVIDENCE_RETENTION_LIMIT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1101",
+        "env-audit-report.json:4312",
+        "env-audit-report.json:4444",
+        "env-audit-report.json:4618",
+        "server/execution/strategyEvidenceStore.ts:593"
+      ]
+    },
+    {
+      "variable": "FINCOACH_TELEGRAM_DIGEST_RETENTION_LIMIT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1119",
+        "env-audit-report.json:4313",
+        "env-audit-report.json:4445",
+        "env-audit-report.json:4619",
+        "server/telegramService.ts:1004"
+      ]
+    },
+    {
+      "variable": "FINCOACH_TELEGRAM_NOTIFIED_RETENTION_LIMIT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1137",
+        "env-audit-report.json:4314",
+        "env-audit-report.json:4446",
+        "env-audit-report.json:4620",
+        "server/telegramService.ts:1139"
+      ]
+    },
+    {
+      "variable": "FINCOACH_TELEGRAM_PENDING_RETENTION_LIMIT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1155",
+        "env-audit-report.json:4315",
+        "env-audit-report.json:4447",
+        "env-audit-report.json:4621",
+        "server/telegramService.ts:1133"
+      ]
+    },
+    {
+      "variable": "FINCOACH_TELEGRAM_TRANSPORT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1173",
+        "env-audit-report.json:4316",
+        "env-audit-report.json:4448",
+        "server/telegram/index.ts:26",
+        "server/v2/runtime/config.ts:73"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_AUTOSTART",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1191",
+        "env-audit-report.json:4449",
+        "server/v2/runtime/config.ts:64"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_CADENCE_MS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1208",
+        "env-audit-report.json:4317",
+        "env-audit-report.json:4450",
+        "server/v2/runtime/config.ts:77"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_CYCLE_TIMEOUT_MS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1225",
+        "env-audit-report.json:4318",
+        "env-audit-report.json:4451",
+        "server/v2/runtime/config.ts:105"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_DATABASE_WRITE_BUDGET",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1242",
+        "env-audit-report.json:4319",
+        "env-audit-report.json:4452",
+        "server/v2/runtime/config.ts:103"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1259",
+        "env-audit-report.json:4453",
+        "server/v2/contracts/module.ts:61"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_FORWARD_TESTING_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1275",
+        "env-audit-report.json:4454",
+        "server/v2/contracts/module.ts:63",
+        "server/v2/runtime/config.ts:67"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_HYPOTHESIS_LOOKBACK_HOURS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1292",
+        "env-audit-report.json:4455",
+        "env-audit-report.json:4622",
+        "server/v2/runtime/config.ts:85"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_LEASE_TTL_MS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1309",
+        "env-audit-report.json:4320",
+        "env-audit-report.json:4456",
+        "server/v2/runtime/config.ts:107"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1326",
+        "env-audit-report.json:4457",
+        "server/v2/runtime/config.ts:83"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_BACKTESTS_PER_CYCLE",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1342",
+        "env-audit-report.json:4458",
+        "server/v2/runtime/config.ts:82"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_CYCLES_PER_DAY",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1358",
+        "env-audit-report.json:4321",
+        "env-audit-report.json:4459",
+        "server/v2/runtime/config.ts:78"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_DRAWDOWN_PCT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1375",
+        "env-audit-report.json:4460",
+        "env-audit-report.json:4623",
+        "server/v2/runtime/config.ts:96"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_EXPERIMENTS_PER_CYCLE",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1392",
+        "env-audit-report.json:4461",
+        "server/v2/runtime/config.ts:81"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_HYPOTHESES_PER_CYCLE",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1408",
+        "env-audit-report.json:4462",
+        "server/v2/runtime/config.ts:80"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1424",
+        "env-audit-report.json:4463",
+        "server/v2/runtime/config.ts:79"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_PAPER_DAILY_LOSS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1440",
+        "env-audit-report.json:4322",
+        "env-audit-report.json:4464",
+        "env-audit-report.json:4624",
+        "server/v2/runtime/config.ts:101"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_PAPER_POSITIONS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1458",
+        "env-audit-report.json:4323",
+        "env-audit-report.json:4465",
+        "env-audit-report.json:4625",
+        "server/v2/runtime/config.ts:99"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MAX_PAPER_RISK_PER_POSITION",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1476",
+        "env-audit-report.json:4324",
+        "env-audit-report.json:4466",
+        "env-audit-report.json:4626",
+        "server/v2/runtime/config.ts:100"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MEMORY_RETENTION_LIMIT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1494",
+        "env-audit-report.json:4325",
+        "env-audit-report.json:4467",
+        "server/v2/runtime/config.ts:106"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MIN_BACKTEST_DAYS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1511",
+        "env-audit-report.json:4468",
+        "env-audit-report.json:4627",
+        "server/v2/runtime/config.ts:92"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MIN_BACKTEST_TRADES",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1528",
+        "env-audit-report.json:4469",
+        "env-audit-report.json:4628",
+        "server/v2/runtime/config.ts:91"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MIN_EVALUATIONS_PER_HOUR",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1545",
+        "env-audit-report.json:4470",
+        "env-audit-report.json:4629",
+        "server/v2/runtime/config.ts:87"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MIN_FORWARD_TEST_DAYS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1562",
+        "env-audit-report.json:4471",
+        "env-audit-report.json:4630",
+        "server/v2/runtime/config.ts:94"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MIN_FORWARD_TEST_TRADES",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1579",
+        "env-audit-report.json:4472",
+        "env-audit-report.json:4631",
+        "server/v2/runtime/config.ts:93"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MIN_INDEPENDENT_HYPOTHESIS_OCCURRENCES",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1596",
+        "env-audit-report.json:4473",
+        "env-audit-report.json:4632",
+        "server/v2/runtime/config.ts:84"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MIN_PROFIT_FACTOR",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1613",
+        "env-audit-report.json:4474",
+        "env-audit-report.json:4633",
+        "server/v2/runtime/config.ts:95"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_MIN_SHARPE_RATIO",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1630",
+        "env-audit-report.json:4475",
+        "env-audit-report.json:4634",
+        "server/v2/runtime/config.ts:97"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_OBSERVATION_BATCH_SIZE",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1647",
+        "env-audit-report.json:4476",
+        "env-audit-report.json:4635",
+        "server/v2/runtime/config.ts:89"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_OBSERVATION_MAX_CONCURRENCY",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1664",
+        "env-audit-report.json:4477",
+        "env-audit-report.json:4636",
+        "server/v2/runtime/config.ts:88"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_OBSERVATION_SYMBOLS",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1681",
+        "env-audit-report.json:4478",
+        "env-audit-report.json:4637",
+        "server/v2/runtime/config.ts:75"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_OBSERVATION_TIMEFRAMES",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1698",
+        "env-audit-report.json:4479",
+        "env-audit-report.json:4638",
+        "server/v2/runtime/config.ts:76"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_PILOT_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1715",
+        "env-audit-report.json:4480",
+        "server/v2/runtime/config.ts:65"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_PILOT_ID",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1731",
+        "env-audit-report.json:4326",
+        "env-audit-report.json:4481",
+        "env-audit-report.json:4639",
+        "server/v2/runtime/config.ts:74"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_PROVIDER_CALL_BUDGET",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1749",
+        "env-audit-report.json:4327",
+        "env-audit-report.json:4482",
+        "server/v2/runtime/config.ts:102"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_PROVIDER_REQUESTS_PER_MINUTE",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1766",
+        "env-audit-report.json:4483",
+        "env-audit-report.json:4640",
+        "server/v2/runtime/config.ts:90"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_REQUIRE_HUMAN_LIVE_APPROVAL",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1783",
+        "env-audit-report.json:4484",
+        "env-audit-report.json:4641",
+        "server/v2/runtime/config.ts:98"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_RESEARCH_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1800",
+        "env-audit-report.json:4485",
+        "server/v2/contracts/module.ts:62",
+        "server/v2/runtime/config.ts:66"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_RESEARCH_SIGNAL_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1817",
+        "env-audit-report.json:4486",
+        "server/v2/runtime/config.ts:68"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_RETRY_BUDGET",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1833",
+        "env-audit-report.json:4328",
+        "env-audit-report.json:4487",
+        "server/v2/runtime/config.ts:104"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_RUNTIME_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1850",
+        "env-audit-report.json:4488",
+        "server/v2/runtime/config.ts:63"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_SIGNAL_PUBLISHING_ENABLED",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1866",
+        "env-audit-report.json:4329",
+        "env-audit-report.json:4489",
+        "env-audit-report.json:4642",
+        "server/v2/contracts/module.ts:64"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_SYMBOLS",
+      "classification": "Legacy Alias",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1884",
+        "env-audit-report.json:4330",
+        "env-audit-report.json:4490",
+        "env-audit-report.json:4643",
+        "server/v2/runtime/config.ts:75"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_TARGET_EVALUATIONS_PER_HOUR",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1902",
+        "env-audit-report.json:4491",
+        "env-audit-report.json:4644",
+        "server/v2/runtime/config.ts:86"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_TELEGRAM_SIGNAL_PUBLICATION_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1919",
+        "env-audit-report.json:4492",
+        "server/v2/runtime/config.ts:69"
+      ]
+    },
+    {
+      "variable": "FINCOACH_V2_TIMEFRAMES",
+      "classification": "Legacy Alias",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:1935",
+        "env-audit-report.json:4331",
+        "env-audit-report.json:4493",
+        "env-audit-report.json:4645",
+        "server/v2/runtime/config.ts:76"
+      ]
+    },
+    {
+      "variable": "FRED_API_KEY",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:1953",
+        "server/publicProviderAdapters.ts:13"
+      ]
+    },
+    {
+      "variable": "GENERIC_REST_BROKER_BASE_URL",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/telegram-control-and-connectors.md:23",
+        "env-audit-report.json:2011",
+        "env-audit-report.json:4333",
+        "env-audit-report.json:4495",
+        "env-audit-report.json:4647",
+        "server/toolConnectorRegistryService.ts:282",
+        "server/toolConnectorRegistryService.ts:290",
+        "server/toolConnectorRegistryService.ts:291",
+        "server/toolConnectorRegistryService.ts:298",
+        "server/toolConnectorRegistryService.ts:299",
+        "server/toolConnectorRegistryService.ts:300",
+        "server/toolConnectorRegistryService.ts:302"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_ALLOW_LIVE_EXECUTION",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2073",
+        "env-audit-report.json:4336",
+        "env-audit-report.json:4498",
+        "env-audit-report.json:4650",
+        "server/demoRunEnvironmentService.ts:20",
+        "server/execution/demoOnlyPolicy.ts:38"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_ALLOW_TELEGRAM_WEBHOOK_SETUP",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2092",
+        "env-audit-report.json:4337",
+        "env-audit-report.json:4499",
+        "env-audit-report.json:4651",
+        "server/routes.ts:974"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_AUDIT_ARCHIVE_DIR",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/limited-autonomy-governance-v5.md:54",
+        "env-audit-report.json:2110",
+        "env-audit-report.json:4338",
+        "env-audit-report.json:4500",
+        "env-audit-report.json:4652",
+        "server/execution/auditExportService.ts:148",
+        "server/execution/auditExportService.ts:164"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_AUDIT_EXPORT_DIR",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/limited-autonomy-governance-v5.md:39",
+        "env-audit-report.json:2130",
+        "env-audit-report.json:4339",
+        "env-audit-report.json:4501",
+        "env-audit-report.json:4653",
+        "server/execution/auditExportService.ts:147",
+        "server/execution/auditExportService.ts:158"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_AUDIT_EXPORT_SIGNING_KEY",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/limited-autonomy-governance-v5.md:39",
+        "env-audit-report.json:2150",
+        "env-audit-report.json:4340",
+        "env-audit-report.json:4502",
+        "env-audit-report.json:4654",
+        "server/execution/auditExportService.ts:67",
+        "server/execution/auditExportService.ts:113",
+        "server/execution/auditExportService.ts:146"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_DEMO_ONLY",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2171",
+        "env-audit-report.json:4503",
+        "scripts/v2-replay/build-oanda-dataset.sh:29",
+        "server/demoRunEnvironmentService.ts:43",
+        "server/demoRunEnvironmentService.ts:44",
+        "server/demoRunEnvironmentService.ts:45",
+        "server/execution/demoOnlyPolicy.ts:65",
+        "server/v2/dataset-pipeline/oanda.ts:27"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_DISASTER_RECOVERY_DIR",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2192",
+        "env-audit-report.json:4341",
+        "env-audit-report.json:4504",
+        "env-audit-report.json:4655",
+        "server/routes.ts:1574",
+        "server/routes.ts:1831"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_DISASTER_RECOVERY_RESTORE_TEST_COMPLETE",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2211",
+        "env-audit-report.json:4342",
+        "env-audit-report.json:4505",
+        "env-audit-report.json:4656",
+        "server/routes.ts:1832"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_ENABLE_LIVE_TRADING",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2229",
+        "env-audit-report.json:4343",
+        "env-audit-report.json:4506",
+        "env-audit-report.json:4657",
+        "server/demoRunEnvironmentService.ts:18",
+        "server/execution/demoOnlyPolicy.ts:39"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_INCIDENT_RESPONSE_DRILL_COMPLETE",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2248",
+        "env-audit-report.json:4344",
+        "env-audit-report.json:4507",
+        "env-audit-report.json:4658",
+        "server/routes.ts:1830"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_INCIDENT_RESPONSE_RUNBOOK_ACKNOWLEDGED",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2266",
+        "env-audit-report.json:4345",
+        "env-audit-report.json:4508",
+        "env-audit-report.json:4659",
+        "server/routes.ts:1829"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_PRODUCTION_LIVE_EXECUTION",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2284",
+        "env-audit-report.json:4346",
+        "env-audit-report.json:4509",
+        "env-audit-report.json:4660",
+        "server/demoRunEnvironmentService.ts:19",
+        "server/execution/demoOnlyPolicy.ts:40"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_RELIABILITY_STATE_FILE",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/broker-sandbox-v3.5.md:52",
+        "docs/persistence-runbook.md:105",
+        "env-audit-report.json:2303",
+        "env-audit-report.json:4347",
+        "env-audit-report.json:4510",
+        "env-audit-report.json:4661",
+        "server/execution/reliabilityStateStore.ts:83",
+        "server/execution/reliabilityStateStore.ts:84"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_RUN_MODE",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2324",
+        "server/demoRunEnvironmentService.ts:30",
+        "server/demoRunScheduler.ts:8",
+        "server/demoRunService.ts:298",
+        "server/demoRunService.ts:311",
+        "server/demoRunService.ts:540",
+        "server/strategyResearchSchedulerService.ts:277"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_STORAGE",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2345",
+        "env-audit-report.json:4348",
+        "env-audit-report.json:4511",
+        "env-audit-report.json:4662",
+        "server/memoryStoreService.test.ts:7",
+        "server/memoryStoreService.test.ts:9",
+        "server/memoryStoreService.test.ts:34",
+        "server/memoryStoreService.test.ts:36",
+        "server/storage.test.ts:12",
+        "server/storage.test.ts:14",
+        "server/storage.test.ts:188",
+        "server/storage.test.ts:190",
+        "server/storageMode.ts:4"
+      ]
+    },
+    {
+      "variable": "MARKETPILOT_TIMESCALE",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2371",
+        "env-audit-report.json:4349",
+        "env-audit-report.json:4512",
+        "env-audit-report.json:4663",
+        "server/timeSeriesStoreService.ts:301",
+        "server/timeSeriesStoreService.ts:308"
+      ]
+    },
+    {
+      "variable": "METATRADER_BRIDGE_SECRET",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2426",
+        "server/demoRunEnvironmentService.ts:14"
+      ]
+    },
+    {
+      "variable": "METATRADER_BRIDGE_URL",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2442",
+        "server/demoRunEnvironmentService.ts:97"
+      ]
+    },
+    {
+      "variable": "METATRADER_DEMO_BRIDGE_SECRET",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2458",
+        "env-audit-report.json:4515",
+        "server/demoRunEnvironmentService.ts:13"
+      ]
+    },
+    {
+      "variable": "METATRADER_DEMO_BRIDGE_URL",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/broker-sandbox-v3.5.md:15",
+        "docs/telegram-control-and-connectors.md:21",
+        "env-audit-report.json:2474",
+        "env-audit-report.json:4516",
+        "server/demoRunEnvironmentService.ts:96",
+        "server/demoRunEnvironmentService.ts:100",
+        "server/demoRunEnvironmentService.ts:103",
+        "server/demoRunEnvironmentService.ts:106",
+        "server/demoRunEnvironmentService.ts:108",
+        "server/execution/sandboxBrokerRuntime.ts:271",
+        "server/execution/sandboxBrokerRuntime.ts:277",
+        "server/telegramService.test.ts:238",
+        "server/telegramService.test.ts:243",
+        "server/telegramService.test.ts:362",
+        "server/telegramService.test.ts:371",
+        "server/telegramService.test.ts:443",
+        "server/telegramService.test.ts:444",
+        "server/toolConnectorRegistryService.ts:140",
+        "server/toolConnectorRegistryService.ts:147",
+        "server/toolConnectorRegistryService.ts:148",
+        "server/toolConnectorRegistryService.ts:149",
+        "server/toolConnectorRegistryService.ts:151",
+        "server/toolConnectorRegistryService.ts:412"
+      ]
+    },
+    {
+      "variable": "METATRADER_ENV",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2510",
+        "env-audit-report.json:4352",
+        "env-audit-report.json:4517",
+        "env-audit-report.json:4666",
+        "server/demoRunEnvironmentService.ts:98",
+        "server/execution/demoOnlyPolicy.ts:36",
+        "server/execution/demoOnlyPolicy.ts:157"
+      ]
+    },
+    {
+      "variable": "METATRADER_LIVE_BRIDGE_URL",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2530",
+        "env-audit-report.json:4353",
+        "env-audit-report.json:4518",
+        "env-audit-report.json:4667",
+        "server/demoRunEnvironmentService.ts:99",
+        "server/execution/demoOnlyPolicy.ts:160"
+      ]
+    },
+    {
+      "variable": "MT5_ENVIRONMENT",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2641",
+        "env-audit-report.json:4359",
+        "env-audit-report.json:4524",
+        "env-audit-report.json:4673",
+        "server/execution/providers.ts:210"
+      ]
+    },
+    {
+      "variable": "NODE_ENV",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2659",
+        "script/build.ts:56",
+        "scripts/db/dbLifecycle.ts:134",
+        "server/index.ts:121",
+        "server/routes.ts:974",
+        "server/telegram/lifecycleMonitor.ts:35",
+        "vite-plugin-meta-images.ts:75",
+        "vite.config.ts:14"
+      ]
+    },
+    {
+      "variable": "OANDA_ACCOUNT_ID",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/broker-sandbox-v3.5.md:9",
+        "docs/strategy-machine-oanda-practice-setup.md:9",
+        "docs/telegram-control-and-connectors.md:19",
+        "docs/v2-historical-replay-dataset-contract.md:23",
+        "env-audit-report.json:2681",
+        "script/oanda-practice-validation.ts:46",
+        "script/oanda-practice-validation.ts:119",
+        "script/oanda-practice-validation.ts:213",
+        "server/demoRunEnvironmentService.ts:12",
+        "server/demoRunEnvironmentService.ts:85",
+        "server/execution/credentialVault.ts:53",
+        "server/execution/oandaPracticeAdapter.ts:327",
+        "server/execution/sandboxBrokerRuntime.ts:268",
+        "server/telegramService.test.ts:236",
+        "server/telegramService.test.ts:241",
+        "server/telegramService.test.ts:439",
+        "server/telegramService.test.ts:440",
+        "server/toolConnectorRegistryService.test.ts:27",
+        "server/toolConnectorRegistryService.ts:110",
+        "server/toolConnectorRegistryService.ts:119",
+        "server/toolConnectorRegistryService.ts:120",
+        "server/toolConnectorRegistryService.ts:121",
+        "server/toolConnectorRegistryService.ts:123",
+        "server/v2/dataset-pipeline/oanda.ts:30",
+        "server/v2/dataset-pipeline/oanda.ts:34"
+      ]
+    },
+    {
+      "variable": "OANDA_API_TOKEN",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/broker-sandbox-v3.5.md:9",
+        "docs/strategy-machine-oanda-practice-setup.md:8",
+        "docs/telegram-control-and-connectors.md:18",
+        "docs/v2-historical-replay-dataset-contract.md:23",
+        "env-audit-report.json:2720",
+        "script/oanda-practice-validation.ts:45",
+        "script/oanda-practice-validation.ts:119",
+        "script/oanda-practice-validation.ts:214",
+        "server/demoRunEnvironmentService.ts:11",
+        "server/demoRunEnvironmentService.ts:85",
+        "server/execution/credentialVault.ts:54",
+        "server/execution/oandaPracticeAdapter.ts:326",
+        "server/execution/sandboxBrokerRuntime.ts:267",
+        "server/historicalDataBackfillService.test.ts:43",
+        "server/historicalDataBackfillService.ts:103",
+        "server/historicalDataBackfillService.ts:185",
+        "server/researchAccelerationService.ts:122",
+        "server/telegramService.test.ts:235",
+        "server/telegramService.test.ts:240",
+        "server/telegramService.test.ts:437",
+        "server/telegramService.test.ts:438",
+        "server/toolConnectorRegistryService.test.ts:27",
+        "server/toolConnectorRegistryService.ts:110",
+        "server/toolConnectorRegistryService.ts:119",
+        "server/toolConnectorRegistryService.ts:120"
+      ]
+    },
+    {
+      "variable": "OANDA_BASE_URL",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/v2-oanda-historical-dataset-workflow.md:12",
+        "env-audit-report.json:2760",
+        "env-audit-report.json:4360",
+        "env-audit-report.json:4525",
+        "env-audit-report.json:4674",
+        "server/v2/dataset-pipeline/oanda.ts:31"
+      ]
+    },
+    {
+      "variable": "OANDA_ENV",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2779",
+        "script/oanda-practice-validation.ts:47",
+        "scripts/v2-replay/build-oanda-dataset.sh:27",
+        "server/demoRunEnvironmentService.ts:85",
+        "server/demoRunEnvironmentService.ts:87",
+        "server/demoRunEnvironmentService.ts:89",
+        "server/demoRunEnvironmentService.ts:91",
+        "server/demoRunEnvironmentService.ts:92",
+        "server/demoRunService.test.ts:130",
+        "server/execution/credentialVault.ts:55",
+        "server/execution/demoOnlyPolicy.ts:34",
+        "server/execution/demoOnlyPolicy.ts:156",
+        "server/execution/oandaPracticeAdapter.ts:328",
+        "server/execution/sandboxBrokerRuntime.ts:269",
+        "server/historicalDataBackfillService.ts:102",
+        "server/researchAccelerationService.ts:121",
+        "server/telegramService.test.ts:237",
+        "server/telegramService.test.ts:242",
+        "server/telegramService.test.ts:441",
+        "server/telegramService.test.ts:442",
+        "server/toolConnectorRegistryService.test.ts:27",
+        "server/toolConnectorRegistryService.ts:111",
+        "server/toolConnectorRegistryService.ts:119",
+        "server/toolConnectorRegistryService.ts:120",
+        "server/toolConnectorRegistryService.ts:121"
+      ]
+    },
+    {
+      "variable": "OANDA_ENVIRONMENT",
+      "classification": "Deprecated",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2819",
+        "env-audit-report.json:4361",
+        "env-audit-report.json:4526",
+        "env-audit-report.json:4675",
+        "server/execution/providers.ts:204"
+      ]
+    },
+    {
+      "variable": "OANDA_VALIDATION_ALLOW_EXTERNAL_TRADE",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:2837",
+        "env-audit-report.json:4362",
+        "env-audit-report.json:4527",
+        "env-audit-report.json:4676",
+        "script/oanda-practice-validation.ts:48"
+      ]
+    },
+    {
+      "variable": "OPENAI_API_KEY",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/marketpilot-execution-plan.md:246",
+        "env-audit-report.json:2855",
+        "server/aiProviderService.test.ts:37",
+        "server/aiProviderService.test.ts:38",
+        "server/aiProviderService.ts:163",
+        "server/aiProviderService.ts:282"
+      ]
+    },
+    {
+      "variable": "OPENAI_MODEL",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2875",
+        "server/aiProviderService.ts:184",
+        "server/aiProviderService.ts:265"
+      ]
+    },
+    {
+      "variable": "PORT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/v2-research-pipeline-operations.md:62",
+        "docs/v2-research-pipeline-operations.md:63",
+        "docs/v2-research-pipeline-operations.md:64",
+        "env-audit-report.json:2961",
+        "server/index.ts:132"
+      ]
+    },
+    {
+      "variable": "POSTGRES_CHECKPOINT_COMPLETION_TARGET",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:27",
+        "env-audit-report.json:2980"
+      ]
+    },
+    {
+      "variable": "POSTGRES_CONTAINER_NAME",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:2996",
+        "env-audit-report.json:4531",
+        "env-audit-report.json:4680",
+        "env-audit-report.json:4717"
+      ]
+    },
+    {
+      "variable": "POSTGRES_CONTAINER_PORT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:14",
+        "env-audit-report.json:3012"
+      ]
+    },
+    {
+      "variable": "POSTGRES_DB",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:11",
+        "docker-compose.yml:43",
+        "env-audit-report.json:3028"
+      ]
+    },
+    {
+      "variable": "POSTGRES_DEFAULT_STATISTICS_TARGET",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:31",
+        "env-audit-report.json:3045"
+      ]
+    },
+    {
+      "variable": "POSTGRES_EFFECTIVE_CACHE_SIZE",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:23",
+        "env-audit-report.json:3061"
+      ]
+    },
+    {
+      "variable": "POSTGRES_HEALTHCHECK_INTERVAL",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:44",
+        "env-audit-report.json:3077"
+      ]
+    },
+    {
+      "variable": "POSTGRES_HEALTHCHECK_RETRIES",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:46",
+        "env-audit-report.json:3093"
+      ]
+    },
+    {
+      "variable": "POSTGRES_HEALTHCHECK_START_PERIOD",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:47",
+        "env-audit-report.json:3109"
+      ]
+    },
+    {
+      "variable": "POSTGRES_HEALTHCHECK_TIMEOUT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:45",
+        "env-audit-report.json:3125"
+      ]
+    },
+    {
+      "variable": "POSTGRES_HOST_PORT",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:14",
+        "env-audit-report.json:3141"
+      ]
+    },
+    {
+      "variable": "POSTGRES_IMAGE",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:5",
+        "env-audit-report.json:3157"
+      ]
+    },
+    {
+      "variable": "POSTGRES_MAINTENANCE_WORK_MEM",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:25",
+        "env-audit-report.json:3173"
+      ]
+    },
+    {
+      "variable": "POSTGRES_MAX_CONNECTIONS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:19",
+        "env-audit-report.json:3189"
+      ]
+    },
+    {
+      "variable": "POSTGRES_PASSWORD",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:10",
+        "env-audit-report.json:3205"
+      ]
+    },
+    {
+      "variable": "POSTGRES_RANDOM_PAGE_COST",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:33",
+        "env-audit-report.json:3221"
+      ]
+    },
+    {
+      "variable": "POSTGRES_RESTART_POLICY",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:6",
+        "env-audit-report.json:3237"
+      ]
+    },
+    {
+      "variable": "POSTGRES_SHARED_BUFFERS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:21",
+        "env-audit-report.json:3253"
+      ]
+    },
+    {
+      "variable": "POSTGRES_USER",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:9",
+        "docker-compose.yml:43",
+        "env-audit-report.json:3269"
+      ]
+    },
+    {
+      "variable": "POSTGRES_WAL_BUFFERS",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:29",
+        "env-audit-report.json:3286"
+      ]
+    },
+    {
+      "variable": "POSTGRES_WORK_MEM",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docker-compose.yml:35",
+        "env-audit-report.json:3302"
+      ]
+    },
+    {
+      "variable": "QDRANT_URL",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:3337",
+        "server/vectorStoreService.ts:123",
+        "server/vectorStoreService.ts:130"
+      ]
+    },
+    {
+      "variable": "REDIS_URL",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "docs/marketpilot-execution-plan.md:250",
+        "env-audit-report.json:3372",
+        "env-audit-report.json:4368",
+        "env-audit-report.json:4534",
+        "env-audit-report.json:4683",
+        "server/cacheStoreService.ts:59",
+        "server/cacheStoreService.ts:66"
+      ]
+    },
+    {
+      "variable": "REPLIT_DEV_DOMAIN",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3438",
+        "env-audit-report.json:4371",
+        "env-audit-report.json:4537",
+        "env-audit-report.json:4686",
+        "vite-plugin-meta-images.ts:65",
+        "vite-plugin-meta-images.ts:66"
+      ]
+    },
+    {
+      "variable": "REPLIT_INTERNAL_APP_DOMAIN",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3457",
+        "env-audit-report.json:4372",
+        "env-audit-report.json:4538",
+        "env-audit-report.json:4687",
+        "vite-plugin-meta-images.ts:59",
+        "vite-plugin-meta-images.ts:60"
+      ]
+    },
+    {
+      "variable": "REPL_ID",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3476",
+        "env-audit-report.json:4373",
+        "env-audit-report.json:4539",
+        "env-audit-report.json:4688",
+        "vite.config.ts:15"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_ALLOWED_USER_ID",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/telegram-control-and-connectors.md:12",
+        "docs/telegram-control-and-connectors.md:102",
+        "docs/telegram-deployment.md:10",
+        "docs/telegram-operations.md:17",
+        "docs/telegram-security.md:19",
+        "env-audit-report.json:3589",
+        "server/demoRunEnvironmentService.ts:75",
+        "server/demoRunEnvironmentService.ts:76",
+        "server/demoRunEnvironmentService.ts:79",
+        "server/demoRunEnvironmentService.ts:81",
+        "server/demoRunService.test.ts:144",
+        "server/telegram/commandRouter.ts:201",
+        "server/telegram/telegramClient.ts:13",
+        "server/telegramService.ts:1597",
+        "server/toolConnectorRegistryService.ts:210",
+        "server/toolConnectorRegistryService.ts:213",
+        "server/toolConnectorRegistryService.ts:379"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_ALLOW_GROUPS",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3620",
+        "env-audit-report.json:4379",
+        "env-audit-report.json:4545",
+        "env-audit-report.json:4694",
+        "server/telegramService.ts:183"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_API_HASH",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3638",
+        "env-audit-report.json:4718"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_API_ID",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3652",
+        "env-audit-report.json:4719"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_BOT_TOKEN",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/telegram-control-and-connectors.md:11",
+        "docs/telegram-deployment.md:6",
+        "docs/telegram-operations.md:11",
+        "docs/telegram-security.md:7",
+        "env-audit-report.json:3666",
+        "server/demoRunEnvironmentService.ts:9",
+        "server/demoRunEnvironmentService.ts:32",
+        "server/telegram/telegramClient.ts:12",
+        "server/telegramService.ts:488",
+        "server/telegramService.ts:489",
+        "server/telegramService.ts:563",
+        "server/telegramService.ts:602",
+        "server/telegramService.ts:1528",
+        "server/toolConnectorRegistryService.ts:193",
+        "server/toolConnectorRegistryService.ts:201",
+        "server/toolConnectorRegistryService.ts:202",
+        "server/toolConnectorRegistryService.ts:209",
+        "server/toolConnectorRegistryService.ts:210",
+        "server/toolConnectorRegistryService.ts:212"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_CHAT_ID",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/telegram-deployment.md:8",
+        "docs/telegram-operations.md:12",
+        "docs/telegram-operations.md:60",
+        "env-audit-report.json:3699",
+        "server/demoRunEnvironmentService.ts:78",
+        "server/telegram/telegramClient.ts:14",
+        "server/telegramService.ts:1597",
+        "server/toolConnectorRegistryService.ts:379"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_DAILY_SUMMARY_HOUR_UTC",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "docs/telegram-operations.md:56",
+        "env-audit-report.json:3721",
+        "env-audit-report.json:4546",
+        "env-audit-report.json:4695",
+        "server/telegram/telegramClient.ts:20"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_DELIVERY_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3739",
+        "env-audit-report.json:4380",
+        "env-audit-report.json:4547",
+        "env-audit-report.json:4696",
+        "scripts/v2-replay/cloud-preflight.sh:34",
+        "scripts/v2-replay/run-gated-cloud-release.sh:62",
+        "scripts/v2-replay/run-gated-cloud-release.sh:68"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_LONG_POLLING_ENABLED",
+      "classification": "Legacy Alias",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3759",
+        "env-audit-report.json:4381",
+        "env-audit-report.json:4548",
+        "server/v2/runtime/config.ts:124"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_MARKET_SESSION_ALERTS",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:3776",
+        "env-audit-report.json:4549",
+        "env-audit-report.json:4697",
+        "server/telegram/telegramClient.ts:23"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_MIN_SIGNAL_CONFIDENCE",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:3793",
+        "env-audit-report.json:4550",
+        "env-audit-report.json:4698",
+        "server/telegram/telegramClient.ts:24"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_MIN_SIGNAL_EVIDENCE_SCORE",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:3810",
+        "env-audit-report.json:4551",
+        "env-audit-report.json:4699",
+        "server/telegram/telegramClient.ts:25"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_NOTIFICATIONS_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:3827",
+        "env-audit-report.json:4552",
+        "env-audit-report.json:4700",
+        "server/telegram/telegramClient.ts:18"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_PHONE",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3844",
+        "env-audit-report.json:4720"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_SESSION_NAME",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3858",
+        "env-audit-report.json:4721"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_SIGNALS_ENABLED",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:3872",
+        "env-audit-report.json:4553",
+        "env-audit-report.json:4701",
+        "server/telegram/telegramClient.ts:19"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_SIGNAL_CHANNELS",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "present",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3889",
+        "env-audit-report.json:4722"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_SIGNAL_CHAT_ID",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/telegram-deployment.md:9",
+        "docs/telegram-deployment.md:12",
+        "docs/telegram-operations.md:23",
+        "docs/telegram-operations.md:26",
+        "env-audit-report.json:3903",
+        "server/telegram/telegramClient.ts:15",
+        "server/telegramOperations.test.ts:572"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_SIGNAL_COOLDOWN_MINUTES",
+      "classification": "Optional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "env-audit-report.json:3924",
+        "env-audit-report.json:4554",
+        "env-audit-report.json:4702",
+        "server/telegram/telegramClient.ts:26"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_SIGNAL_SIGNING_SECRET",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "docs/telegram-security.md:9",
+        "docs/telegram-security.md:54",
+        "docs/telegram-signal-schema-v1.md:81",
+        "env-audit-report.json:3941",
+        "env-audit-report.json:4555",
+        "env-audit-report.json:4703",
+        "server/telegram/telegramClient.ts:27"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_WEBHOOK_ENABLED",
+      "classification": "Legacy Alias",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:3961",
+        "env-audit-report.json:4382",
+        "env-audit-report.json:4556",
+        "server/v2/runtime/config.ts:125"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_WEBHOOK_SECRET",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/telegram-control-and-connectors.md:13",
+        "docs/telegram-control-and-connectors.md:100",
+        "docs/telegram-operations.md:18",
+        "docs/telegram-security.md:8",
+        "env-audit-report.json:3978",
+        "server/demoRunEnvironmentService.ts:10",
+        "server/demoRunEnvironmentService.ts:33",
+        "server/telegram/telegramClient.ts:16",
+        "server/telegramService.ts:170",
+        "server/telegramService.ts:173",
+        "server/telegramService.ts:488",
+        "server/telegramService.ts:492",
+        "server/telegramService.ts:604",
+        "server/toolConnectorRegistryService.ts:202",
+        "server/toolConnectorRegistryService.ts:209",
+        "server/toolConnectorRegistryService.ts:210",
+        "server/toolConnectorRegistryService.ts:214"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_WEBHOOK_URL",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/telegram-control-and-connectors.md:14",
+        "docs/telegram-control-and-connectors.md:100",
+        "docs/telegram-operations.md:19",
+        "env-audit-report.json:4009",
+        "env-audit-report.json:4557",
+        "server/telegram/telegramClient.ts:17",
+        "server/telegramService.ts:491",
+        "server/telegramService.ts:493",
+        "server/telegramService.ts:603",
+        "server/toolConnectorRegistryService.ts:202",
+        "server/toolConnectorRegistryService.ts:209",
+        "server/toolConnectorRegistryService.ts:210",
+        "server/toolConnectorRegistryService.ts:215",
+        "server/toolConnectorRegistryService.ts:218"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_WEEKLY_SUMMARY_DAY",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "docs/telegram-operations.md:58",
+        "env-audit-report.json:4036",
+        "env-audit-report.json:4558",
+        "env-audit-report.json:4704",
+        "server/telegram/telegramClient.ts:21"
+      ]
+    },
+    {
+      "variable": "TELEGRAM_WEEKLY_SUMMARY_HOUR_UTC",
+      "classification": "Runtime Tuning",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "present",
+      "references": [
+        "docs/telegram-operations.md:58",
+        "env-audit-report.json:4054",
+        "env-audit-report.json:4559",
+        "env-audit-report.json:4705",
+        "server/telegram/telegramClient.ts:22"
+      ]
+    },
+    {
+      "variable": "TRADINGVIEW_WEBHOOK_SECRET",
+      "classification": "Conditional",
+      "usedByCode": true,
+      "sensitive": true,
+      "dev": "present",
+      "production": "present",
+      "example": "present",
+      "references": [
+        "docs/telegram-control-and-connectors.md:22",
+        "env-audit-report.json:4072",
+        "server/execution/tradingViewWebhook.ts:19",
+        "server/toolConnectorRegistryService.ts:159",
+        "server/toolConnectorRegistryService.ts:167",
+        "server/toolConnectorRegistryService.ts:168",
+        "server/toolConnectorRegistryService.ts:175",
+        "server/toolConnectorRegistryService.ts:176",
+        "server/toolConnectorRegistryService.ts:177",
+        "server/toolConnectorRegistryService.ts:179"
+      ]
+    },
+    {
+      "variable": "USER",
+      "classification": "Internal Operator",
+      "usedByCode": true,
+      "sensitive": false,
+      "dev": "missing",
+      "production": "missing",
+      "example": "missing",
+      "references": [
+        "env-audit-report.json:4156",
+        "env-audit-report.json:4386",
+        "env-audit-report.json:4563",
+        "env-audit-report.json:4709",
+        "scripts/db/migrate.ts:236"
+      ]
+    }
+  ],
+  "dependencyGraph": {
+    "defaultLocalBoot": {
+      "enabledBy": "copy .env.example unchanged",
+      "required": [
+        "MARKETPILOT_DEMO_ONLY",
+        "MARKETPILOT_RUN_MODE",
+        "FINCOACH_TELEGRAM_TRANSPORT",
+        "TELEGRAM_NOTIFICATIONS_ENABLED",
+        "TELEGRAM_SIGNALS_ENABLED"
+      ],
+      "notes": "No database or external secrets required; app uses in-memory stores and demo providers."
+    },
+    "postgresStorage": {
+      "enabledBy": "DATABASE_URL set",
+      "required": [
+        "DATABASE_URL"
+      ],
+      "optional": [
+        "MARKETPILOT_STORAGE"
+      ],
+      "notes": "DATABASE_URL selects PostgreSQL unless MARKETPILOT_STORAGE=memory."
+    },
+    "v2Runtime": {
+      "enabledBy": "FINCOACH_V2_RUNTIME_ENABLED=true",
+      "required": [
+        "DATABASE_URL"
+      ],
+      "optional": [
+        "FINCOACH_V2_PILOT_ENABLED",
+        "FINCOACH_V2_RESEARCH_ENABLED"
+      ],
+      "tuning": [
+        "FINCOACH_V2_CADENCE_MS",
+        "FINCOACH_V2_MAX_CYCLES_PER_DAY",
+        "FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE",
+        "FINCOACH_V2_MAX_HYPOTHESES_PER_CYCLE",
+        "FINCOACH_V2_CYCLE_TIMEOUT_MS",
+        "FINCOACH_V2_LEASE_TTL_MS"
+      ]
+    },
+    "telegramLongPolling": {
+      "enabledBy": "FINCOACH_TELEGRAM_TRANSPORT=long_polling and TELEGRAM_NOTIFICATIONS_ENABLED=true",
+      "required": [
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID"
+      ],
+      "conditional": [
+        "TELEGRAM_ALLOWED_USER_ID"
+      ],
+      "optional": [
+        "TELEGRAM_SIGNAL_CHAT_ID",
+        "TELEGRAM_SIGNAL_SIGNING_SECRET"
+      ]
+    },
+    "telegramWebhook": {
+      "enabledBy": "webhook routes used or webhook setup in production",
+      "required": [
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "TELEGRAM_WEBHOOK_URL",
+        "TELEGRAM_ALLOWED_USER_ID"
+      ],
+      "optional": [
+        "TELEGRAM_ALLOW_GROUPS"
+      ]
+    },
+    "telegramSignals": {
+      "enabledBy": "TELEGRAM_SIGNALS_ENABLED=true or FINCOACH_V2_TELEGRAM_SIGNAL_PUBLICATION_ENABLED=true",
+      "required": [
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_SIGNAL_CHAT_ID"
+      ],
+      "optional": [
+        "TELEGRAM_SIGNAL_SIGNING_SECRET"
+      ]
+    },
+    "oandaPractice": {
+      "enabledBy": "OANDA provider/backfill/dataset workflow",
+      "required": [
+        "OANDA_ENV",
+        "OANDA_API_TOKEN",
+        "OANDA_ACCOUNT_ID"
+      ],
+      "optional": [
+        "OANDA_BASE_URL"
+      ],
+      "safety": [
+        "MARKETPILOT_DEMO_ONLY",
+        "FINCOACH_LIVE_EXECUTION_ENABLED"
+      ]
+    },
+    "metatraderDemo": {
+      "enabledBy": "METATRADER_DEMO_BRIDGE_URL set",
+      "required": [
+        "METATRADER_DEMO_BRIDGE_URL"
+      ],
+      "optional": [
+        "METATRADER_DEMO_BRIDGE_SECRET"
+      ],
+      "deprecatedAliases": [
+        "METATRADER_BRIDGE_URL",
+        "METATRADER_BRIDGE_SECRET"
+      ]
+    },
+    "openai": {
+      "enabledBy": "OPENAI_API_KEY set",
+      "required": [
+        "OPENAI_API_KEY"
+      ],
+      "optional": [
+        "OPENAI_MODEL"
+      ],
+      "notes": "Without key, demo AI provider is used."
+    },
+    "migrationApply": {
+      "enabledBy": "npm run db:migrate against non-disposable database",
+      "required": [
+        "DATABASE_URL",
+        "FINCOACH_DB_BACKUP_PATH",
+        "FINCOACH_DB_BACKUP_SHA256_PATH"
+      ],
+      "operatorOnly": [
+        "FINCOACH_DB_BREAK_GLASS_DESTRUCTIVE_DDL",
+        "FINCOACH_DB_MIGRATION_LOCK_TIMEOUT_MS"
+      ]
+    }
+  },
+  "derivable": [
+    {
+      "variable": "DATABASE_URL",
+      "deriveFrom": [
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_HOST_PORT",
+        "POSTGRES_DB"
+      ],
+      "recommendation": "Do not derive in app; compose/deployment may generate it, app should consume only DATABASE_URL."
+    },
+    {
+      "variable": "POSTGRES_CONTAINER_PORT",
+      "deriveFrom": [
+        "PostgreSQL image default"
+      ],
+      "recommendation": "Keep only in docker-compose env, not developer .env.example."
+    },
+    {
+      "variable": "APP_BASE_URL",
+      "deriveFrom": [
+        "protocol",
+        "host",
+        "PORT"
+      ],
+      "recommendation": "Do not include for local boot; set only for public callback/webhook contexts."
+    },
+    {
+      "variable": "TELEGRAM_ALLOWED_USER_ID",
+      "deriveFrom": [
+        "TELEGRAM_CHAT_ID fallback in legacy command helpers"
+      ],
+      "recommendation": "Use explicit TELEGRAM_ALLOWED_USER_ID for authorization when Telegram commands are enabled."
+    }
+  ],
+  "naming": {
+    "canonicalPrefixes": [
+      "FINCOACH_ for app/runtime safety and V2 controls",
+      "MARKETPILOT_ only for legacy execution subsystem until renamed",
+      "TELEGRAM_ for Telegram provider settings",
+      "OANDA_ for OANDA provider settings"
+    ],
+    "aliases": [
+      {
+        "canonical": "FINCOACH_LIVE_EXECUTION_ENABLED",
+        "aliases": [
+          "FINCOACH_LIVE_EXECUTION",
+          "MARKETPILOT_ALLOW_LIVE_EXECUTION",
+          "MARKETPILOT_ENABLE_LIVE_TRADING",
+          "MARKETPILOT_PRODUCTION_LIVE_EXECUTION"
+        ]
+      },
+      {
+        "canonical": "FINCOACH_V2_RESEARCH_SIGNAL_ENABLED",
+        "aliases": [
+          "FINCOACH_V2_SIGNAL_PUBLISHING_ENABLED"
+        ]
+      },
+      {
+        "canonical": "FINCOACH_V2_OBSERVATION_SYMBOLS",
+        "aliases": [
+          "FINCOACH_V2_SYMBOLS"
+        ]
+      },
+      {
+        "canonical": "FINCOACH_V2_OBSERVATION_TIMEFRAMES",
+        "aliases": [
+          "FINCOACH_V2_TIMEFRAMES"
+        ]
+      },
+      {
+        "canonical": "METATRADER_DEMO_BRIDGE_URL",
+        "aliases": [
+          "METATRADER_BRIDGE_URL"
+        ]
+      },
+      {
+        "canonical": "OANDA_ENV",
+        "aliases": [
+          "OANDA_ENVIRONMENT"
+        ]
+      }
+    ],
+    "recommendation": "Use positive booleans with _ENABLED suffix for app feature flags; use explicit provider prefixes for secrets; keep operator-only migration variables out of .env.example."
+  },
+  "proposedEnvExample": "# FinCoach local development\n#\n# This file is intentionally minimal. Copy it to .env for a local in-memory\n# demo boot. Do not put production secrets in this file.\n\n# Optional. Keeps demo-only safety explicit.\n# Default: demo-only mode is enabled unless set to false.\nMARKETPILOT_DEMO_ONLY=true\n\n# Optional. Enables demo-observation scheduler behavior.\nMARKETPILOT_RUN_MODE=demo_observation\n\n# Optional. Keep Telegram background operations disabled for local development.\n# Allowed: disabled, long_polling, webhook\nFINCOACH_TELEGRAM_TRANSPORT=disabled\nTELEGRAM_NOTIFICATIONS_ENABLED=false\nTELEGRAM_SIGNALS_ENABLED=false\n"
+}

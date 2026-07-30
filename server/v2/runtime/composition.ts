@@ -21,7 +21,10 @@ import { PgBacktestRepository } from "../backtesting/pgRepository";
 import { PgStrategyDefinitionRepository } from "../rules/pgRepository";
 import type { OrchestrationErrorCode } from "../orchestration/contracts";
 import { ObservationsV2Service, breakoutDetector, compressionDetector, evidence as observationEvidence, stableHash } from "../observations";
+import type { MarketObservation, ObservationSemanticGroup } from "../observations";
+import { semanticGroupFromObservation, semanticGroupKey } from "../observations";
 import { HypothesisV2Service } from "../hypothesis";
+import type { ResearchHypothesis } from "../hypothesis";
 import { rulesV2Compiler } from "../rules";
 import { ExperimentsV2Service } from "../experiments";
 import { backtestingV2Engine, type BacktestResult } from "../backtesting";
@@ -304,7 +307,8 @@ export class FinCoachV2Runtime {
     let hypothesesBlocked = 0;
     const blockers: Array<Record<string, unknown>> = [];
     const rankingCandidates: RankingCandidateInput[] = [];
-    const savedObservations: Array<{ observation: Awaited<ReturnType<V2Repositories["observations"]["save"]>> extends { record: infer T } ? T : never; observationEventId: string }> = [];
+    const semanticCandidates = new Map<string, ObservationSemanticGroup>();
+    const candidateCausationIds = new Map<string, string>();
 
     const plans = buildObservationPlan(this.config);
     for (const plan of plans) {
@@ -352,32 +356,48 @@ export class FinCoachV2Runtime {
       const compatible = obs.observations.filter(observation => observation.detectorId === detector.detectorId).slice(0, this.config.maxObservationsPerCycle - observationsCount);
       for (const observation of compatible) {
         const observationEventId = firstEventId(obs.events, "observations", observation.observationId);
+        addSemanticCandidate(semanticCandidates, observation);
+        candidateCausationIds.set(semanticGroupKey(semanticGroupFromObservation(observation)), observationEventId);
         const saved = await repositories.observations.save(observation);
         if (!saved.inserted) {
           observationsDeduplicated += 1;
+          const durableObservation = observationFromSaveResult(saved) ?? observation;
+          addSemanticCandidate(semanticCandidates, durableObservation);
           await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: observation.detectorId, detectorVersion: observation.detectorVersion, strategyFamily: observation.strategyFamily, status: "duplicate_suppressed", reason: "semantic_natural_key_conflict", candleStart: observation.candleStart, candleEnd: observation.candleEnd, sourceDataHash: observation.sourceDataHash, correlationId: input.correlationId, causationId: itemEventCausation(input.cycleEventId), createdAt: input.now.toISOString() });
-          structuredLogger.v2({ level: "info", event: "observation_duplicate_suppressed", message: "Duplicate V2 observation suppressed", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: observation.detectorId, naturalKey: observation.naturalKey });
+          structuredLogger.v2({ level: "info", event: "observation_duplicate_suppressed", message: "Duplicate V2 observation suppressed", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: observation.detectorId, naturalKey: observation.naturalKey, semanticCandidateKey: semanticGroupKey(semanticGroupFromObservation(durableObservation)) });
           continue;
         }
+        const durableObservation = observationFromSaveResult(saved) ?? observation;
         structuredLogger.v2({ level: "info", event: "observation_created", message: "V2 observation persisted", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: observation.detectorId, observationType: observation.observationType, confidence: observation.confidence, qualityScore: observation.qualityScore });
-        savedObservations.push({ observation: saved.record as never, observationEventId });
+        addSemanticCandidate(semanticCandidates, durableObservation);
         observationsCount += 1;
       }
       await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "completed", candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), sourceDataHash, correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() });
       structuredLogger.v2({ level: "info", event: "detector_evaluation_completed", message: "V2 detector evaluation completed", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId });
     }
 
-    for (const item of savedObservations) {
+    const durableGroups = await repositories.observations.eligibleSemanticGroups({
+      lookbackHours: this.config.hypothesisLookbackHours,
+      minimumQualityScore: 0.5,
+      now: input.now,
+      limit: hypothesisCandidateScanLimit(this.config),
+    });
+    for (const group of durableGroups) {
+      semanticCandidates.set(semanticGroupKey(group), group);
+    }
+
+    for (const [candidateKey, candidate] of semanticCandidates) {
       if (hypothesesCount >= this.config.maxHypothesesPerCycle) break;
-      const observation = item.observation as unknown as import("../observations").MarketObservation;
-      const support = await historicalSupport(repositories.observations, observation, this.config, input.now);
+      const support = await historicalSupport(repositories.observations, candidate, this.config, input.now);
       hypothesesEvaluated += 1;
       const supportTimestamps = support.map(obs => obs.candleEnd ?? obs.observedAt).sort();
       const commonPayload = {
-        symbol: observation.symbol,
-        timeframe: observation.timeframe,
-        detector: observation.detectorId,
-        strategyFamily: observation.strategyFamily ?? "unknown",
+        semanticCandidateKey: candidateKey,
+        symbol: candidate.symbol,
+        timeframe: candidate.timeframe,
+        detector: candidate.detectorId,
+        observationType: candidate.observationType,
+        strategyFamily: candidate.strategyFamily ?? "unknown",
         eligibleObservationCount: support.length,
         independentOccurrenceCount: independentOccurrenceCount(support),
         requiredOccurrenceCount: this.config.minIndependentHypothesisOccurrences,
@@ -400,9 +420,9 @@ export class FinCoachV2Runtime {
       const sourceObservationIds = [...new Set(support.map(obs => obs.observationId))];
       const evidenceEventIds = [...new Set(support.flatMap(obs => obs.evidence.map(ev => ev.evidenceId)))];
       const hypothesis = hypotheses.generate({
-          statement: `${observation.symbol} ${observation.timeframe} ${observation.observationType} may have positive expectancy after costs.`,
-          targetPopulation: { symbols: [observation.symbol], assetClasses: ["forex"], timeframes: [observation.timeframe], sessions: ["all"], regimes: ["demo"] },
-          conditions: [{ field: "observationType", operator: "in", value: [observation.observationType] }],
+          statement: `${candidate.symbol} ${candidate.timeframe} ${candidate.observationType} may have positive expectancy after costs.`,
+          targetPopulation: { symbols: [candidate.symbol], assetClasses: ["forex"], timeframes: [candidate.timeframe], sessions: ["all"], regimes: ["demo"] },
+          conditions: [{ field: "observationType", operator: "in", value: [candidate.observationType] }],
           expectedOutcome: { metric: "expectancy", operator: ">", value: 0, horizon: "next_bar" },
           baseline: { baselineId: "zero-edge", description: "No edge after costs", metric: "expectancy", value: 0 },
           invalidationCriteria: [{ field: "costSensitivity", operator: ">", value: 0.5 }],
@@ -414,21 +434,26 @@ export class FinCoachV2Runtime {
           sourceObservationIds,
           sourceTraderAnalysisIds: [],
           correlationId: input.correlationId,
-          causationId: item.observationEventId,
+          causationId: candidateCausationIds.get(candidateKey) ?? input.cycleEventId,
           createdAt: input.now.toISOString(),
         });
         if (!hypothesis.hypothesis) continue;
-        const hypothesisEventId = firstEventId(hypothesis.events, "hypothesis", hypothesis.hypothesis.hypothesisId);
-        await repositories.hypotheses.save(hypothesis.hypothesis);
+        const savedHypothesis = await repositories.hypotheses.save(hypothesis.hypothesis);
+        const persistedHypothesis = hypothesisFromSaveResult(savedHypothesis) ?? hypothesis.hypothesis;
+        if (!savedHypothesis.inserted) {
+          structuredLogger.v2({ level: "info", event: "hypothesis_duplicate_suppressed", message: "Duplicate V2 hypothesis suppressed", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, hypothesisId: persistedHypothesis.hypothesisId, hypothesisFingerprint: persistedHypothesis.fingerprint, inserted: false, conflict: conflictFromSaveResult(savedHypothesis) ?? "idempotent", skipReason: "hypothesis_save_not_inserted" });
+          continue;
+        }
+        const hypothesisEventId = firstEventId(hypothesis.events, "hypothesis", persistedHypothesis.hypothesisId);
         hypothesesCount += 1;
-        structuredLogger.v2({ level: "info", event: "hypothesis_created", message: "V2 hypothesis persisted", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, hypothesisId: hypothesis.hypothesis.hypothesisId });
+        structuredLogger.v2({ level: "info", event: "hypothesis_created", message: "V2 hypothesis persisted", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, hypothesisId: persistedHypothesis.hypothesisId, hypothesisFingerprint: persistedHypothesis.fingerprint, inserted: true, conflict: null });
         if (hypothesesCount > this.config.maxHypothesesPerCycle) break;
         const compiled = rulesV2Compiler.compile({
-          hypothesisId: hypothesis.hypothesis.hypothesisId,
-          name: `V2 demo ${observation.symbol} compression breakout`,
+          hypothesisId: persistedHypothesis.hypothesisId,
+          name: `V2 demo ${candidate.symbol} compression breakout`,
           assetClasses: ["forex"],
-          symbols: [observation.symbol],
-          timeframes: [observation.timeframe],
+          symbols: [candidate.symbol],
+          timeframes: [candidate.timeframe],
           entryConditions: [{ field: "observationType", operator: "in", value: ["breakout"] }],
           filters: [],
           sidePolicy: { candidateSide: "buy" },
@@ -451,13 +476,13 @@ export class FinCoachV2Runtime {
         await repositories.strategies.save(compiled.strategy);
         strategiesCount += 1;
         const experiment = experiments.create({
-          hypothesisId: hypothesis.hypothesis.hypothesisId,
+          hypothesisId: persistedHypothesis.hypothesisId,
           strategyId: compiled.strategy.strategyId,
           strategyVersion: compiled.strategy.strategyVersion,
           experimentType: "baseline_backtest",
-          datasetSpecification: { symbols: [observation.symbol], timeframes: [observation.timeframe], start: demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80)[0].timestamp, end: demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80).at(-1)!.timestamp },
+          datasetSpecification: { symbols: [candidate.symbol], timeframes: [candidate.timeframe], start: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[0].timestamp, end: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80).at(-1)!.timestamp },
           parameterSpecification: {},
-          holdoutPolicy: { trainEnd: demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80)[40].timestamp, validationEnd: demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80)[60].timestamp, testStart: new Date(Date.parse(demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80).at(-1)!.timestamp) + 60_000).toISOString(), finalHoldoutLocked: true },
+          holdoutPolicy: { trainEnd: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[40].timestamp, validationEnd: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[60].timestamp, testStart: new Date(Date.parse(demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80).at(-1)!.timestamp) + 60_000).toISOString(), finalHoldoutLocked: true },
           randomSeed: "deterministic-demo-seed",
           resourceBudget: { maxCandles: 80, maxRuntimeMs: this.config.cycleTimeoutMs },
           priority: 1,
@@ -469,15 +494,16 @@ export class FinCoachV2Runtime {
         const experimentEventId = firstEventId(experiment.events, "experiments", experiment.experiment.experimentId);
         await repositories.experiments.save(experiment.experiment);
         experimentsCount += 1;
-        const backtestCandles = demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80);
-        const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles: backtestCandles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [item.observationEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
+        const backtestCandles = demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80);
+        const observationLineageEventId = candidateCausationIds.get(candidateKey) ?? input.cycleEventId;
+        const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles: backtestCandles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [observationLineageEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
         const backtestEventId = firstEventId(backtest.events, "backtesting", backtest.result.backtestId);
         await repositories.backtests.save(backtest.result);
         backtestsCount += 1;
         const court = courtroom.open({
           strategyId: compiled.strategy.strategyId,
           strategyVersion: compiled.strategy.strategyVersion,
-          hypothesisId: hypothesis.hypothesis.hypothesisId,
+          hypothesisId: persistedHypothesis.hypothesisId,
           experimentIds: [experiment.experiment.experimentId],
           backtests: [backtest.result],
           defenseExhibits: [{ exhibitId: `${backtest.result.backtestId}:defense`, sourceEventId: backtestEventId, kind: "defense", summary: "Deterministic bounded backtest result." }],
@@ -489,7 +515,7 @@ export class FinCoachV2Runtime {
         const courtEventId = firstEventId(court.events, "courtroom", court.courtCase.caseId);
         await repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtestEventId, experimentEventId, hypothesisEventId] });
         verdictsCount += 1;
-        rankingCandidates.push(candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, hypothesis.hypothesis.hypothesisId, backtest.result, observation.timeframe, courtEventId));
+        rankingCandidates.push(candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, persistedHypothesis.hypothesisId, backtest.result, candidate.timeframe, courtEventId));
         if (experimentsCount >= this.config.maxExperimentsPerCycle || backtestsCount >= this.config.maxBacktestsPerCycle) break;
     }
     if (rankingCandidates.length) {
@@ -644,13 +670,37 @@ function buildObservationPlan(config: V2RuntimeConfig) {
   return plans.slice(0, Math.max(config.targetEvaluationsPerHour, config.maxObservationsPerCycle));
 }
 
-async function historicalSupport(repository: V2Repositories["observations"], observation: import("../observations").MarketObservation, config: V2RuntimeConfig, now: Date) {
-  if ("eligibleForHypothesis" in repository && typeof repository.eligibleForHypothesis === "function") {
-    return repository.eligibleForHypothesis({ symbol: observation.symbol, timeframe: observation.timeframe, detectorId: observation.detectorId, observationType: observation.observationType, strategyFamily: observation.strategyFamily, lookbackHours: config.hypothesisLookbackHours, minimumQualityScore: 0.5, now, limit: Math.max(config.minIndependentHypothesisOccurrences * 4, 20) });
-  }
-  if (!("list" in repository) || typeof repository.list !== "function") return [observation];
-  const listed = await repository.list({ limit: 100, symbol: observation.symbol, status: "active" });
-  return listed.filter(candidate => candidate.symbol === observation.symbol && candidate.timeframe === observation.timeframe && candidate.detectorId === observation.detectorId && candidate.observationType === observation.observationType && candidate.lifecycle === "active" && Date.parse(candidate.expiresAt) > now.getTime());
+function addSemanticCandidate(candidates: Map<string, ObservationSemanticGroup>, observation: MarketObservation) {
+  const group = semanticGroupFromObservation(observation);
+  candidates.set(semanticGroupKey(group), group);
+}
+
+function hypothesisCandidateScanLimit(config: V2RuntimeConfig) {
+  return Math.max(config.maxHypothesesPerCycle * 4, config.minIndependentHypothesisOccurrences * 4, 20);
+}
+
+async function historicalSupport(repository: V2Repositories["observations"], candidate: ObservationSemanticGroup, config: V2RuntimeConfig, now: Date) {
+  return repository.eligibleForHypothesis({
+    ...candidate,
+    lookbackHours: config.hypothesisLookbackHours,
+    minimumQualityScore: 0.5,
+    now,
+    limit: hypothesisCandidateScanLimit(config),
+  });
+}
+
+function observationFromSaveResult(saved: unknown): MarketObservation | null {
+  const result = saved as { record?: MarketObservation; observation?: MarketObservation; existing?: MarketObservation };
+  return result.record ?? result.observation ?? result.existing ?? null;
+}
+
+function hypothesisFromSaveResult(saved: unknown): ResearchHypothesis | null {
+  const result = saved as { record?: ResearchHypothesis; hypothesis?: ResearchHypothesis; existing?: ResearchHypothesis };
+  return result.record ?? result.hypothesis ?? result.existing ?? null;
+}
+
+function conflictFromSaveResult(saved: unknown) {
+  return (saved as { conflict?: string }).conflict;
 }
 
 function independentOccurrenceCount(observations: import("../observations").MarketObservation[]) {

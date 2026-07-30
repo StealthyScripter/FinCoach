@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { PgEvidenceRepository } from "../persistence/evidenceRepository";
 import type { MarketObservation } from "./contracts";
 import { completeObservationIdentity } from "./evidence";
+import type { EligibleObservationQuery, EligibleSemanticGroupsQuery, ObservationSemanticGroup } from "./repository";
 
 type Queryable = Pick<Pool | PoolClient, "query">;
 
@@ -49,7 +50,7 @@ export class PgObservationRepository {
   listPage(input: { limit?: number; offset?: number; symbol?: string; status?: string } = {}) { return this.evidence.list(input); }
   health() { return this.evidence.health(); }
 
-  async eligibleForHypothesis(input: { symbol: string; timeframe: string; detectorId: string; observationType: string; strategyFamily?: string; lookbackHours: number; minimumQualityScore: number; now: Date; limit: number }): Promise<MarketObservation[]> {
+  async eligibleForHypothesis(input: EligibleObservationQuery): Promise<MarketObservation[]> {
     const since = new Date(input.now.getTime() - input.lookbackHours * 60 * 60_000).toISOString();
     const result = await (this.evidence as unknown as { db: Queryable }).db.query(
       `SELECT *
@@ -58,18 +59,49 @@ export class PgObservationRepository {
          AND timeframe = $2
          AND detector_id = $3
          AND observation_type = $4
-         AND ($5::text IS NULL OR strategy_family = $5)
+         AND strategy_family IS NOT DISTINCT FROM $5::text
          AND lifecycle = 'active'
          AND expires_at > $6
          AND quality_score >= $7
          AND candle_end IS NOT NULL
          AND source_data_hash IS NOT NULL
-         AND created_at >= $8
+         AND observed_at >= $8
          AND supersedes_id IS NULL
-       ORDER BY candle_end DESC, created_at DESC
+       ORDER BY observed_at DESC, record_id ASC
        LIMIT $9`,
       [input.symbol, input.timeframe, input.detectorId, input.observationType, input.strategyFamily ?? null, input.now.toISOString(), input.minimumQualityScore, since, input.limit],
     );
     return result.rows.map((row: { payload: MarketObservation }) => row.payload);
+  }
+
+  async eligibleSemanticGroups(input: EligibleSemanticGroupsQuery): Promise<ObservationSemanticGroup[]> {
+    const since = new Date(input.now.getTime() - input.lookbackHours * 60 * 60_000).toISOString();
+    const result = await (this.evidence as unknown as { db: Queryable }).db.query(
+      `SELECT symbol, timeframe, detector_id, observation_type, strategy_family, MAX(observed_at) AS newest_observed_at
+       FROM v2_market_observations
+       WHERE lifecycle = 'active'
+         AND expires_at > $1
+         AND quality_score >= $2
+         AND candle_end IS NOT NULL
+         AND source_data_hash IS NOT NULL
+         AND observed_at >= $3
+         AND supersedes_id IS NULL
+       GROUP BY symbol, timeframe, detector_id, observation_type, strategy_family
+       ORDER BY MAX(observed_at) DESC,
+                symbol ASC,
+                timeframe ASC,
+                detector_id ASC,
+                observation_type ASC,
+                COALESCE(strategy_family, '') ASC
+       LIMIT $4`,
+      [input.now.toISOString(), input.minimumQualityScore, since, input.limit],
+    );
+    return result.rows.map((row: { symbol: string; timeframe: string; detector_id: string; observation_type: string; strategy_family: string | null }) => ({
+      symbol: row.symbol,
+      timeframe: row.timeframe,
+      detectorId: row.detector_id,
+      observationType: row.observation_type,
+      strategyFamily: row.strategy_family ?? undefined,
+    }));
   }
 }
