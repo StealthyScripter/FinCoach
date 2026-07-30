@@ -8,7 +8,9 @@ export const oandaTimeframeGranularity = {
   "15m": "M15",
   "30m": "M30",
   "1h": "H1",
+  "3h": "H3",
   "4h": "H4",
+  "6h": "H6",
   "1d": "D",
   "1w": "W",
   "1mo": "M",
@@ -81,4 +83,3 @@ export function oandaPriceParameter(component: "mid" | "bid" | "ask" | "bid_ask"
   if (component === "ask") return "A";
   return "BA";
 }
-

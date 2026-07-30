@@ -7,8 +7,8 @@ export function validateHypothesisInput(input: HypothesisGenerationInput) {
   if (input.conditions.some((condition) => condition.usesFutureData)) throw new Error("future-dependent condition rejected");
   if (input.conditions.some((condition) => condition.field === input.expectedOutcome.metric)) throw new Error("circular definition rejected");
   if (input.conditions.length > 8) throw new Error("excessive hypothesis complexity");
-  if (input.sourceObservationIds.length < input.minimumIndependentOccurrences || input.evidenceEventIds.length < input.minimumIndependentOccurrences) throw new Error("insufficient evidence");
-  if (!input.evidenceEventIds.length || !input.sourceTraderAnalysisIds.length) throw new Error("incomplete lineage");
+  if (new Set(input.sourceObservationIds).size < input.minimumIndependentOccurrences || new Set(input.evidenceEventIds).size < input.minimumIndependentOccurrences) throw new Error("insufficient evidence");
+  if (!input.evidenceEventIds.length || (!input.sourceObservationIds.length && !input.sourceTraderAnalysisIds.length)) throw new Error("incomplete lineage");
 }
 export function dataMiningRisk(conditionCount: number): "low" | "medium" | "high" {
   return conditionCount <= 3 ? "low" : conditionCount <= 6 ? "medium" : "high";

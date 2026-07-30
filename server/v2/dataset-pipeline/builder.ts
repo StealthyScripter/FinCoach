@@ -240,5 +240,5 @@ function n(value: string) { const parsed = Number(value); if (!Number.isFinite(p
 function hashRequest(request: HistoricalDatasetBuildRequest) { return createHash("sha256").update(JSON.stringify({ ...request, outputDirectory: undefined, resume: undefined })).digest("hex"); }
 function hashString(value: string) { return createHash("sha256").update(value).digest("hex"); }
 function now(input: { now?: () => Date }) { return input.now?.() ?? new Date(); }
-function timeframeMs(timeframe: V2Timeframe) { return ({ "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000, "1w": 604_800_000, "1mo": 2_592_000_000 })[timeframe]; }
+function timeframeMs(timeframe: V2Timeframe) { return ({ "1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000, "3h": 10_800_000, "4h": 14_400_000, "6h": 21_600_000, "1d": 86_400_000, "1w": 604_800_000, "1mo": 2_592_000_000 })[timeframe]; }
 function isWeekendGap(left: string, right: string) { const l = new Date(left).getUTCDay(); const r = new Date(right).getUTCDay(); return l === 5 && (r === 0 || r === 1); }

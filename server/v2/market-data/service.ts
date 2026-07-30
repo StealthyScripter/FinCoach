@@ -315,10 +315,12 @@ function timeframeMs(timeframe: V2Timeframe) {
           : timeframe === "30m" ? 30
             : timeframe === "1h" ? 60
               : timeframe === "4h" ? 240
-                : timeframe === "1d" ? 1440
-                  : timeframe === "1w" ? 10080
-                    : timeframe === "1mo" ? 43200
-                      : exhaustive(timeframe);
+                : timeframe === "3h" ? 180
+                  : timeframe === "6h" ? 360
+                    : timeframe === "1d" ? 1440
+                      : timeframe === "1w" ? 10080
+                        : timeframe === "1mo" ? 43200
+                          : exhaustive(timeframe);
   return minutes * 60_000;
 }
 

@@ -35,6 +35,8 @@ type DurableOperationsProjectionRepository = {
   getReportByDate(reportDate: string): Promise<DailyReportRecord | null>;
   saveReport(record: DailyReportRecord): Promise<{ inserted: boolean; record: DailyReportRecord }>;
   saveDelivery(record: DailyReportDeliveryRecord): Promise<{ inserted: boolean; record: DailyReportDeliveryRecord }>;
+  researchProgress?(now?: Date): Promise<Record<string, unknown>>;
+  researchBlockers?(now?: Date): Promise<Record<string, unknown>>;
 };
 
 type EvidenceProjectionRepository = {
@@ -187,7 +189,7 @@ export class V2OperationsService {
       body.lessons = await countEvidence(evidence.lessons);
       body.lifecycleStates = await countEvidence(evidence.lifecycle);
       body.courtroomVerdicts = await countEvidence(evidence["court-cases"]);
-      body.rankedCandidates = await countEvidence(evidence.strategies);
+      body.rankedCandidates = await countEvidence(evidence["strategies"]);
     } catch (error) {
       const availability = availabilityFromError(error);
       body.postgresqlHealth = availability;
@@ -203,6 +205,33 @@ export class V2OperationsService {
       return [module, configured?.state === state ? configured : { state, reason: reasonForAvailability(state) }];
     }));
     return { ...base, body };
+  }
+
+  async researchProgress(): Promise<V2OperationsResponse<Record<string, unknown>>> {
+    const correlationId = randomUUID();
+    const repository = this.asyncOperationsRepository();
+    if (!repository?.researchProgress) {
+      return { status: 200, body: { schemaVersion: "fincoach.v2.research-progress.1", generatedAt: new Date().toISOString(), degraded: true, reason: "postgres_projection_not_configured", liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
+    }
+    try {
+      return { status: 200, body: { ...(await repository.researchProgress()), liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
+    } catch (error) {
+      return { status: 200, body: { schemaVersion: "fincoach.v2.research-progress.1", generatedAt: new Date().toISOString(), degraded: true, reason: error instanceof Error ? error.message : "postgres_projection_failed", liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress_degraded" })] };
+    }
+  }
+
+  async researchBlockers(): Promise<V2OperationsResponse<Record<string, unknown>>> {
+    const correlationId = randomUUID();
+    const repository = this.asyncOperationsRepository();
+    if (!repository?.researchBlockers) {
+      return { status: 200, body: { schemaVersion: "fincoach.v2.research-blockers.1", generatedAt: new Date().toISOString(), highestSeverity: "warning", blockers: [{ code: "postgres_projection_not_configured", severity: "warning", phase: "operations", reason: "PostgreSQL research blocker projection is not configured.", currentValue: "not_configured", requiredValue: "configured", recommendedAction: "Initialize V2 runtime with PostgreSQL repositories.", firstObservedAt: new Date().toISOString(), lastObservedAt: new Date().toISOString() }], liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
+    }
+    try {
+      return { status: 200, body: { ...(await repository.researchBlockers()), liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
+    } catch (error) {
+      const at = new Date().toISOString();
+      return { status: 200, body: { schemaVersion: "fincoach.v2.research-blockers.1", generatedAt: at, highestSeverity: "warning", blockers: [{ code: "postgres_projection_failed", severity: "warning", phase: "operations", reason: error instanceof Error ? error.message : "PostgreSQL blocker projection failed.", currentValue: "failed", requiredValue: "healthy", recommendedAction: "Check database connectivity and migrations.", firstObservedAt: at, lastObservedAt: at }], liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers_degraded" })] };
+    }
   }
 
   list(collection: V2OperationsCollection, query: V2OperationsQuery = {}): V2OperationsResponse<Record<string, unknown>> {
@@ -316,6 +345,71 @@ export class V2OperationsService {
     if (!collection) return "Unsupported Version 2 operations command.";
     const list = this.list(collection, { limit: 5 }).body;
     return [`Version 2 ${collection}`, `Items: ${(list.pagination as { total: number }).total}`, `Availability: ${list.availability}`, `Live execution: blocked`].join("\n");
+  }
+
+  async telegramResearchProgress() {
+    const progress = (await this.researchProgress()).body as Record<string, unknown>;
+    if (progress.degraded) return `FinCoach Research Progress\nState: degraded\nReason: ${progress.reason}\nLive execution blocked: true`;
+    const windows = progress.windows as Record<string, Record<string, unknown>>;
+    const coverage = progress.coverage as Record<string, unknown[] | string | null>;
+    const pipeline = progress.pipeline as Record<string, unknown>;
+    const readiness = progress.readiness as Record<string, unknown>;
+    const evals = pipeline.detectorEvaluations as Record<string, unknown>;
+    return [
+      "FinCoach Research Progress",
+      `Current UTC time: ${progress.generatedAt}`,
+      `Latest completed cycle: ${JSON.stringify((progress.runtime as Record<string, unknown>)?.latestCompletedCycle ?? null).slice(0, 120)}`,
+      "",
+      "Observations",
+      `- Current hour: ${windows.currentHour?.observations ?? 0}`,
+      `- Running 24 hours: ${windows.running24Hours?.observations ?? 0}`,
+      `- Running 7 days: ${windows.running7Days?.observations ?? 0}`,
+      `- Total: ${windows.total?.observations ?? 0}`,
+      `- Evaluations attempted this hour: ${evals.attemptedCurrentHour ?? 0}`,
+      `- Evaluations completed this hour: ${evals.completedCurrentHour ?? 0}`,
+      `- Duplicates suppressed this hour: ${evals.duplicatesSuppressedCurrentHour ?? 0}`,
+      `- Failures this hour: ${evals.failuresCurrentHour ?? 0}`,
+      "",
+      "Coverage",
+      `- Active symbols: ${formatCoverage(coverage.symbols)}`,
+      `- Active timeframes: ${formatCoverage(coverage.timeframes)}`,
+      `- Active detectors: ${formatCoverage(coverage.detectors)}`,
+      `- Strategy families evaluated: ${formatCoverage(coverage.strategyFamilies)}`,
+      `- Most recent market-data timestamp: ${coverage.mostRecentMarketDataTimestamp ?? "none"}`,
+      "",
+      "Pipeline",
+      `- Hypotheses: ${pipeline.hypotheses ?? 0}`,
+      `- Strategies: ${pipeline.strategies ?? 0}`,
+      `- Experiments: ${pipeline.experiments ?? 0}`,
+      `- Backtests: ${pipeline.backtests ?? 0}`,
+      `- Verdicts: ${pipeline.verdicts ?? 0}`,
+      `- Ranked candidates: ${pipeline.rankedCandidates ?? 0}`,
+      `- Forward tests: ${pipeline.forwardTests ?? 0}`,
+      `- Research signals: ${pipeline.signals ?? 0}`,
+      `- External evaluations: ${pipeline.evaluations ?? 0}`,
+      `- Journal entries: ${pipeline.journalEntries ?? 0}`,
+      `- Lessons: ${pipeline.lessons ?? 0}`,
+      `- Lifecycle decisions: ${pipeline.lifecycleDecisions ?? 0}`,
+      `- Pilot scorecards: ${pipeline.pilotScorecards ?? 0}`,
+      "",
+      "Readiness",
+      `- Current stage: ${readiness.currentStage ?? "research"}`,
+      `- Next required stage: ${readiness.nextStage ?? "backtest eligible"}`,
+      `- Live execution blocked: ${readiness.liveExecutionBlocked ?? true}`,
+      `- Paper execution state: ${readiness.paperExecutionState ?? "gated"}`,
+      `- Demo execution state: ${readiness.demoExecutionState ?? "gated"}`,
+    ].join("\n").slice(0, 3900);
+  }
+
+  async telegramResearchBlockers() {
+    const body = (await this.researchBlockers()).body as Record<string, unknown>;
+    const blockers = Array.isArray(body.blockers) ? body.blockers as Array<Record<string, unknown>> : [];
+    return [
+      "FinCoach Research Blockers",
+      `Highest severity: ${body.highestSeverity ?? "unknown"}`,
+      "",
+      ...blockers.slice(0, 20).map(item => `- [${item.severity}] ${item.code} (${item.phase})\n  Reason: ${item.reason}\n  Current: ${item.currentValue ?? "n/a"} Required: ${item.requiredValue ?? "n/a"}\n  Next: ${item.recommendedAction}`),
+    ].join("\n").slice(0, 3900);
   }
 
   private validateList(collection: V2OperationsCollection, query: V2OperationsQuery) {
@@ -445,6 +539,11 @@ function commandToCollection(command: string): V2OperationsCollection | null {
     "/lessons": "lessons",
     "/strategy_health": "lifecycle",
   } as Record<string, V2OperationsCollection | undefined>)[command] ?? null;
+}
+
+function formatCoverage(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) return "none";
+  return value.map(item => typeof item === "object" && item !== null ? `${(item as { value?: unknown }).value}:${(item as { count?: unknown }).count}` : String(item)).join(", ");
 }
 
 function reasonForAvailability(state: V2OperationsAvailability) {

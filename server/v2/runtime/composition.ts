@@ -20,7 +20,7 @@ import { PgExperimentRepository } from "../experiments/pgRepository";
 import { PgBacktestRepository } from "../backtesting/pgRepository";
 import { PgStrategyDefinitionRepository } from "../rules/pgRepository";
 import type { OrchestrationErrorCode } from "../orchestration/contracts";
-import { ObservationsV2Service, evidence as observationEvidence } from "../observations";
+import { ObservationsV2Service, breakoutDetector, compressionDetector, evidence as observationEvidence, stableHash } from "../observations";
 import { HypothesisV2Service } from "../hypothesis";
 import { rulesV2Compiler } from "../rules";
 import { ExperimentsV2Service } from "../experiments";
@@ -52,6 +52,7 @@ export class FinCoachV2Runtime {
   private lastError: string | null = null;
   private nextScheduledCycleAt: string | null = null;
   private activeCycle = false;
+  private schedulerStarted = false;
 
   constructor(
     private readonly env: NodeJS.ProcessEnv = process.env,
@@ -102,9 +103,14 @@ export class FinCoachV2Runtime {
       structuredLogger.v2({ level: "info", event: "v2_runtime_idle", message: "V2 runtime initialized without autostart", runtimeInstanceId: this.bootId });
       return this.status();
     }
-    if (this.timer) return this.status();
+    if (this.schedulerStarted || this.timer) {
+      structuredLogger.v2({ level: "info", event: "scheduler_duplicate_suppressed", message: "Duplicate V2 scheduler start suppressed", runtimeInstanceId: this.bootId, activeTimers: this.timer ? 1 : 0 });
+      return this.status();
+    }
+    this.schedulerStarted = true;
     this.state = "running";
     const schedule = () => {
+      if (!this.schedulerStarted || this.state === "stopping" || this.state === "stopped") return;
       this.nextScheduledCycleAt = new Date(Date.now() + this.config.cadenceMs).toISOString();
       structuredLogger.v2({ level: "info", event: "v2_cycle_scheduled", message: "Next V2 research cycle scheduled", runtimeInstanceId: this.bootId, nextScheduledCycleAt: this.nextScheduledCycleAt, cadenceMs: this.config.cadenceMs });
       this.timer = setTimeout(() => {
@@ -120,6 +126,7 @@ export class FinCoachV2Runtime {
   async stop(reason = "runtime_stop") {
     structuredLogger.v2({ level: "info", event: "v2_runtime_stopping", message: "V2 runtime stopping", runtimeInstanceId: this.bootId, reason });
     this.state = "stopping";
+    this.schedulerStarted = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.nextScheduledCycleAt = null;
@@ -171,9 +178,18 @@ export class FinCoachV2Runtime {
     }
     this.activeCycle = true;
     const now = new Date();
-    const cycleId = `cycle-${now.toISOString()}-${randomUUID().slice(0, 8)}`;
+    const scheduledWindowStart = scheduledWindow(now, this.config.cadenceMs);
+    const idempotencyKey = input.requestedBy?.startsWith("v2-autostart") ? `v2-cycle:${scheduledWindowStart}` : `v2-cycle:${input.requestedBy ?? "manual"}:${scheduledWindowStart}`;
+    const cycleId = `cycle-${scheduledWindowStart}-${randomUUID().slice(0, 8)}`;
     structuredLogger.v2({ level: "info", event: "research_cycle_started", message: "V2 research cycle started", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, workerId, leaseName: lease.leaseName });
-    await repositories.orchestration.saveCycle({ cycleId, status: "requested", requestedBy: input.requestedBy ?? "manual", idempotencyKey: cycleId, correlationId, createdAt: now.toISOString(), updatedAt: now.toISOString() });
+    const savedCycle = await repositories.orchestration.saveCycle({ cycleId, status: "requested", requestedBy: input.requestedBy ?? "manual", idempotencyKey, correlationId, createdAt: now.toISOString(), updatedAt: now.toISOString() });
+    if (!savedCycle.inserted) {
+      await repositories.orchestration.releaseLease({ leaseName: lease.leaseName, workerId: lease.workerId, fencingToken: lease.fencingToken, now: new Date() }).catch(() => undefined);
+      this.activeCycle = false;
+      this.lastRunResult = { completed: false, reason: "duplicate_cycle_window_suppressed", idempotencyKey, liveExecutionBlocked: true };
+      structuredLogger.v2({ level: "warn", event: "scheduler_duplicate_suppressed", message: "Duplicate V2 research cycle window suppressed", cycleId, correlationId, runtimeInstanceId: this.bootId, idempotencyKey });
+      return this.lastRunResult;
+    }
     const cycleRequested = createDomainEvent({ eventType: OrchestrationV2EventTypes.ResearchCycleRequested, sourceModule: "orchestration", correlationId, causationId: null, payload: { cycleId, requestedBy: input.requestedBy ?? "manual" } });
     await repositories.orchestration.updateCycleStatus({ cycleId, status: "running" });
     try {
@@ -281,58 +297,138 @@ export class FinCoachV2Runtime {
     let backtestsCount = 0;
     let verdictsCount = 0;
     let rankedCount = 0;
+    let evaluationsAttempted = 0;
+    let evaluationsCompleted = 0;
+    let observationsDeduplicated = 0;
+    let hypothesesEvaluated = 0;
+    let hypothesesBlocked = 0;
+    const blockers: Array<Record<string, unknown>> = [];
     const rankingCandidates: RankingCandidateInput[] = [];
+    const savedObservations: Array<{ observation: Awaited<ReturnType<V2Repositories["observations"]["save"]>> extends { record: infer T } ? T : never; observationEventId: string }> = [];
 
-    for (const symbol of this.config.symbols.slice(0, this.config.maxObservationsPerCycle)) {
-      const timeframe = normalizeTimeframe(this.config.timeframes[0]);
+    const plans = buildObservationPlan(this.config);
+    for (const plan of plans) {
+      if (observationsCount >= this.config.maxObservationsPerCycle) break;
+      const { symbol, timeframe, detector } = plan;
+      evaluationsAttempted += 1;
+      await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "attempted", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() });
+      structuredLogger.v2({ level: "info", event: "detector_evaluation_started", message: "V2 detector evaluation started", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId, strategyFamily: detector.capability?.strategyFamily });
       const candles = demoCandles(symbol, timeframe, input.now, 80);
+      const lastCandle = candles.at(-1)!;
+      if (!lastCandle.complete) {
+        blockers.push(blocker("warning", "incomplete_candle_skipped", "observations", "Detector evaluation skipped because latest candle is incomplete.", false, true, "Wait for completed candle boundary.", input.now));
+        await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "skipped", reason: "incomplete_candle", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() });
+        structuredLogger.v2({ level: "warn", event: "detector_evaluation_skipped", message: "V2 detector evaluation skipped", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId, reason: "incomplete_candle" });
+        continue;
+      }
+      evaluationsCompleted += 1;
       const contextEventId = input.cycleEventId;
+      const sourceDataIds = candles.slice(-40).map(candle => `${candle.source.provider}:${candle.symbol}:${candle.timeframe}:${candle.timestamp}`);
+      const sourceDataHash = stableHash(candles.slice(-40).map(candle => ({ timestamp: candle.timestamp, open: candle.open, high: candle.high, low: candle.low, close: candle.close, spread: candle.spread, complete: candle.complete })));
+      const metrics = metricsFromCandles(candles);
       const obs = observations.create({
         symbol,
         timeframe,
-        observedAt: input.now.toISOString(),
+        observedAt: lastCandle.timestamp,
+        candleStart: lastCandle.timestamp,
+        candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(),
+        lookbackStart: candles[0].timestamp,
+        lookbackEnd: lastCandle.timestamp,
+        marketDataSource: lastCandle.source.provider,
+        sourceDataIds,
+        sourceDataHash,
+        inputSnapshotId: `snapshot:${sourceDataHash}`,
+        metrics,
+        detectorParameters: { detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, requiredCandles: detector.capability?.requiredCandles ?? 0 },
         contextEventId,
         upstreamEventIds: [input.cycleEventId],
         correlationId: input.correlationId,
         causationId: input.cycleEventId,
         evidence: [
-          observationEvidence("chart", contextEventId, "volatility.compression", true, input.now.toISOString()),
-          observationEvidence("chart", contextEventId, "structure.breakOfStructure", true, input.now.toISOString()),
+          observationEvidence("chart", contextEventId, "volatility.compression", true, lastCandle.timestamp, { symbol, timeframe, candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), marketDataSource: lastCandle.source.provider, sourceDataIds, sourceDataHash, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, detectorParameters: { requiredCandles: detector.capability?.requiredCandles ?? 0 } }),
+          observationEvidence("chart", contextEventId, "structure.breakOfStructure", true, lastCandle.timestamp, { symbol, timeframe, candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), marketDataSource: lastCandle.source.provider, sourceDataIds, sourceDataHash, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, detectorParameters: { requiredCandles: detector.capability?.requiredCandles ?? 0 } }),
         ],
       });
-      for (const observation of obs.observations.slice(0, this.config.maxObservationsPerCycle - observationsCount)) {
+      const compatible = obs.observations.filter(observation => observation.detectorId === detector.detectorId).slice(0, this.config.maxObservationsPerCycle - observationsCount);
+      for (const observation of compatible) {
         const observationEventId = firstEventId(obs.events, "observations", observation.observationId);
-        await repositories.observations.save(observation);
+        const saved = await repositories.observations.save(observation);
+        if (!saved.inserted) {
+          observationsDeduplicated += 1;
+          await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: observation.detectorId, detectorVersion: observation.detectorVersion, strategyFamily: observation.strategyFamily, status: "duplicate_suppressed", reason: "semantic_natural_key_conflict", candleStart: observation.candleStart, candleEnd: observation.candleEnd, sourceDataHash: observation.sourceDataHash, correlationId: input.correlationId, causationId: itemEventCausation(input.cycleEventId), createdAt: input.now.toISOString() });
+          structuredLogger.v2({ level: "info", event: "observation_duplicate_suppressed", message: "Duplicate V2 observation suppressed", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: observation.detectorId, naturalKey: observation.naturalKey });
+          continue;
+        }
+        structuredLogger.v2({ level: "info", event: "observation_created", message: "V2 observation persisted", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: observation.detectorId, observationType: observation.observationType, confidence: observation.confidence, qualityScore: observation.qualityScore });
+        savedObservations.push({ observation: saved.record as never, observationEventId });
         observationsCount += 1;
-        const hypothesis = hypotheses.generate({
-          statement: `${symbol} ${timeframe} breakout after compression may have positive expectancy after costs.`,
-          targetPopulation: { symbols: [symbol], assetClasses: ["forex"], timeframes: [timeframe], sessions: ["all"], regimes: ["demo"] },
-          conditions: [{ field: "observationType", operator: "in", value: ["breakout", "volatility_compression"] }],
+      }
+      await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "completed", candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), sourceDataHash, correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() });
+      structuredLogger.v2({ level: "info", event: "detector_evaluation_completed", message: "V2 detector evaluation completed", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId });
+    }
+
+    for (const item of savedObservations) {
+      if (hypothesesCount >= this.config.maxHypothesesPerCycle) break;
+      const observation = item.observation as unknown as import("../observations").MarketObservation;
+      const support = await historicalSupport(repositories.observations, observation, this.config, input.now);
+      hypothesesEvaluated += 1;
+      const supportTimestamps = support.map(obs => obs.candleEnd ?? obs.observedAt).sort();
+      const commonPayload = {
+        symbol: observation.symbol,
+        timeframe: observation.timeframe,
+        detector: observation.detectorId,
+        strategyFamily: observation.strategyFamily ?? "unknown",
+        eligibleObservationCount: support.length,
+        independentOccurrenceCount: independentOccurrenceCount(support),
+        requiredOccurrenceCount: this.config.minIndependentHypothesisOccurrences,
+        oldestSupportingTimestamp: supportTimestamps[0] ?? null,
+        newestSupportingTimestamp: supportTimestamps.at(-1) ?? null,
+      };
+      structuredLogger.v2({ level: "info", event: "hypothesis_candidate_evaluated", message: "V2 hypothesis candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload });
+      if (support.length < this.config.minIndependentHypothesisOccurrences || independentOccurrenceCount(support) < this.config.minIndependentHypothesisOccurrences) {
+        hypothesesBlocked += 1;
+        blockers.push(blocker("critical", "hypothesis_insufficient_independent_occurrences", "hypothesis", "Not enough distinct candle windows to create hypothesis.", independentOccurrenceCount(support), this.config.minIndependentHypothesisOccurrences, "Collect another complete candle occurrence with full lineage.", input.now));
+        structuredLogger.v2({ level: "warn", event: "hypothesis_insufficient_independent_occurrences", message: "V2 hypothesis candidate blocked", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, blocker: "insufficient_independent_occurrences" });
+        continue;
+      }
+      if (new Set(support.flatMap(obs => obs.evidence.map(ev => ev.evidenceId))).size < this.config.minIndependentHypothesisOccurrences) {
+        hypothesesBlocked += 1;
+        blockers.push(blocker("critical", "hypothesis_rejected_duplicate_evidence", "hypothesis", "Supporting observations reuse evidence IDs.", support.length, this.config.minIndependentHypothesisOccurrences, "Ensure evidence fingerprints include symbol, timeframe, detector, candle range, and source hash.", input.now));
+        structuredLogger.v2({ level: "warn", event: "hypothesis_rejected_duplicate_evidence", message: "V2 hypothesis candidate blocked", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, blocker: "duplicate_evidence" });
+        continue;
+      }
+      const sourceObservationIds = [...new Set(support.map(obs => obs.observationId))];
+      const evidenceEventIds = [...new Set(support.flatMap(obs => obs.evidence.map(ev => ev.evidenceId)))];
+      const hypothesis = hypotheses.generate({
+          statement: `${observation.symbol} ${observation.timeframe} ${observation.observationType} may have positive expectancy after costs.`,
+          targetPopulation: { symbols: [observation.symbol], assetClasses: ["forex"], timeframes: [observation.timeframe], sessions: ["all"], regimes: ["demo"] },
+          conditions: [{ field: "observationType", operator: "in", value: [observation.observationType] }],
           expectedOutcome: { metric: "expectancy", operator: ">", value: 0, horizon: "next_bar" },
           baseline: { baselineId: "zero-edge", description: "No edge after costs", metric: "expectancy", value: 0 },
           invalidationCriteria: [{ field: "costSensitivity", operator: ">", value: 0.5 }],
           minimumSampleSize: 30,
-          minimumIndependentOccurrences: 2,
+          minimumIndependentOccurrences: this.config.minIndependentHypothesisOccurrences,
           mechanism: "Compression can precede directional expansion, but this remains unproven until backtested.",
-          evidenceEventIds: [observation.observationId],
+          evidenceEventIds,
           contradictoryEvidenceEventIds: [],
-          sourceObservationIds: [observation.observationId],
+          sourceObservationIds,
           sourceTraderAnalysisIds: [],
           correlationId: input.correlationId,
-          causationId: observationEventId,
+          causationId: item.observationEventId,
           createdAt: input.now.toISOString(),
         });
         if (!hypothesis.hypothesis) continue;
         const hypothesisEventId = firstEventId(hypothesis.events, "hypothesis", hypothesis.hypothesis.hypothesisId);
         await repositories.hypotheses.save(hypothesis.hypothesis);
         hypothesesCount += 1;
+        structuredLogger.v2({ level: "info", event: "hypothesis_created", message: "V2 hypothesis persisted", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, hypothesisId: hypothesis.hypothesis.hypothesisId });
         if (hypothesesCount > this.config.maxHypothesesPerCycle) break;
         const compiled = rulesV2Compiler.compile({
           hypothesisId: hypothesis.hypothesis.hypothesisId,
-          name: `V2 demo ${symbol} compression breakout`,
+          name: `V2 demo ${observation.symbol} compression breakout`,
           assetClasses: ["forex"],
-          symbols: [symbol],
-          timeframes: [timeframe],
+          symbols: [observation.symbol],
+          timeframes: [observation.timeframe],
           entryConditions: [{ field: "observationType", operator: "in", value: ["breakout"] }],
           filters: [],
           sidePolicy: { candidateSide: "buy" },
@@ -359,11 +455,11 @@ export class FinCoachV2Runtime {
           strategyId: compiled.strategy.strategyId,
           strategyVersion: compiled.strategy.strategyVersion,
           experimentType: "baseline_backtest",
-          datasetSpecification: { symbols: [symbol], timeframes: [timeframe], start: candles[0].timestamp, end: candles[candles.length - 1].timestamp },
+          datasetSpecification: { symbols: [observation.symbol], timeframes: [observation.timeframe], start: demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80)[0].timestamp, end: demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80).at(-1)!.timestamp },
           parameterSpecification: {},
-          holdoutPolicy: { trainEnd: candles[40].timestamp, validationEnd: candles[60].timestamp, testStart: new Date(Date.parse(candles[candles.length - 1].timestamp) + 60_000).toISOString(), finalHoldoutLocked: true },
+          holdoutPolicy: { trainEnd: demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80)[40].timestamp, validationEnd: demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80)[60].timestamp, testStart: new Date(Date.parse(demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80).at(-1)!.timestamp) + 60_000).toISOString(), finalHoldoutLocked: true },
           randomSeed: "deterministic-demo-seed",
-          resourceBudget: { maxCandles: candles.length, maxRuntimeMs: this.config.cycleTimeoutMs },
+          resourceBudget: { maxCandles: 80, maxRuntimeMs: this.config.cycleTimeoutMs },
           priority: 1,
           maxAttempts: this.config.retryBudget,
           correlationId: input.correlationId,
@@ -373,7 +469,8 @@ export class FinCoachV2Runtime {
         const experimentEventId = firstEventId(experiment.events, "experiments", experiment.experiment.experimentId);
         await repositories.experiments.save(experiment.experiment);
         experimentsCount += 1;
-        const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [observationEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
+        const backtestCandles = demoCandles(observation.symbol, normalizeTimeframe(observation.timeframe), input.now, 80);
+        const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles: backtestCandles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [item.observationEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
         const backtestEventId = firstEventId(backtest.events, "backtesting", backtest.result.backtestId);
         await repositories.backtests.save(backtest.result);
         backtestsCount += 1;
@@ -392,18 +489,18 @@ export class FinCoachV2Runtime {
         const courtEventId = firstEventId(court.events, "courtroom", court.courtCase.caseId);
         await repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtestEventId, experimentEventId, hypothesisEventId] });
         verdictsCount += 1;
-        rankingCandidates.push(candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, hypothesis.hypothesis.hypothesisId, backtest.result, timeframe, courtEventId));
+        rankingCandidates.push(candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, hypothesis.hypothesis.hypothesisId, backtest.result, observation.timeframe, courtEventId));
         if (experimentsCount >= this.config.maxExperimentsPerCycle || backtestsCount >= this.config.maxBacktestsPerCycle) break;
-      }
     }
     if (rankingCandidates.length) {
       const ranked = ranking.rank({ candidates: rankingCandidates, maxFocusedCount: 1, correlationId: input.correlationId, causationId: rankingCandidates[0].lineageEventIds.at(-1) ?? input.cycleEventId, generatedAt: new Date().toISOString() });
       await repositories.ranking.save({ ...ranked.decision, schemaVersion: "fincoach.v2.ranking.1", lineageEventIds: rankingCandidates.flatMap(candidate => candidate.lineageEventIds) });
       rankedCount = ranked.decision.candidates.length;
     }
-    structuredLogger.v2({ level: "info", event: "research_cycle_lineage_persisted", message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, observations: observationsCount, hypotheses: hypothesesCount, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount });
+    const completedEvent = blockers.length ? "pipeline_cycle_completed_with_blockers" : "pipeline_cycle_completed";
+    structuredLogger.v2({ level: "info", event: completedEvent, message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, evaluationsAttempted, evaluationsCompleted, observations: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypotheses: hypothesesCount, hypothesesBlocked, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, blockers });
     v2TelemetryService.counter("v2_research_cycles_total", 1, { module: "orchestration", operation: "runOnce", resultClass: "success" });
-    return { observations: observationsCount, hypotheses: hypothesesCount, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, signals: 0, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
+    return { status: blockers.length ? "completed_with_blockers" : "completed", evaluationsAttempted, evaluationsCompleted, observationsCreated: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypothesesCreated: hypothesesCount, hypothesesBlocked, strategiesCreated: strategiesCount, experimentsQueued: experimentsCount, backtestsCompleted: backtestsCount, verdictsCreated: verdictsCount, rankedCandidates: rankedCount, forwardTestsCreated: 0, signalsCreated: 0, lifecycleDecisions: 0, blockers, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
   }
 }
 
@@ -509,13 +606,18 @@ function classifyRuntimeErrorCode(error: unknown): OrchestrationErrorCode {
   return "unknown_failure";
 }
 
+function scheduledWindow(now: Date, cadenceMs: number) {
+  const safeCadenceMs = Math.max(60_000, cadenceMs);
+  return new Date(Math.floor(now.getTime() / safeCadenceMs) * safeCadenceMs).toISOString();
+}
+
 function normalizeTimeframe(value: string): V2Timeframe {
-  const normalized = ({ M1: "1m", M5: "5m", M15: "15m", M30: "30m", H1: "1h", H4: "4h", D: "1d" } as Record<string, V2Timeframe>)[value] ?? value;
-  return ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"].includes(normalized) ? normalized as V2Timeframe : "15m";
+  const normalized = ({ M1: "1m", M5: "5m", M15: "15m", M30: "30m", H1: "1h", H3: "3h", H4: "4h", H6: "6h", D: "1d", W: "1w", "1hr": "1h", "1day": "1d", "1week": "1w" } as Record<string, V2Timeframe>)[value] ?? value;
+  return ["1m", "5m", "15m", "30m", "1h", "3h", "4h", "6h", "1d", "1w", "1mo"].includes(normalized) ? normalized as V2Timeframe : "15m";
 }
 
 function demoCandles(symbol: string, timeframe: V2Timeframe, now: Date, count: number): NormalizedCandle[] {
-  const step = 15 * 60_000;
+  const step = timeframeMs(timeframe);
   const seed = Number.parseInt(createHash("sha256").update(symbol).digest("hex").slice(0, 6), 16) / 0xffffff;
   const start = now.getTime() - count * step;
   return Array.from({ length: count }, (_, index) => {
@@ -526,6 +628,86 @@ function demoCandles(symbol: string, timeframe: V2Timeframe, now: Date, count: n
     const low = Number((Math.min(open, close) - 0.0006).toFixed(6));
     return { symbol, timeframe, timestamp: new Date(start + index * step).toISOString(), open, high, low, close, spread: 0.0002, volume: null, tickVolume: 100 + index, complete: true, source: { provider: "fincoach-deterministic-demo", providerSymbol: symbol, adapterVersion: "v1" }, corporateAction: null };
   });
+}
+
+function buildObservationPlan(config: V2RuntimeConfig) {
+  const detectors = [compressionDetector, breakoutDetector].filter(detector => detector.capability?.enabled !== false);
+  const plans = [];
+  for (const symbol of config.symbols) {
+    for (const timeframe of config.timeframes.map(normalizeTimeframe)) {
+      for (const detector of detectors) {
+        if (!detector.capability?.supportedTimeframes.includes(timeframe)) continue;
+        plans.push({ symbol, timeframe, detector });
+      }
+    }
+  }
+  return plans.slice(0, Math.max(config.targetEvaluationsPerHour, config.maxObservationsPerCycle));
+}
+
+async function historicalSupport(repository: V2Repositories["observations"], observation: import("../observations").MarketObservation, config: V2RuntimeConfig, now: Date) {
+  if ("eligibleForHypothesis" in repository && typeof repository.eligibleForHypothesis === "function") {
+    return repository.eligibleForHypothesis({ symbol: observation.symbol, timeframe: observation.timeframe, detectorId: observation.detectorId, observationType: observation.observationType, strategyFamily: observation.strategyFamily, lookbackHours: config.hypothesisLookbackHours, minimumQualityScore: 0.5, now, limit: Math.max(config.minIndependentHypothesisOccurrences * 4, 20) });
+  }
+  if (!("list" in repository) || typeof repository.list !== "function") return [observation];
+  const listed = await repository.list({ limit: 100, symbol: observation.symbol, status: "active" });
+  return listed.filter(candidate => candidate.symbol === observation.symbol && candidate.timeframe === observation.timeframe && candidate.detectorId === observation.detectorId && candidate.observationType === observation.observationType && candidate.lifecycle === "active" && Date.parse(candidate.expiresAt) > now.getTime());
+}
+
+function independentOccurrenceCount(observations: import("../observations").MarketObservation[]) {
+  return new Set(observations.map(observation => `${observation.symbol}:${observation.timeframe}:${observation.candleStart ?? observation.observedAt}:${observation.candleEnd ?? observation.observedAt}`)).size;
+}
+
+function metricsFromCandles(candles: NormalizedCandle[]) {
+  const last = candles.at(-1)!;
+  const previous = candles.at(-2);
+  const returns = candles.slice(1).map((candle, index) => candle.close / candles[index].close - 1);
+  const mean = returns.reduce((sum, value) => sum + value, 0) / Math.max(1, returns.length);
+  const variance = returns.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / Math.max(1, returns.length);
+  const ranges = candles.map(candle => candle.high - candle.low);
+  const atr = ranges.slice(-14).reduce((sum, value) => sum + value, 0) / Math.max(1, ranges.slice(-14).length);
+  const recentRange = ranges.slice(-10).reduce((sum, value) => sum + value, 0) / 10;
+  const priorRange = ranges.slice(-30, -10).reduce((sum, value) => sum + value, 0) / 20;
+  return {
+    open: last.open,
+    high: last.high,
+    low: last.low,
+    close: last.close,
+    previousClose: previous?.close,
+    volume: last.volume ?? last.tickVolume ?? undefined,
+    spread: last.spread ?? undefined,
+    atr: Number(atr.toFixed(6)),
+    realizedVolatility: Number(Math.sqrt(variance).toFixed(6)),
+    compressionRatio: Number((recentRange / Math.max(priorRange, 0.000001)).toFixed(4)),
+    breakoutLevel: Number(Math.max(...candles.slice(-20, -1).map(candle => candle.high)).toFixed(6)),
+    breakoutDistance: Number((last.close - Math.max(...candles.slice(-20, -1).map(candle => candle.high))).toFixed(6)),
+    return1: previous ? Number((last.close / previous.close - 1).toFixed(6)) : undefined,
+    returnN: Number((last.close / candles[0].close - 1).toFixed(6)),
+    sampleSize: candles.length,
+  };
+}
+
+function nextCandleBoundary(timestamp: string, timeframe: V2Timeframe) {
+  return new Date(Date.parse(timestamp) + timeframeMs(timeframe));
+}
+
+function timeframeMs(timeframe: V2Timeframe) {
+  return ({ "1m": 60_000, "5m": 5 * 60_000, "15m": 15 * 60_000, "30m": 30 * 60_000, "1h": 60 * 60_000, "3h": 3 * 60 * 60_000, "4h": 4 * 60 * 60_000, "6h": 6 * 60 * 60_000, "1d": 24 * 60 * 60_000, "1w": 7 * 24 * 60 * 60_000, "1mo": 30 * 24 * 60 * 60_000 } as Record<V2Timeframe, number>)[timeframe] ?? 15 * 60_000;
+}
+
+function blocker(severity: "info" | "warning" | "critical", code: string, phase: string, reason: string, currentValue: unknown, requiredValue: unknown, recommendedAction: string, now: Date) {
+  return { severity, code, phase, reason, currentValue, requiredValue, recommendedAction, firstObservedAt: now.toISOString(), lastObservedAt: now.toISOString() };
+}
+
+async function saveDetectorEvaluation(repository: unknown, input: Omit<Parameters<PgV2OperationsRepository["saveDetectorEvaluation"]>[0], "evaluationId">) {
+  if (!repository || typeof (repository as { saveDetectorEvaluation?: unknown }).saveDetectorEvaluation !== "function") return;
+  const evaluationId = stableHash({ cycleId: input.cycleId, symbol: input.symbol, timeframe: input.timeframe, detectorId: input.detectorId, status: input.status, candleEnd: input.candleEnd, sourceDataHash: input.sourceDataHash });
+  await (repository as PgV2OperationsRepository).saveDetectorEvaluation({ ...input, evaluationId }).catch((error) => {
+    structuredLogger.v2Error({ level: "error", event: "detector_evaluation_failed", message: "Failed to persist V2 detector evaluation metric", error });
+  });
+}
+
+function itemEventCausation(causationId: string) {
+  return causationId;
 }
 
 function firstEventId(events: readonly DomainEvent[], sourceModule: string, parentEntityId: string) {

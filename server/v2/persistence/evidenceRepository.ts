@@ -23,6 +23,7 @@ export type EvidenceRepositoryConfig<T extends EvidenceRecordShape> = {
   idempotencyKeyOf(record: T): string;
   createdAtOf(record: T): string;
   supersedesIdOf?(record: T): string | null;
+  extraColumnsOf?(record: T): Record<string, unknown>;
   validate?(record: T): void;
 };
 
@@ -44,24 +45,30 @@ export class PgEvidenceRepository<T extends EvidenceRecordShape> {
           conflict: fingerprint(current) === fingerprint(record) ? "idempotent" : "conflicting",
         };
       }
+      const baseColumns = ["record_id", "schema_version", "natural_key", "idempotency_key", "source_module", "payload", "lineage_event_ids", "supersedes_id", "correlation_id", "causation_id", "created_at"];
+      const baseValues = [
+        id,
+        this.config.schemaVersion,
+        naturalKey,
+        idempotencyKey,
+        this.config.sourceModule,
+        JSON.stringify(record),
+        JSON.stringify(record.lineageEventIds ?? []),
+        this.config.supersedesIdOf?.(record) ?? null,
+        record.correlationId ?? "",
+        record.causationId ?? null,
+        this.config.createdAtOf(record),
+      ];
+      const extra = Object.entries(this.config.extraColumnsOf?.(record) ?? {}).filter(([, value]) => value !== undefined);
+      const columns = [...baseColumns, ...extra.map(([key]) => key)];
+      const values = [...baseValues, ...extra.map(([, value]) => value)];
+      const placeholders = values.map((_, index) => `$${index + 1}`).join(", ");
       const inserted = await this.db.query(
         `INSERT INTO ${this.config.tableName}
-          (record_id, schema_version, natural_key, idempotency_key, source_module, payload, lineage_event_ids, supersedes_id, correlation_id, causation_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          (${columns.join(", ")})
+         VALUES (${placeholders})
          RETURNING *`,
-        [
-          id,
-          this.config.schemaVersion,
-          naturalKey,
-          idempotencyKey,
-          this.config.sourceModule,
-          JSON.stringify(record),
-          JSON.stringify(record.lineageEventIds ?? []),
-          this.config.supersedesIdOf?.(record) ?? null,
-          record.correlationId ?? "",
-          record.causationId ?? null,
-          this.config.createdAtOf(record),
-        ],
+        values,
       );
       return { inserted: true, record: this.map(inserted.rows[0]) };
     } catch (error) {

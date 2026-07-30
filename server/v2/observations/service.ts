@@ -5,6 +5,7 @@ import { InMemoryObservationRepository } from "./repository";
 import { breakoutDetector } from "./detectors/breakoutDetector";
 import { compressionDetector } from "./detectors/compressionDetector";
 import { liquiditySweepDetector } from "./detectors/liquiditySweepDetector";
+export { breakoutDetector, compressionDetector, liquiditySweepDetector };
 
 export class ObservationsV2Service {
   constructor(private readonly repository = new InMemoryObservationRepository(), private readonly detectors: ObservationDetector[] = [compressionDetector, breakoutDetector, liquiditySweepDetector]) {}

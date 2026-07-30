@@ -25,6 +25,12 @@ const READ_ONLY_COMMANDS = new Set([
   "/v2_metrics",
   "/research_today",
   "/research_throughput",
+  "/research_progress",
+  "/progress",
+  "/pipeline",
+  "/research_blockers",
+  "/blockers",
+  "/readiness",
   "/observations",
   "/hypotheses",
   "/experiments",
@@ -91,6 +97,7 @@ export class TelegramCommandRouter {
       "/status /health /demo_status /pipeline_status /providers",
       "/open_trades /exposure /today /week /strategies /kill_status /performance /restarts",
       "/v2_status /v2_metrics /research_today /research_throughput /data_reconciliation",
+      "/research_progress /research_blockers",
       "/observations /hypotheses /experiments /backtests",
       "/court_cases /strategy_leaderboard /forward_tests /signals /evaluator_results /lessons /strategy_health",
       "Confirmation required: /pause_demo /resume_demo /disable_automation /kill",
@@ -140,6 +147,18 @@ export class TelegramCommandRouter {
         return this.v2MetricsMessage();
       case "/research_throughput":
         return this.researchThroughputMessage();
+      case "/research_progress":
+      case "/progress":
+      case "/pipeline": {
+        const { v2OperationsService } = await import("../v2/operations");
+        return v2OperationsService.telegramResearchProgress();
+      }
+      case "/research_blockers":
+      case "/blockers":
+      case "/readiness": {
+        const { v2OperationsService } = await import("../v2/operations");
+        return v2OperationsService.telegramResearchBlockers();
+      }
       case "/performance":
         return this.performanceMessage();
       case "/restarts":

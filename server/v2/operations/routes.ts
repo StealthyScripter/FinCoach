@@ -23,6 +23,8 @@ const routes: [string, V2OperationsCollection][] = [
 
 export function registerV2OperationsRoutes(app: Express, service: V2OperationsService = v2OperationsService) {
   app.get("/api/v2/status", async (req: Request, res: Response) => send(res, await service.statusAsync({ correlationId: correlationId(req) })));
+  app.get("/api/v2/research/progress", async (_req: Request, res: Response) => send(res, await service.researchProgress()));
+  app.get("/api/v2/research/blockers", async (_req: Request, res: Response) => send(res, await service.researchBlockers()));
   app.get("/api/v2/metrics", async (_req: Request, res: Response) => res.status(200).json({ ...v2TelemetryService.snapshot(), liveExecutionBlocked: true }));
   app.get("/api/v2/runtime/status", async (_req: Request, res: Response) => res.status(200).json(getFinCoachV2Runtime().status()));
   if (typeof (app as Express & { post?: Express["post"] }).post === "function") {

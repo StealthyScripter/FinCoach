@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { lineageReferenceSchema } from "../lineage";
 
-export const v2Timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"] as const;
+export const v2Timeframes = ["1m", "5m", "15m", "30m", "1h", "3h", "4h", "6h", "1d", "1w", "1mo"] as const;
 export type V2Timeframe = typeof v2Timeframes[number];
 
 export const assetClassSchema = z.enum(["forex", "metal", "stock"]);
