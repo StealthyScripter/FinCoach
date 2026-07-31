@@ -10,6 +10,39 @@ assert.equal(status.body.schemaVersion, "fincoach.v2.operations-status.1");
 assert.equal(status.body.liveExecutionBlocked, true);
 assert.equal(status.body.killSwitchState, "inactive");
 assert.equal(status.events[0].eventType, V2OperationsEventTypes.V2OperationsResponseCreated);
+assert.deepEqual(status.body.runtimeConfiguration, undefined);
+
+const runtimeAwareOperations = new V2OperationsService(undefined, {}, () => ({
+  runtimeState: "failed",
+  researchState: "idle",
+  pilotState: "configured",
+  paperExecutionState: "disabled",
+  demoBrokerState: "disabled",
+  telegramPublicationState: "disabled",
+  configurationState: "complete",
+  runtimeConfiguration: {
+    maxCyclesPerDay: 8,
+    cycleTimeoutMs: 120000,
+    leaseTtlMs: 60000,
+    leaseRenewIntervalMs: 20000,
+    liveExecutionBlocked: true,
+  },
+  orchestrationSafety: {
+    schemaVersion: "fincoach.v2.orchestration-safety.1",
+    admissionTimezone: "UTC",
+    maxCyclesPerUtcDay: 8,
+    cycleTimeoutMs: 120000,
+    leaseTtlMs: 60000,
+    leaseRenewIntervalMs: 20000,
+    liveExecutionBlocked: true,
+    blockers: ["cycle_timed_out", "daily_limit_reached", "lease_held", "lease_lost", "stale_cycle_recovered"],
+  },
+}));
+const runtimeAwareStatus = runtimeAwareOperations.status({ correlationId: "00000000-0000-4000-8000-000000000025" });
+assert.equal((runtimeAwareStatus.body.runtimeConfiguration as Record<string, unknown>).liveExecutionBlocked, true);
+assert.deepEqual((runtimeAwareStatus.body.orchestrationSafety as Record<string, unknown>).blockers, ["cycle_timed_out", "daily_limit_reached", "lease_held", "lease_lost", "stale_cycle_recovered"]);
+assert.equal(JSON.stringify(runtimeAwareStatus.body).includes("worker-"), false);
+assert.equal(JSON.stringify(runtimeAwareStatus.body).includes("postgres://"), false);
 
 const lessons = operations.list("lessons", { limit: 1, offset: 0, correlationId: status.body.correlationId });
 assert.equal(lessons.body.items.length, 0);

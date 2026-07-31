@@ -19,6 +19,10 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
   assert.equal(validation.config.runtimeEnabled, false);
   assert.equal(validation.config.liveExecutionEnabled, false);
   assert.equal(validation.config.telegramTransport, "disabled");
+  assert.equal(validation.config.maxCyclesPerDay, 8);
+  assert.equal(validation.config.cycleTimeoutMs, 120000);
+  assert.equal(validation.config.leaseTtlMs, 60000);
+  assert.equal(validation.config.leaseRenewIntervalMs, 20000);
 }
 
 {
@@ -32,14 +36,54 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 }
 
 {
+  const validation = loadV2RuntimeConfig({
+    ...disabledEnv,
+    FINCOACH_V2_MAX_CYCLES_PER_DAY: "not-a-number",
+    FINCOACH_V2_CYCLE_TIMEOUT_MS: "-1",
+    FINCOACH_V2_LEASE_TTL_MS: "NaN",
+    FINCOACH_V2_LEASE_RENEW_INTERVAL_MS: "-50",
+  });
+  assert.equal(validation.ok, true);
+  assert.equal(validation.config.maxCyclesPerDay, 8);
+  assert.equal(validation.config.cycleTimeoutMs, 120000);
+  assert.equal(validation.config.leaseTtlMs, 60000);
+  assert.equal(validation.config.leaseRenewIntervalMs, 20000);
+}
+
+{
   const runtime = createFinCoachV2Runtime(disabledEnv);
   await runtime.initialize();
   const status = runtime.status();
   assert.equal(status.state, "disabled");
+  assert.equal(status.liveExecutionBlocked, true);
   assert.equal(status.liveMoneyExecution, "blocked");
   assert.equal(status.paperExecution, "disabled");
   assert.equal(status.demoBrokerExecution, "disabled");
   assert.equal(status.telegramPublication, "disabled");
+  assert.deepEqual(status.orchestrationSafety, {
+    schemaVersion: "fincoach.v2.orchestration-safety.1",
+    admissionTimezone: "UTC",
+    maxCyclesPerUtcDay: 8,
+    cycleTimeoutMs: 120000,
+    leaseTtlMs: 60000,
+    leaseRenewIntervalMs: 20000,
+    liveExecutionBlocked: true,
+    blockers: [],
+  });
+  assert.doesNotMatch(JSON.stringify(status), /test-worker|postgres:\/\/user:pass|DATABASE_URL/);
+}
+
+{
+  const runtime = createFinCoachV2Runtime({
+    ...disabledEnv,
+    FINCOACH_V2_RUNTIME_ENABLED: "true",
+    FINCOACH_LIVE_EXECUTION_ENABLED: "true",
+  });
+  await assert.rejects(() => runtime.initialize(), /V2 runtime configuration failed/);
+  const status = runtime.status();
+  assert.equal(status.liveExecutionBlocked, true);
+  assert.deepEqual((status.orchestrationSafety as { blockers: string[] }).blockers, ["invalid_orchestration_configuration"]);
+  assert.doesNotMatch(JSON.stringify(status), /postgres:\/\/|DATABASE_URL=|test-worker/);
 }
 
 {

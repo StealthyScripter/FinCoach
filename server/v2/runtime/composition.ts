@@ -267,11 +267,13 @@ export class FinCoachV2Runtime {
       lastRunResult: this.lastRunResult,
       lastError: this.lastError,
       nextScheduledCycleAt: this.nextScheduledCycleAt,
+      liveExecutionBlocked: true,
       liveMoneyExecution: this.config.liveExecutionEnabled ? "enabled_blocked_by_policy" : "blocked",
       demoBrokerExecution: this.config.demoBrokerExecutionEnabled ? "enabled_demo_only" : "disabled",
       paperExecution: this.config.paperExecutionEnabled ? "enabled" : "disabled",
       researchSignalCreation: this.config.researchSignalEnabled ? "enabled" : "disabled",
       telegramPublication: this.config.telegramSignalPublicationEnabled ? "enabled" : "disabled",
+      orchestrationSafety: orchestrationSafetyStatus(this.config, this.configValidation, this.lastError),
       memory,
     };
   }
@@ -306,7 +308,9 @@ export class FinCoachV2Runtime {
         cycleTimeoutMs: this.config.cycleTimeoutMs,
         leaseTtlMs: this.config.leaseTtlMs,
         leaseRenewIntervalMs: this.config.leaseRenewIntervalMs,
+        liveExecutionBlocked: true,
       },
+      orchestrationSafety: orchestrationSafetyStatus(this.config, this.configValidation, this.lastError),
       economicEvidenceState: "available_empty",
       providerHealth: this.config.researchEnabled ? "available" : "disabled",
     }));
@@ -711,6 +715,29 @@ function blockedReason(config: V2RuntimeConfig) {
 
 function redactedConfig(config: V2RuntimeConfig) {
   return { ...config, liveExecutionEnabled: config.liveExecutionEnabled };
+}
+
+function orchestrationSafetyStatus(config: V2RuntimeConfig, validation: V2RuntimeConfigValidation, lastError: string | null) {
+  const blockers = new Set<string>();
+  if (!validation.ok) blockers.add("invalid_orchestration_configuration");
+  for (const error of validation.errors) {
+    if (/LEASE|CYCLE|MAX_CYCLES|DATABASE_URL|Autostart|runtime|Research|Pilot/i.test(error)) blockers.add("invalid_orchestration_configuration");
+  }
+  if (lastError === "daily_limit_reached") blockers.add("daily_limit_reached");
+  if (lastError === "runtime_lease_unavailable") blockers.add("lease_held");
+  if (lastError === "lease_lost") blockers.add("lease_lost");
+  if (lastError === "cycle_timeout") blockers.add("cycle_timed_out");
+  if (lastError === "stale_cycle_recovered") blockers.add("stale_cycle_recovered");
+  return {
+    schemaVersion: "fincoach.v2.orchestration-safety.1",
+    admissionTimezone: "UTC",
+    maxCyclesPerUtcDay: config.maxCyclesPerDay,
+    cycleTimeoutMs: config.cycleTimeoutMs,
+    leaseTtlMs: config.leaseTtlMs,
+    leaseRenewIntervalMs: config.leaseRenewIntervalMs,
+    liveExecutionBlocked: true,
+    blockers: [...blockers].sort(),
+  };
 }
 
 function classifyRuntimeErrorCode(error: unknown): OrchestrationErrorCode {

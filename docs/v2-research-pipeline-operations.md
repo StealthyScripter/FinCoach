@@ -19,6 +19,19 @@ The repaired research cycle is:
 
 Live trading remains blocked. The code never changes `FINCOACH_LIVE_EXECUTION_ENABLED`.
 
+## Orchestration Safety Status
+
+`/api/v2/runtime/status` exposes a sanitized `orchestrationSafety` block with:
+
+- `maxCyclesPerUtcDay`
+- `cycleTimeoutMs`
+- `leaseTtlMs`
+- `leaseRenewIntervalMs`
+- `liveExecutionBlocked`
+- safe blocker codes such as `daily_limit_reached`, `lease_held`, `lease_lost`, `cycle_timed_out`, `stale_cycle_recovered`, and `invalid_orchestration_configuration`
+
+The status response must not expose `DATABASE_URL`, raw worker IDs, SQL errors, or stack traces. Lease owner IDs in logs are hashed/truncated.
+
 ## Verification Commands
 
 Use the scripts actually present in `package.json`:
@@ -60,6 +73,7 @@ SELECT date_trunc('hour', created_at) AS hour, count(*) FROM v2_orchestration_cy
 
 ```bash
 curl -s http://127.0.0.1:${PORT:-5000}/api/v2/status
+curl -s http://127.0.0.1:${PORT:-5000}/api/v2/runtime/status
 curl -s http://127.0.0.1:${PORT:-5000}/api/v2/research/progress
 curl -s http://127.0.0.1:${PORT:-5000}/api/v2/research/blockers
 ```
