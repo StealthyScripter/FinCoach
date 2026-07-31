@@ -398,6 +398,7 @@ export class PgOrchestrationRepository {
              )
            ORDER BY c.updated_at ASC, c.cycle_id ASC
            LIMIT $3
+           FOR UPDATE OF c SKIP LOCKED
          )
          UPDATE v2_orchestration_cycles c
          SET status = 'failed',
@@ -406,6 +407,8 @@ export class PgOrchestrationRepository {
              payload = c.payload || '{"terminalReason":"stale_cycle_recovered"}'::jsonb
          FROM stale
          WHERE c.cycle_id = stale.cycle_id
+           AND c.status = 'running'
+           AND c.updated_at <= $1
          RETURNING c.*`,
         [staleBefore, input.now.toISOString(), input.limit, input.correlationId],
       );
