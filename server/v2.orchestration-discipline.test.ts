@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createFinCoachV2Runtime } from "./v2/runtime/composition";
 import { loadV2RuntimeConfig } from "./v2/runtime/config";
 import { InMemoryOrchestrationRepository } from "./v2/orchestration/repository";
@@ -8,6 +9,8 @@ await testLeaseOwnershipAndFencing();
 await testRuntimeAdmissionBeforeLease();
 await testRuntimeTimeoutCancelsCycle();
 await testRuntimeLeaseLossCancelsCycle();
+await testRuntimeBlocksMutationAfterLeaseLoss();
+testRuntimePersistenceStagesAreGuarded();
 await testConfigAlignment();
 
 console.log("v2 orchestration discipline tests passed");
@@ -111,6 +114,105 @@ async function testRuntimeLeaseLossCancelsCycle() {
   assert.equal(result.reason, "lease_lost");
   assert.ok(renewCalls >= 1);
   assert.ok(result.durationMs < 140, `lease loss should cancel promptly, got ${result.durationMs}ms`);
+}
+
+async function testRuntimeBlocksMutationAfterLeaseLoss() {
+  const saved = { observations: 0, hypotheses: 0, evaluations: [] as string[] };
+  let observationSaved = false;
+  const runtime = createFinCoachV2Runtime({
+    DATABASE_URL: "postgres://user:pass@localhost:5432/fincoach",
+    FINCOACH_V2_RUNTIME_ENABLED: "true",
+    FINCOACH_V2_RESEARCH_ENABLED: "true",
+    FINCOACH_V2_PILOT_ENABLED: "true",
+    FINCOACH_V2_AUTOSTART: "false",
+    FINCOACH_V2_SYMBOLS: "EUR_USD",
+    FINCOACH_V2_TIMEFRAMES: "M15",
+    FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE: "1",
+    FINCOACH_V2_MAX_HYPOTHESES_PER_CYCLE: "1",
+    FINCOACH_V2_CYCLE_TIMEOUT_MS: "500",
+    FINCOACH_V2_LEASE_RENEW_INTERVAL_MS: "200",
+    FINCOACH_V2_LEASE_TTL_MS: "1000",
+    FINCOACH_LIVE_EXECUTION_ENABLED: "false",
+    FINCOACH_TELEGRAM_TRANSPORT: "disabled",
+  } as NodeJS.ProcessEnv);
+  const lease = { leaseName: "fincoach-v2-runtime", workerId: "test-worker", fencingToken: 1 };
+  (runtime as unknown as { repositories: unknown }).repositories = {
+    orchestration: {
+      admitCycle: async ({ cycle, maxCyclesPerDay }: { cycle: unknown; maxCyclesPerDay: number }) => ({ admitted: true, cycle, admittedCount: 1, limit: maxCyclesPerDay, admissionDate: "2026-07-31" }),
+      acquireLease: async () => lease,
+      renewLease: async () => ({ ...lease, acquiredAt: Date.now(), expiresAt: Date.now() + 1000 }),
+      verifyLease: async () => !observationSaved,
+      updateCycleStatus: async (record: unknown) => record,
+      checkpoint: async (record: unknown) => record,
+      saveRetry: async (record: unknown) => record,
+      releaseLease: async () => true,
+      recoverStaleCycles: async () => [],
+    },
+    runtime: { health: async () => undefined, recordBoot: async () => undefined },
+    observations: {
+      save: async (record: unknown) => {
+        saved.observations += 1;
+        observationSaved = true;
+        return { inserted: true, record };
+      },
+      eligibleForHypothesis: async () => [],
+      eligibleSemanticGroups: async () => [],
+    },
+    hypotheses: { save: async (record: unknown) => { saved.hypotheses += 1; return { inserted: true, record }; } },
+    strategies: { save: async (record: unknown) => ({ inserted: true, record }) },
+    experiments: { save: async (record: unknown) => ({ inserted: true, record }) },
+    backtests: { save: async (record: unknown) => ({ inserted: true, record }) },
+    courtroom: { save: async (record: unknown) => ({ inserted: true, record }) },
+    ranking: { save: async (record: unknown) => ({ inserted: true, record }) },
+    operations: {
+      saveDetectorEvaluation: async (record: { status: string }) => {
+        saved.evaluations.push(record.status);
+        return { inserted: true, record };
+      },
+    },
+    pilot: {},
+    forwardTesting: {},
+    signals: {},
+    evaluations: {},
+    journal: {},
+    learning: {},
+    lifecycle: {},
+    evolution: {},
+    evidence: {},
+  };
+  const result = await runtime.runOnce({ requestedBy: "fencing-test" });
+  assert.equal(result.completed, false);
+  assert.equal(result.reason, "lease_lost");
+  assert.equal(saved.observations, 1);
+  assert.deepEqual(saved.evaluations, ["attempted"]);
+  assert.equal(saved.hypotheses, 0);
+}
+
+function testRuntimePersistenceStagesAreGuarded() {
+  const source = readFileSync(new URL("./v2/runtime/composition.ts", import.meta.url), "utf8");
+  for (const stage of [
+    "detector_evaluation_attempted",
+    "detector_evaluation_skipped",
+    "observation_save",
+    "detector_evaluation_duplicate",
+    "detector_evaluation_completed",
+    "hypothesis_save",
+    "strategy_save",
+    "experiment_save",
+    "backtest_save",
+    "courtroom_save",
+    "ranking_save",
+    "forward_test_save",
+    "signal_save",
+    "evaluation_save",
+    "journal_save",
+    "lesson_save",
+    "lifecycle_save",
+  ]) {
+    assert.match(source, new RegExp(`guarded\\(input\\.guard, "${stage}"`), `${stage} must use the guarded mutation boundary`);
+  }
+  assert.match(source, /guard\.assertOwned\("cycle_completion"\)/);
+  assert.match(source, /guard\.assertOwned\("cycle_checkpoint"\)/);
 }
 
 function testConfigAlignment() {
