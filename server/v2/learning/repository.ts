@@ -1,4 +1,5 @@
 import type { LearningLesson, StrategyRevisionProposal } from "./contracts";
+import { evaluateLessonForLifecycleEligibility } from "../runtime/postSignalEligibility";
 
 export class InMemoryLearningRepository {
   private readonly lessons = new Map<string, LearningLesson>();
@@ -11,10 +12,10 @@ export class InMemoryLearningRepository {
 
   saveLesson(lesson: LearningLesson) {
     const existing = this.lessons.get(lesson.lessonId);
-    if (existing) return { inserted: false, lesson: existing };
+    if (existing) return { inserted: false, lesson: existing, record: existing, conflict: fingerprint(existing) === fingerprint(lesson) ? "idempotent" as const : "conflicting" as const };
     const frozen = freezeRecord(lesson);
     this.lessons.set(frozen.lessonId, frozen);
-    return { inserted: true, lesson: frozen };
+    return { inserted: true, lesson: frozen, record: frozen };
   }
 
   saveProposal(proposal: StrategyRevisionProposal) {
@@ -36,7 +37,13 @@ export class InMemoryLearningRepository {
   snapshot() {
     return { lessons: this.listLessons(), proposals: this.listProposals() };
   }
+
+  async eligibleForLifecycleDecision(input: { limit: number }) {
+    return this.listLessons().filter(lesson => evaluateLessonForLifecycleEligibility(lesson).eligible).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.lessonId.localeCompare(b.lessonId)).slice(0, input.limit);
+  }
 }
+
+function fingerprint(value: unknown) { return JSON.stringify(value); }
 
 function freezeRecord<T>(record: T): T {
   if (record && typeof record === "object") {

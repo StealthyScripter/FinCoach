@@ -47,6 +47,53 @@ export type V2OperationsResponse<TBody extends Record<string, unknown>> = {
   events: import("../contracts").DomainEvent[];
 };
 
+export type V2ResearchPipelineCounts = {
+  observations: number;
+  hypotheses: number;
+  strategies: number;
+  experiments: number;
+  backtests: number;
+  verdicts: number;
+  rankedCandidates: number;
+  forwardTests: number;
+  signals: number;
+  evaluations: number;
+  journalEntries: number;
+  lessons: number;
+  lifecycleDecisions: number;
+  pilotScorecards: number;
+  detectorEvaluations: {
+    recordsCurrentHour: number;
+    attemptedCurrentHour: number;
+    completedCurrentHour: number;
+    duplicatesSuppressedCurrentHour: number;
+    failuresCurrentHour: number;
+  };
+};
+
+export type V2ResearchReadiness = {
+  currentStage: string;
+  nextStage: string;
+  liveExecutionBlocked: true;
+  paperExecutionState: string;
+  demoExecutionState: string;
+};
+
+export type V2ResearchProgress = {
+  schemaVersion: "fincoach.v2.research-progress.1";
+  status: "ok" | "degraded";
+  generatedAt: string;
+  runtime?: Record<string, unknown>;
+  windows?: Record<string, Record<string, unknown>>;
+  coverage?: Record<string, unknown>;
+  pipeline?: V2ResearchPipelineCounts;
+  readiness?: V2ResearchReadiness;
+  degraded?: boolean;
+  reason?: string;
+  projectionError?: string;
+  liveExecutionBlocked?: true;
+};
+
 export type V2DailyResearchReport = {
   reportId: string;
   schemaVersion: "fincoach.v2.daily-research-report.1";

@@ -1,4 +1,5 @@
 import type { ResearchJournalEntry } from "./contracts";
+import { evaluateJournalForLessonEligibility } from "../runtime/postSignalEligibility";
 
 export class InMemoryResearchJournalRepository {
   private readonly entries = new Map<string, ResearchJournalEntry>();
@@ -7,12 +8,12 @@ export class InMemoryResearchJournalRepository {
     for (const entry of seed) this.entries.set(entry.journalEntryId, freezeEntry(entry));
   }
 
-  append(entry: ResearchJournalEntry): { inserted: boolean; entry: ResearchJournalEntry } {
+  append(entry: ResearchJournalEntry): { inserted: boolean; entry: ResearchJournalEntry; record: ResearchJournalEntry; conflict?: "idempotent" | "conflicting" } {
     const existing = this.entries.get(entry.journalEntryId);
-    if (existing) return { inserted: false, entry: existing };
+    if (existing) return { inserted: false, entry: existing, record: existing, conflict: fingerprint(existing) === fingerprint(entry) ? "idempotent" : "conflicting" };
     const frozen = freezeEntry(entry);
     this.entries.set(frozen.journalEntryId, frozen);
-    return { inserted: true, entry: frozen };
+    return { inserted: true, entry: frozen, record: frozen };
   }
 
   get(id: string) {
@@ -30,7 +31,13 @@ export class InMemoryResearchJournalRepository {
   snapshot() {
     return this.list();
   }
+
+  async eligibleForLesson(input: { limit: number }) {
+    return this.list().filter(entry => evaluateJournalForLessonEligibility(entry).eligible).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.journalEntryId.localeCompare(b.journalEntryId)).slice(0, input.limit);
+  }
 }
+
+function fingerprint(value: unknown) { return JSON.stringify(value); }
 
 function freezeEntry(entry: ResearchJournalEntry): ResearchJournalEntry {
   const copy: ResearchJournalEntry = {

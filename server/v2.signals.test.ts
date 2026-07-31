@@ -7,6 +7,8 @@ const one = svc.publish(req);
 assert.equal(one.signal?.schema, "fincoach.signal.v2");
 assert.equal(one.signal?.demoOnly, true);
 assert.equal(svc.publish(req).events[0].eventType, SignalsV2EventTypes.SignalDuplicateSuppressed);
+assert.equal(svc.publish({ ...req, forwardTestStatus: "completed" as const, forwardTestId: "ft-completed" }).signal?.schema, "fincoach.signal.v2");
+assert.equal(svc.publish({ ...req, forwardTestStatus: "failed" as const, forwardTestId: "ft-failed" }).signal, null);
 assert.equal(svc.publish({ ...req, stopLoss: 1.2 }).signal, null);
 assert.equal(svc.publish({ ...req, killSwitchActive: true }).signal, null);
 assert.equal(svc.publish({ ...req, marketSnapshotFresh: false }).signal, null);

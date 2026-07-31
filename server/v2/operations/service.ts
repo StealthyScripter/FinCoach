@@ -12,6 +12,7 @@ type ProjectionRepositories = {
   operations?: DurableOperationsProjectionRepository | InMemoryV2OperationsRepository;
   orchestration?: OrchestrationProjectionRepository;
   pilot?: PilotProjectionRepository;
+  ranking?: EvidenceProjectionRepository;
   evidence?: Partial<Record<V2OperationsCollection, EvidenceProjectionRepository>>;
 };
 
@@ -108,6 +109,7 @@ export class V2OperationsService {
       forwardTests: 0,
       signals: 0,
       externalEvaluations: 0,
+      journalEntries: 0,
       lessons: 0,
       lifecycleStates: 0,
       pilotState: null,
@@ -186,16 +188,17 @@ export class V2OperationsService {
       body.forwardTests = await countEvidence(evidence["forward-tests"]);
       body.signals = await countEvidence(evidence.signals);
       body.externalEvaluations = await countEvidence(evidence.evaluations);
+      body.journalEntries = await countEvidence(evidence.journal);
       body.lessons = await countEvidence(evidence.lessons);
       body.lifecycleStates = await countEvidence(evidence.lifecycle);
       body.courtroomVerdicts = await countEvidence(evidence["court-cases"]);
-      body.rankedCandidates = await countEvidence(evidence["strategies"]);
+      body.rankedCandidates = await countEvidence(this.repositories.ranking);
     } catch (error) {
       const availability = availabilityFromError(error);
       body.postgresqlHealth = availability;
       body.moduleHealth = { ...moduleHealth, operations: "degraded" };
       body.moduleAvailability = { ...moduleAvailability, operations: availability };
-      body.degradedReason = error instanceof Error ? error.message : "operations projection unavailable";
+      body.degradedReason = projectionErrorCode(error);
       return { ...base, status: 200, body };
     }
     body.moduleHealth = moduleHealth;
@@ -211,12 +214,13 @@ export class V2OperationsService {
     const correlationId = randomUUID();
     const repository = this.asyncOperationsRepository();
     if (!repository?.researchProgress) {
-      return { status: 200, body: { schemaVersion: "fincoach.v2.research-progress.1", generatedAt: new Date().toISOString(), degraded: true, reason: "postgres_projection_not_configured", liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
+      return { status: 200, body: { schemaVersion: "fincoach.v2.research-progress.1", status: "degraded", generatedAt: new Date().toISOString(), degraded: true, reason: "postgres_projection_not_configured", projectionError: "postgres_projection_not_configured", liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
     }
     try {
       return { status: 200, body: { ...(await repository.researchProgress()), liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
     } catch (error) {
-      return { status: 200, body: { schemaVersion: "fincoach.v2.research-progress.1", generatedAt: new Date().toISOString(), degraded: true, reason: error instanceof Error ? error.message : "postgres_projection_failed", liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress_degraded" })] };
+      const reason = projectionErrorCode(error);
+      return { status: 200, body: { schemaVersion: "fincoach.v2.research-progress.1", status: "degraded", generatedAt: new Date().toISOString(), degraded: true, reason, projectionError: reason, liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress_degraded" })] };
     }
   }
 
@@ -230,7 +234,8 @@ export class V2OperationsService {
       return { status: 200, body: { ...(await repository.researchBlockers()), liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
     } catch (error) {
       const at = new Date().toISOString();
-      return { status: 200, body: { schemaVersion: "fincoach.v2.research-blockers.1", generatedAt: at, highestSeverity: "warning", blockers: [{ code: "postgres_projection_failed", severity: "warning", phase: "operations", reason: error instanceof Error ? error.message : "PostgreSQL blocker projection failed.", currentValue: "failed", requiredValue: "healthy", recommendedAction: "Check database connectivity and migrations.", firstObservedAt: at, lastObservedAt: at }], liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers_degraded" })] };
+      const reason = projectionErrorCode(error);
+      return { status: 200, body: { schemaVersion: "fincoach.v2.research-blockers.1", status: "degraded", generatedAt: at, highestSeverity: "warning", blockers: [{ code: reason, severity: "warning", phase: "operations", reason: "PostgreSQL blocker projection failed.", currentValue: "failed", requiredValue: "healthy", recommendedAction: "Check database connectivity and migrations.", firstObservedAt: at, lastObservedAt: at }], projectionError: reason, liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers_degraded" })] };
     }
   }
 
@@ -513,6 +518,11 @@ function availabilityFromError(error: unknown): V2OperationsAvailability {
     if (error.code === "malformed_persisted_record") return "degraded";
   }
   return "degraded";
+}
+
+function projectionErrorCode(error: unknown) {
+  if (error instanceof V2PersistenceError) return error.code;
+  return "projection_failed";
 }
 
 function redactDestination(destination: string) {

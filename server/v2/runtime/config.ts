@@ -22,6 +22,7 @@ export type V2RuntimeConfig = {
   maxExperimentsPerCycle: number;
   maxBacktestsPerCycle: number;
   maxActiveForwardTests: number;
+  maxActiveResearchSignals: number;
   minIndependentHypothesisOccurrences: number;
   hypothesisLookbackHours: number;
   targetEvaluationsPerHour: number;
@@ -81,6 +82,7 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
     maxExperimentsPerCycle: int(env.FINCOACH_V2_MAX_EXPERIMENTS_PER_CYCLE, 3),
     maxBacktestsPerCycle: int(env.FINCOACH_V2_MAX_BACKTESTS_PER_CYCLE, 3),
     maxActiveForwardTests: int(env.FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS, 3),
+    maxActiveResearchSignals: int(env.FINCOACH_V2_MAX_ACTIVE_RESEARCH_SIGNALS, 3),
     minIndependentHypothesisOccurrences: Math.max(2, int(env.FINCOACH_V2_MIN_INDEPENDENT_HYPOTHESIS_OCCURRENCES, 2)),
     hypothesisLookbackHours: Math.max(1, int(env.FINCOACH_V2_HYPOTHESIS_LOOKBACK_HOURS, 720)),
     targetEvaluationsPerHour: int(env.FINCOACH_V2_TARGET_EVALUATIONS_PER_HOUR, 200),

@@ -1,5 +1,5 @@
 import type { Pool, PoolClient, QueryResultRow } from "pg";
-import type { V2DailyResearchReport } from "./contracts";
+import type { V2DailyResearchReport, V2ResearchProgress } from "./contracts";
 import type { DailyReportDeliveryRecord, DailyReportDeliveryStatus, DailyReportRecord } from "./repository";
 import { classifyPostgresError, requireObject, requireSchemaVersion, V2PersistenceError } from "../persistence/errors";
 
@@ -38,7 +38,7 @@ export class PgV2OperationsRepository {
     );
   }
 
-  async researchProgress(now = new Date()) {
+  async researchProgress(now = new Date()): Promise<V2ResearchProgress> {
     const generatedAt = now.toISOString();
     const currentHour = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours())).toISOString();
     const counts = await this.db.query(
@@ -60,7 +60,8 @@ export class PgV2OperationsRepository {
         (SELECT count(*)::int FROM v2_learning_lessons) AS lessons,
         (SELECT count(*)::int FROM v2_strategy_lifecycle_decisions) AS lifecycle_decisions,
         (SELECT count(*)::int FROM v2_pilot_scorecards) AS pilot_scorecards,
-        (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1) AS evaluations_attempted_hour,
+        (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1) AS evaluations_records_hour,
+        (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'attempted') AS evaluations_attempted_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'completed') AS evaluations_completed_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'duplicate_suppressed') AS duplicates_suppressed_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'failed') AS failures_hour,
@@ -81,6 +82,7 @@ export class PgV2OperationsRepository {
     const latestCycle = await this.db.query("SELECT * FROM v2_orchestration_cycles WHERE status = 'completed' ORDER BY updated_at DESC LIMIT 1");
     return {
       schemaVersion: "fincoach.v2.research-progress.1",
+      status: "ok",
       generatedAt,
       runtime: { latestCompletedCycle: latestCycle.rows[0] ?? null },
       windows: {
@@ -105,7 +107,7 @@ export class PgV2OperationsRepository {
         lessons: Number(row.lessons ?? 0),
         lifecycleDecisions: Number(row.lifecycle_decisions ?? 0),
         pilotScorecards: Number(row.pilot_scorecards ?? 0),
-        detectorEvaluations: { attemptedCurrentHour: Number(row.evaluations_attempted_hour ?? 0), completedCurrentHour: Number(row.evaluations_completed_hour ?? 0), duplicatesSuppressedCurrentHour: Number(row.duplicates_suppressed_hour ?? 0), failuresCurrentHour: Number(row.failures_hour ?? 0) },
+        detectorEvaluations: { recordsCurrentHour: Number(row.evaluations_records_hour ?? 0), attemptedCurrentHour: Number(row.evaluations_attempted_hour ?? 0), completedCurrentHour: Number(row.evaluations_completed_hour ?? 0), duplicatesSuppressedCurrentHour: Number(row.duplicates_suppressed_hour ?? 0), failuresCurrentHour: Number(row.failures_hour ?? 0) },
       },
       readiness: readinessFromCounts(row),
     };
@@ -262,18 +264,24 @@ function toIsoOrNull(value: unknown): string | null {
 
 function readinessFromCounts(row: Record<string, unknown>) {
   const stages = [
-    ["research", Number(row.observations_total ?? 0) > 0],
-    ["backtest eligible", Number(row.hypotheses ?? 0) > 0 && Number(row.strategies ?? 0) > 0],
-    ["ranked candidate", Number(row.backtests ?? 0) > 0 && Number(row.verdicts ?? 0) > 0 && Number(row.ranked_candidates ?? 0) > 0],
-    ["forward-test eligible", Number(row.forward_tests ?? 0) > 0],
-    ["paper/demo active", false],
-    ["pilot eligible", Number(row.pilot_scorecards ?? 0) > 0],
-    ["live candidate", false],
-    ["human-approved live enabled", false],
+    ["lifecycle decision", Number(row.lifecycle_decisions ?? 0) > 0, "research lifecycle complete"],
+    ["lesson", Number(row.lessons ?? 0) > 0, "lifecycle decision"],
+    ["journal entry", Number(row.journal_entries ?? 0) > 0, "lesson"],
+    ["evaluation", Number(row.evaluations ?? 0) > 0, "journal entry"],
+    ["signal", Number(row.signals ?? 0) > 0, "evaluation"],
+    ["forward test", Number(row.forward_tests ?? 0) > 0, "signal"],
+    ["ranked candidate", Number(row.ranked_candidates ?? 0) > 0, "forward-test eligible"],
+    ["verdict", Number(row.verdicts ?? 0) > 0, "ranked candidate"],
+    ["backtest", Number(row.backtests ?? 0) > 0, "verdict"],
+    ["experiment", Number(row.experiments ?? 0) > 0, "backtest"],
+    ["strategy", Number(row.strategies ?? 0) > 0, "experiment"],
+    ["hypothesis", Number(row.hypotheses ?? 0) > 0, "strategy"],
+    ["observation", Number(row.observations_total ?? 0) > 0, "hypothesis"],
   ] as const;
-  const current = [...stages].reverse().find(([, passed]) => passed)?.[0] ?? "research";
-  const next = stages.find(([, passed]) => !passed)?.[0] ?? "human-approved live enabled";
-  return { currentStage: current, nextStage: next, liveExecutionBlocked: true, paperExecutionState: "disabled_or_gated", demoExecutionState: "demo_only_gated" };
+  const currentStage = stages.find(([, present]) => present);
+  const current = currentStage?.[0] ?? "no durable research artifacts";
+  const next = currentStage?.[2] ?? "observation";
+  return { currentStage: current, nextStage: next, liveExecutionBlocked: true as const, paperExecutionState: "disabled_or_gated", demoExecutionState: "demo_only_gated" };
 }
 
 function deriveBlockers(progress: Awaited<ReturnType<PgV2OperationsRepository["researchProgress"]>>, now: Date) {

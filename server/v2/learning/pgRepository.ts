@@ -28,9 +28,13 @@ export class PgLearningRepository {
       createdAtOf: record => record.createdAt,
     });
   }
-  saveLesson(lesson: LearningLesson) { return this.lessons.save(lesson).then(result => ({ inserted: result.inserted, lesson: result.record, conflict: result.conflict })); }
+  saveLesson(lesson: LearningLesson) { return this.lessons.save(lesson).then(result => ({ inserted: result.inserted, lesson: result.record, record: result.record, conflict: result.conflict })); }
   saveProposal(proposal: StrategyRevisionProposal) { return this.proposals.save(proposal).then(result => ({ inserted: result.inserted, proposal: result.record, conflict: result.conflict })); }
   async listLessons(input: { limit?: number; offset?: number } = {}) { return (await this.lessons.list(input)).items; }
+  async eligibleForLifecycleDecision(input: { limit: number }) {
+    const result = await this.lessons.list({ limit: input.limit });
+    return result.items.filter(lesson => lesson.lineageEventIds.length && lesson.evidenceJournalEntryIds.length && Number.isFinite(lesson.attribution.averageR)).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.lessonId.localeCompare(b.lessonId)).slice(0, input.limit);
+  }
   listPage(input: { limit?: number; offset?: number } = {}) { return this.lessons.list(input); }
   async listProposals(input: { limit?: number; offset?: number; strategyId?: string } = {}) { return (await this.proposals.list(input)).items; }
   async snapshot() { return { lessons: await this.listLessons(), proposals: await this.listProposals() }; }

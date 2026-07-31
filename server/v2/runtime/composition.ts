@@ -28,9 +28,17 @@ import type { ResearchHypothesis } from "../hypothesis";
 import { rulesV2Compiler } from "../rules";
 import { ExperimentsV2Service } from "../experiments";
 import { backtestingV2Engine, type BacktestResult } from "../backtesting";
-import { CourtroomV2Service } from "../courtroom";
-import { RankingV2Service, type RankingCandidateInput } from "../ranking";
+import { CourtroomV2Service, forwardTestVerdictEligibility } from "../courtroom";
+import { RankingV2Service, type RankingCandidateInput, type StrategyRankingDecision } from "../ranking";
+import { ForwardTestingV2Service, type ForwardTestRecord } from "../forward-testing";
+import { SignalsV2Service, evaluateSignalEligibility, type V2ResearchSignal } from "../signals";
+import { ExternalEvaluationV2Service, type ExternalEvaluation } from "../external-evaluation";
+import { ResearchJournalV2Service, type ResearchJournalEntry } from "../journal";
+import { LearningV2Service, type LearningLesson, type LearningOutcome } from "../learning";
+import { StrategyLifecycleV2Service, type StrategyLifecycleDecision } from "../strategy-lifecycle";
+import { evaluateEvaluationForJournalEligibility, evaluateJournalForLessonEligibility, evaluateLessonForLifecycleEligibility, evaluateSignalForEvaluationEligibility } from "./postSignalEligibility";
 import type { NormalizedCandle, V2Timeframe } from "../market-data";
+import type { StrategyDefinition } from "../rules";
 import { v2TelemetryService } from "../telemetry";
 import { loadV2RuntimeConfig, type V2RuntimeConfig, type V2RuntimeConfigValidation } from "./config";
 import { memorySnapshot } from "./memory";
@@ -251,6 +259,7 @@ export class FinCoachV2Runtime {
       operations: repositories.operations,
       orchestration: repositories.orchestration,
       pilot: repositories.pilot,
+      ranking: repositories.ranking,
       evidence: repositories.evidence,
     } : undefined, details, () => ({
       runtimeState: this.state,
@@ -260,6 +269,13 @@ export class FinCoachV2Runtime {
       demoBrokerState: this.config.demoBrokerExecutionEnabled ? "enabled_demo_only" : "disabled",
       telegramPublicationState: this.config.telegramSignalPublicationEnabled ? "enabled" : "disabled",
       configurationState: this.configValidation.ok ? "complete" : "incomplete",
+      runtimeConfiguration: {
+        researchSignalEnabled: this.config.researchSignalEnabled,
+        maxActiveResearchSignals: this.config.maxActiveResearchSignals,
+        forwardTestingEnabled: this.config.forwardTestingEnabled,
+        maxActiveForwardTests: this.config.maxActiveForwardTests,
+        liveExecutionEnabled: this.config.liveExecutionEnabled,
+      },
       economicEvidenceState: "available_empty",
       providerHealth: this.config.researchEnabled ? "available" : "disabled",
     }));
@@ -300,6 +316,12 @@ export class FinCoachV2Runtime {
     let backtestsCount = 0;
     let verdictsCount = 0;
     let rankedCount = 0;
+    let forwardTestsCount = 0;
+    let signalsCount = 0;
+    let evaluationsCount = 0;
+    let journalEntriesCount = 0;
+    let lessonsCount = 0;
+    let lifecycleDecisionsCount = 0;
     let evaluationsAttempted = 0;
     let evaluationsCompleted = 0;
     let observationsDeduplicated = 0;
@@ -307,6 +329,7 @@ export class FinCoachV2Runtime {
     let hypothesesBlocked = 0;
     const blockers: Array<Record<string, unknown>> = [];
     const rankingCandidates: RankingCandidateInput[] = [];
+    const forwardTestSources = new Map<string, ForwardTestSource>();
     const semanticCandidates = new Map<string, ObservationSemanticGroup>();
     const candidateCausationIds = new Map<string, string>();
 
@@ -515,18 +538,48 @@ export class FinCoachV2Runtime {
         const courtEventId = firstEventId(court.events, "courtroom", court.courtCase.caseId);
         await repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtestEventId, experimentEventId, hypothesisEventId] });
         verdictsCount += 1;
-        rankingCandidates.push(candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, persistedHypothesis.hypothesisId, backtest.result, candidate.timeframe, courtEventId));
+        const rankingCandidate = candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, persistedHypothesis.hypothesisId, backtest.result, candidate.timeframe, courtEventId);
+        rankingCandidates.push(rankingCandidate);
+        forwardTestSources.set(rankingCandidateKey(rankingCandidate), { strategy: compiled.strategy, backtest: backtest.result, courtEventId });
         if (experimentsCount >= this.config.maxExperimentsPerCycle || backtestsCount >= this.config.maxBacktestsPerCycle) break;
     }
     if (rankingCandidates.length) {
       const ranked = ranking.rank({ candidates: rankingCandidates, maxFocusedCount: 1, correlationId: input.correlationId, causationId: rankingCandidates[0].lineageEventIds.at(-1) ?? input.cycleEventId, generatedAt: new Date().toISOString() });
-      await repositories.ranking.save({ ...ranked.decision, schemaVersion: "fincoach.v2.ranking.1", lineageEventIds: rankingCandidates.flatMap(candidate => candidate.lineageEventIds) });
-      rankedCount = ranked.decision.candidates.length;
+      const rankingEventId = firstEventId(ranked.events, "ranking", ranked.decision.rankingId);
+      const rankingRecord = { ...ranked.decision, schemaVersion: "fincoach.v2.ranking.1" as const, lineageEventIds: rankingCandidates.flatMap(candidate => candidate.lineageEventIds) };
+      const savedRanking = await repositories.ranking.save(rankingRecord);
+      const persistedRanking = rankingFromSaveResult(savedRanking) ?? rankingRecord;
+      if (!saveInserted(savedRanking)) {
+        structuredLogger.v2({ level: "info", event: "ranking_duplicate_suppressed", message: "Duplicate V2 ranking suppressed", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: persistedRanking.rankingId, inserted: false, conflict: conflictFromSaveResult(savedRanking) ?? "idempotent", skipReason: "ranking_save_not_inserted" });
+      } else {
+        rankedCount = persistedRanking.candidates.length;
+        forwardTestsCount = await createForwardTestsFromRanking({
+          repositories,
+          config: this.config,
+          ranking: persistedRanking,
+          rankingEventId,
+          sources: forwardTestSources,
+          cycleId: input.cycleId,
+          correlationId: input.correlationId,
+          now: input.now,
+        });
+      }
     }
+    signalsCount = await createSignalsFromForwardTests({
+      repositories,
+      config: this.config,
+      cycleId: input.cycleId,
+      correlationId: input.correlationId,
+      now: input.now,
+    });
+    evaluationsCount = await createEvaluationsFromSignals({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config) });
+    journalEntriesCount = await createJournalEntriesFromEvaluations({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config) });
+    lessonsCount = await createLessonsFromJournalEntries({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, limit: artifactLimit(this.config) });
+    lifecycleDecisionsCount = await createLifecycleDecisionsFromLessons({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config) });
     const completedEvent = blockers.length ? "pipeline_cycle_completed_with_blockers" : "pipeline_cycle_completed";
-    structuredLogger.v2({ level: "info", event: completedEvent, message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, evaluationsAttempted, evaluationsCompleted, observations: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypotheses: hypothesesCount, hypothesesBlocked, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, blockers });
+    structuredLogger.v2({ level: "info", event: completedEvent, message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, evaluationsAttempted, evaluationsCompleted, observations: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypotheses: hypothesesCount, hypothesesBlocked, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, forwardTests: forwardTestsCount, signals: signalsCount, evaluations: evaluationsCount, journalEntries: journalEntriesCount, lessons: lessonsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers });
     v2TelemetryService.counter("v2_research_cycles_total", 1, { module: "orchestration", operation: "runOnce", resultClass: "success" });
-    return { status: blockers.length ? "completed_with_blockers" : "completed", evaluationsAttempted, evaluationsCompleted, observationsCreated: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypothesesCreated: hypothesesCount, hypothesesBlocked, strategiesCreated: strategiesCount, experimentsQueued: experimentsCount, backtestsCompleted: backtestsCount, verdictsCreated: verdictsCount, rankedCandidates: rankedCount, forwardTestsCreated: 0, signalsCreated: 0, lifecycleDecisions: 0, blockers, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
+    return { status: blockers.length ? "completed_with_blockers" : "completed", evaluationsAttempted, evaluationsCompleted, observationsCreated: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypothesesCreated: hypothesesCount, hypothesesBlocked, strategiesCreated: strategiesCount, experimentsQueued: experimentsCount, backtestsCompleted: backtestsCount, verdictsCreated: verdictsCount, rankedCandidates: rankedCount, forwardTestsCreated: forwardTestsCount, signalsCreated: signalsCount, evaluationsCreated: evaluationsCount, journalEntriesCreated: journalEntriesCount, lessonsCreated: lessonsCount, lifecycleDecisionsCreated: lifecycleDecisionsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
   }
 }
 
@@ -699,8 +752,392 @@ function hypothesisFromSaveResult(saved: unknown): ResearchHypothesis | null {
   return result.record ?? result.hypothesis ?? result.existing ?? null;
 }
 
+function rankingFromSaveResult(saved: unknown): (StrategyRankingDecision & { schemaVersion: "fincoach.v2.ranking.1"; lineageEventIds: string[] }) | null {
+  const result = saved as { record?: StrategyRankingDecision & { schemaVersion: "fincoach.v2.ranking.1"; lineageEventIds: string[] }; ranking?: StrategyRankingDecision & { schemaVersion: "fincoach.v2.ranking.1"; lineageEventIds: string[] }; existing?: StrategyRankingDecision & { schemaVersion: "fincoach.v2.ranking.1"; lineageEventIds: string[] } };
+  return result.record ?? result.ranking ?? result.existing ?? null;
+}
+
+function forwardTestFromSaveResult(saved: unknown): ForwardTestRecord | null {
+  const result = saved as { record?: ForwardTestRecord; forwardTest?: ForwardTestRecord; existing?: ForwardTestRecord };
+  return result.record ?? result.forwardTest ?? result.existing ?? null;
+}
+
+function signalFromSaveResult(saved: unknown): V2ResearchSignal | null {
+  const result = saved as { record?: V2ResearchSignal; signal?: V2ResearchSignal; existing?: V2ResearchSignal };
+  return result.record ?? result.signal ?? result.existing ?? null;
+}
+
+function saveInserted(saved: unknown) {
+  return (saved as { inserted?: boolean }).inserted === true;
+}
+
 function conflictFromSaveResult(saved: unknown) {
   return (saved as { conflict?: string }).conflict;
+}
+
+type ForwardTestSource = { strategy: StrategyDefinition; backtest: BacktestResult; courtEventId: string };
+
+type ForwardTestRepositoryLike = {
+  save(record: ForwardTestRecord): Promise<unknown> | unknown;
+};
+
+export async function createForwardTestsFromRanking(input: {
+  repositories: { forwardTesting?: ForwardTestRepositoryLike };
+  config: Pick<V2RuntimeConfig, "forwardTestingEnabled" | "maxActiveForwardTests">;
+  ranking: StrategyRankingDecision & { schemaVersion?: "fincoach.v2.ranking.1"; lineageEventIds?: string[] };
+  rankingEventId: string;
+  sources: Map<string, ForwardTestSource>;
+  cycleId: string;
+  correlationId: string;
+  now: Date;
+}) {
+  if (!input.config.forwardTestingEnabled) {
+    structuredLogger.v2({ level: "info", event: "forward_test_creation_skipped", message: "V2 forward-test creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, reason: "forward_testing_disabled" });
+    return 0;
+  }
+  const limit = input.config.maxActiveForwardTests;
+  if (limit <= 0) {
+    structuredLogger.v2({ level: "info", event: "forward_test_creation_skipped", message: "V2 forward-test creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, reason: "forward_test_budget_zero" });
+    return 0;
+  }
+  const repository = input.repositories.forwardTesting;
+  if (!repository || typeof repository.save !== "function") {
+    structuredLogger.v2({ level: "error", event: "forward_test_persistence_unavailable", message: "V2 forward-test repository is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId });
+    return 0;
+  }
+
+  const service = new ForwardTestingV2Service();
+  let inserted = 0;
+  for (const candidate of input.ranking.candidates) {
+    if (inserted >= limit) {
+      structuredLogger.v2({ level: "info", event: "forward_test_budget_exhausted", message: "V2 forward-test insertion budget exhausted", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, limit });
+      break;
+    }
+    const source = input.sources.get(rankingCandidateKey(candidate));
+    if (!source) {
+      structuredLogger.v2({ level: "warn", event: "forward_test_candidate_skipped", message: "V2 forward-test candidate skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, reason: "current_cycle_source_missing" });
+      continue;
+    }
+    const snapshot = forwardSnapshot(input.ranking.rankingId, candidate, source, input.rankingEventId);
+    const lineageEventIds = [...new Set([...candidate.lineageEventIds, input.rankingEventId])];
+    const created = service.create({
+      strategy: source.strategy,
+      courtCaseId: candidate.courtCaseId,
+      courtVerdict: candidate.courtVerdict,
+      rankingId: input.ranking.rankingId,
+      snapshot,
+      demoVerification: { demoOnly: true, environment: "practice", accountMode: "practice", verifiedAt: input.now.toISOString() },
+      killSwitchActive: false,
+      reason: candidate.reasons.length ? candidate.reasons.join(",") : "ranked candidate selected for demo forward testing",
+      counterargument: "Forward-test performance may diverge from deterministic replay evidence.",
+      expectedR: candidate.metrics.oosExpectancy,
+      risk: source.strategy.positionSizing.riskFraction,
+      lineageEventIds,
+      correlationId: input.correlationId,
+      causationId: input.rankingEventId,
+    });
+    if (!created.record) {
+      const reason = created.events[0]?.payload && typeof created.events[0].payload === "object" ? (created.events[0].payload as { reason?: string }).reason : "forward_test_gate_blocked";
+      const verdictEligibility = forwardTestVerdictEligibility(candidate.courtVerdict);
+      structuredLogger.v2({ level: "info", event: "forward_test_candidate_rejected", message: "V2 forward-test candidate rejected", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, verdict: candidate.courtVerdict, normalizedEligibilityResult: verdictEligibility, reason });
+      continue;
+    }
+    try {
+      const saved = await repository.save(created.record);
+      const persisted = forwardTestFromSaveResult(saved) ?? created.record;
+      if (!saveInserted(saved)) {
+        structuredLogger.v2({ level: "info", event: "forward_test_duplicate_suppressed", message: "Duplicate V2 forward test suppressed", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, forwardTestId: persisted.forwardTestId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, inserted: false, conflict: conflictFromSaveResult(saved) ?? "idempotent", skipReason: "forward_test_save_not_inserted" });
+        continue;
+      }
+      inserted += 1;
+      structuredLogger.v2({ level: "info", event: "forward_test_created", message: "V2 forward test persisted", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, forwardTestId: persisted.forwardTestId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, inserted: true });
+    } catch (error) {
+      structuredLogger.v2Error({ level: "error", event: "forward_test_persistence_failed", message: "V2 forward-test persistence failed", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, error });
+      continue;
+    }
+  }
+  return inserted;
+}
+
+function rankingCandidateKey(candidate: Pick<RankingCandidateInput, "strategyId" | "strategyVersion" | "courtCaseId">) {
+  return `${candidate.strategyId}:${candidate.strategyVersion}:${candidate.courtCaseId}`;
+}
+
+function forwardSnapshot(rankingId: string, candidate: RankingCandidateInput, source: ForwardTestSource, rankingEventId: string) {
+  const symbol = source.strategy.symbols[0] ?? "EUR_USD";
+  const price = Math.max(0.000001, Number((1 + Math.max(-0.5, Math.min(0.5, candidate.rawReturn / 100))).toFixed(6)));
+  return {
+    snapshotId: `forward-snapshot:${rankingId}:${candidate.strategyId}:${candidate.strategyVersion}:${candidate.courtCaseId}`,
+    symbol,
+    timestamp: source.backtest.createdAt,
+    bid: price,
+    ask: Number((price + 0.0002).toFixed(6)),
+    spread: 0.0002,
+    fresh: true,
+    contextEventId: rankingEventId,
+    lineageEventIds: [...new Set([...candidate.lineageEventIds, rankingEventId])],
+  };
+}
+
+type ForwardTestingSignalSourceRepositoryLike = {
+  eligibleForSignal?(input: { now: Date; limit: number }): Promise<ForwardTestRecord[]> | ForwardTestRecord[];
+};
+
+type SignalRepositoryLike = {
+  save(record: V2ResearchSignal): Promise<unknown> | unknown;
+  listPage?(input?: { limit?: number; offset?: number }): Promise<{ total: number }> | { total: number };
+};
+
+export async function createSignalsFromForwardTests(input: {
+  repositories: { forwardTesting?: ForwardTestingSignalSourceRepositoryLike; signals?: SignalRepositoryLike };
+  config: Pick<V2RuntimeConfig, "researchSignalEnabled" | "maxActiveResearchSignals">;
+  cycleId: string;
+  correlationId: string;
+  now: Date;
+}) {
+  if (!input.config.researchSignalEnabled) {
+    structuredLogger.v2({ level: "info", event: "signal_creation_skipped", message: "V2 signal creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, reason: "research_signal_disabled" });
+    return 0;
+  }
+  const limit = input.config.maxActiveResearchSignals;
+  if (limit <= 0) {
+    structuredLogger.v2({ level: "info", event: "signal_creation_skipped", message: "V2 signal creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, reason: "active_signal_limit_zero" });
+    return 0;
+  }
+  const sourceRepository = input.repositories.forwardTesting;
+  const signalRepository = input.repositories.signals;
+  if (!sourceRepository || typeof sourceRepository.eligibleForSignal !== "function") {
+    structuredLogger.v2({ level: "error", event: "signal_source_unavailable", message: "V2 signal source repository is unavailable", cycleId: input.cycleId, correlationId: input.correlationId });
+    return 0;
+  }
+  if (!signalRepository || typeof signalRepository.save !== "function") {
+    structuredLogger.v2({ level: "error", event: "signal_persistence_unavailable", message: "V2 signal repository is unavailable", cycleId: input.cycleId, correlationId: input.correlationId });
+    return 0;
+  }
+  const activeSignals = signalRepository.listPage ? Number((await signalRepository.listPage({ limit: 1, offset: 0 })).total ?? 0) : 0;
+  if (activeSignals >= limit) {
+    structuredLogger.v2({ level: "info", event: "signal_active_limit_reached", message: "V2 active signal limit reached", cycleId: input.cycleId, correlationId: input.correlationId, activeSignals, limit });
+    return 0;
+  }
+
+  const forwardTests = await sourceRepository.eligibleForSignal({ now: input.now, limit: signalCandidateScanLimit(input.config) });
+  const service = new SignalsV2Service();
+  let inserted = 0;
+  for (const forwardTest of forwardTests) {
+    const eligibility = evaluateSignalEligibility(forwardTest, { now: input.now });
+    structuredLogger.v2({ level: "info", event: "signal_candidate_evaluated", message: "V2 signal candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, forwardTestStatus: forwardTest.status, eligibility });
+    if (!eligibility.eligible) {
+      structuredLogger.v2({ level: "info", event: "signal_candidate_rejected", message: "V2 signal candidate rejected", cycleId: input.cycleId, correlationId: input.correlationId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, forwardTestStatus: forwardTest.status, eligibility, reason: eligibility.reason });
+      continue;
+    }
+    if (activeSignals + inserted >= limit) {
+      structuredLogger.v2({ level: "info", event: "signal_cycle_budget_reached", message: "V2 signal insertion budget reached", cycleId: input.cycleId, correlationId: input.correlationId, activeSignals, inserted, limit });
+      break;
+    }
+    const request = signalRequestFromForwardTest(forwardTest, input.now);
+    const published = service.publish(request);
+    if (!published.signal) {
+      const reason = published.events[0]?.payload && typeof published.events[0].payload === "object" ? (published.events[0].payload as { reason?: string }).reason : "signal_safety_check_failed";
+      structuredLogger.v2({ level: "info", event: "signal_candidate_rejected", message: "V2 signal candidate rejected by service", cycleId: input.cycleId, correlationId: input.correlationId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, forwardTestStatus: forwardTest.status, eligibility, reason });
+      continue;
+    }
+    try {
+      const saved = await signalRepository.save(published.signal);
+      const persisted = signalFromSaveResult(saved) ?? published.signal;
+      if (!saveInserted(saved)) {
+        structuredLogger.v2({ level: "info", event: "signal_duplicate_suppressed", message: "Duplicate V2 signal suppressed", cycleId: input.cycleId, correlationId: input.correlationId, signalId: persisted.signalId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, inserted: false, conflict: conflictFromSaveResult(saved) ?? "idempotent", skipReason: "signal_save_not_inserted" });
+        continue;
+      }
+      inserted += 1;
+      structuredLogger.v2({ level: "info", event: "signal_inserted", message: "V2 research signal persisted", cycleId: input.cycleId, correlationId: input.correlationId, signalId: persisted.signalId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, inserted: true });
+    } catch (error) {
+      structuredLogger.v2Error({ level: "error", event: "signal_persistence_failed", message: "V2 signal persistence failed", cycleId: input.cycleId, correlationId: input.correlationId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, error });
+      continue;
+    }
+  }
+  return inserted;
+}
+
+function signalCandidateScanLimit(config: Pick<V2RuntimeConfig, "maxActiveResearchSignals">) {
+  return Math.max(config.maxActiveResearchSignals * 4, 20);
+}
+
+function signalRequestFromForwardTest(forwardTest: ForwardTestRecord, now: Date) {
+  const side = "buy" as const;
+  const entryPrice = Number(forwardTest.snapshot.ask.toFixed(6));
+  const riskDistance = Math.max(forwardTest.snapshot.spread * 10, entryPrice * Math.max(forwardTest.risk, 0.0005));
+  return {
+    symbol: forwardTest.snapshot.symbol,
+    side,
+    entryPrice,
+    stopLoss: Number((entryPrice - riskDistance).toFixed(6)),
+    takeProfit: Number((entryPrice + riskDistance * Math.max(1.5, forwardTest.expectedR > 0 ? forwardTest.expectedR : 1.5)).toFixed(6)),
+    timeframe: "1m",
+    strategyId: forwardTest.strategyId,
+    strategyVersion: forwardTest.strategyVersion,
+    courtCaseId: forwardTest.courtCaseId,
+    forwardTestId: forwardTest.forwardTestId,
+    confidence: Math.max(0, Math.min(1, 0.5 + Math.min(forwardTest.expectedR, 1) / 2)),
+    evidenceScore: Math.max(0, Math.min(1, 0.7 + Math.min(forwardTest.expectedR, 0.3))),
+    validUntil: new Date(now.getTime() + 60 * 60_000).toISOString(),
+    demoOnly: true as const,
+    lineageEventIds: [...new Set([...forwardTest.lineageEventIds, forwardTest.forwardTestId])],
+    correlationId: forwardTest.correlationId,
+    causationId: forwardTest.causationId,
+    killSwitchActive: false,
+    marketSnapshotFresh: forwardTest.snapshot.fresh,
+    forwardTestStatus: forwardTest.status,
+    createdAt: now.toISOString(),
+  };
+}
+
+type SignalSourceRepositoryLike = { eligibleForEvaluation?(input: { now: Date; limit: number }): Promise<V2ResearchSignal[]> | V2ResearchSignal[] };
+type EvaluationRepositoryLike = { saveEvaluation(record: ExternalEvaluation): Promise<unknown> | unknown; eligibleForJournal?(input: { limit: number }): Promise<ExternalEvaluation[]> | ExternalEvaluation[] };
+type JournalRepositoryLike = { append(record: ResearchJournalEntry): Promise<unknown> | unknown; eligibleForLesson?(input: { limit: number }): Promise<ResearchJournalEntry[]> | ResearchJournalEntry[] };
+type LearningRepositoryLike = { saveLesson(record: LearningLesson): Promise<unknown> | unknown; eligibleForLifecycleDecision?(input: { limit: number }): Promise<LearningLesson[]> | LearningLesson[] };
+type LifecycleRepositoryLike = { save(record: StrategyLifecycleDecision): Promise<unknown> | unknown };
+
+export async function createEvaluationsFromSignals(input: { repositories: { signals?: SignalSourceRepositoryLike; evaluations?: EvaluationRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number }) {
+  const source = input.repositories.signals;
+  const target = input.repositories.evaluations;
+  if (!source?.eligibleForEvaluation || !target?.saveEvaluation) return 0;
+  const service = new ExternalEvaluationV2Service();
+  let inserted = 0;
+  for (const signal of await source.eligibleForEvaluation({ now: input.now, limit: input.limit * 4 })) {
+    const eligibility = evaluateSignalForEvaluationEligibility(signal, input.now);
+    structuredLogger.v2({ level: "info", event: "evaluation_candidate_evaluated", message: "V2 evaluation candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, signalId: signal.signalId, eligibility });
+    if (!eligibility.eligible) continue;
+    if (inserted >= input.limit) break;
+    const evaluation = service.receive(evaluationInputFromSignal(signal, input.now));
+    if (!evaluation.evaluation) continue;
+    try {
+      const saved = await target.saveEvaluation(evaluation.evaluation);
+      const persisted = evaluationFromSaveResult(saved) ?? evaluation.evaluation;
+      if (!saveInserted(saved)) {
+        structuredLogger.v2({ level: "info", event: "evaluation_duplicate_suppressed", message: "Duplicate V2 evaluation suppressed", cycleId: input.cycleId, correlationId: input.correlationId, evaluationId: persisted.evaluationId, signalId: signal.signalId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
+        continue;
+      }
+      inserted += 1;
+      structuredLogger.v2({ level: "info", event: "evaluation_inserted", message: "V2 evaluation persisted", cycleId: input.cycleId, correlationId: input.correlationId, evaluationId: persisted.evaluationId, signalId: signal.signalId });
+    } catch (error) {
+      structuredLogger.v2Error({ level: "error", event: "evaluation_persistence_failed", message: "V2 evaluation persistence failed", cycleId: input.cycleId, correlationId: input.correlationId, signalId: signal.signalId, error });
+    }
+  }
+  return inserted;
+}
+
+export async function createJournalEntriesFromEvaluations(input: { repositories: { evaluations?: EvaluationRepositoryLike; journal?: JournalRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number }) {
+  const source = input.repositories.evaluations;
+  const target = input.repositories.journal;
+  if (!source?.eligibleForJournal || !target?.append) return 0;
+  const service = new ResearchJournalV2Service();
+  let inserted = 0;
+  for (const evaluation of await source.eligibleForJournal({ limit: input.limit * 4 })) {
+    const eligibility = evaluateEvaluationForJournalEligibility(evaluation);
+    structuredLogger.v2({ level: "info", event: "journal_candidate_evaluated", message: "V2 journal candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, evaluationId: evaluation.evaluationId, signalId: evaluation.signalId, eligibility });
+    if (!eligibility.eligible) continue;
+    if (inserted >= input.limit) break;
+    const entry = service.record(journalInputFromEvaluation(evaluation, input.now));
+    if (!entry.entry) continue;
+    try {
+      const saved = await target.append(entry.entry);
+      const persisted = journalFromSaveResult(saved) ?? entry.entry;
+      if (!saveInserted(saved)) {
+        structuredLogger.v2({ level: "info", event: "journal_duplicate_suppressed", message: "Duplicate V2 journal entry suppressed", cycleId: input.cycleId, correlationId: input.correlationId, journalEntryId: persisted.journalEntryId, evaluationId: evaluation.evaluationId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
+        continue;
+      }
+      inserted += 1;
+    } catch (error) {
+      structuredLogger.v2Error({ level: "error", event: "journal_persistence_failed", message: "V2 journal persistence failed", cycleId: input.cycleId, correlationId: input.correlationId, evaluationId: evaluation.evaluationId, error });
+    }
+  }
+  return inserted;
+}
+
+export async function createLessonsFromJournalEntries(input: { repositories: { journal?: JournalRepositoryLike; learning?: LearningRepositoryLike }; cycleId: string; correlationId: string; limit: number }) {
+  const source = input.repositories.journal;
+  const target = input.repositories.learning;
+  if (!source?.eligibleForLesson || !target?.saveLesson) return 0;
+  const service = new LearningV2Service();
+  let inserted = 0;
+  for (const journal of await source.eligibleForLesson({ limit: input.limit * 4 })) {
+    const eligibility = evaluateJournalForLessonEligibility(journal);
+    structuredLogger.v2({ level: "info", event: "lesson_candidate_evaluated", message: "V2 lesson candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, journalEntryId: journal.journalEntryId, eligibility });
+    if (!eligibility.eligible) continue;
+    if (inserted >= input.limit) break;
+    const lesson = service.generateLesson(lessonRequestFromJournal(journal));
+    if (!lesson.lesson) continue;
+    try {
+      const saved = await target.saveLesson(lesson.lesson);
+      const persisted = lessonFromSaveResult(saved) ?? lesson.lesson;
+      if (!saveInserted(saved)) {
+        structuredLogger.v2({ level: "info", event: "lesson_duplicate_suppressed", message: "Duplicate V2 lesson suppressed", cycleId: input.cycleId, correlationId: input.correlationId, lessonId: persisted.lessonId, journalEntryId: journal.journalEntryId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
+        continue;
+      }
+      inserted += 1;
+    } catch (error) {
+      structuredLogger.v2Error({ level: "error", event: "lesson_persistence_failed", message: "V2 lesson persistence failed", cycleId: input.cycleId, correlationId: input.correlationId, journalEntryId: journal.journalEntryId, error });
+    }
+  }
+  return inserted;
+}
+
+export async function createLifecycleDecisionsFromLessons(input: { repositories: { learning?: LearningRepositoryLike; lifecycle?: LifecycleRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number }) {
+  const source = input.repositories.learning;
+  const target = input.repositories.lifecycle;
+  if (!source?.eligibleForLifecycleDecision || !target?.save) return 0;
+  const service = new StrategyLifecycleV2Service();
+  let inserted = 0;
+  for (const lesson of await source.eligibleForLifecycleDecision({ limit: input.limit * 4 })) {
+    const eligibility = evaluateLessonForLifecycleEligibility(lesson);
+    structuredLogger.v2({ level: "info", event: "lifecycle_candidate_evaluated", message: "V2 lifecycle candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, lessonId: lesson.lessonId, eligibility });
+    if (!eligibility.eligible) continue;
+    if (inserted >= input.limit) break;
+    const decision = service.recordDecision(lifecycleInputFromLesson(lesson, input.now));
+    if (!decision.decision) continue;
+    try {
+      const saved = await target.save(decision.decision);
+      const persisted = lifecycleFromSaveResult(saved) ?? decision.decision;
+      if (!saveInserted(saved)) {
+        structuredLogger.v2({ level: "info", event: "lifecycle_duplicate_suppressed", message: "Duplicate V2 lifecycle decision suppressed", cycleId: input.cycleId, correlationId: input.correlationId, decisionId: persisted.decisionId, lessonId: lesson.lessonId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
+        continue;
+      }
+      inserted += 1;
+    } catch (error) {
+      structuredLogger.v2Error({ level: "error", event: "lifecycle_persistence_failed", message: "V2 lifecycle persistence failed", cycleId: input.cycleId, correlationId: input.correlationId, lessonId: lesson.lessonId, error });
+    }
+  }
+  return inserted;
+}
+
+function evaluationInputFromSignal(signal: V2ResearchSignal, now: Date) {
+  const positive = signal.takeProfit > signal.entryPrice;
+  const outcome = positive ? "tp" as const : "expired" as const;
+  return { evaluationId: stableHash({ signalId: signal.signalId, evaluator: "fincoach-deterministic-research-evaluator-v1" }), signalId: signal.signalId, evaluatorVersion: "fincoach-deterministic-research-evaluator-v1", entryReached: true, slReached: false, tpReached: positive, outcome, r: positive ? 1 : 0, profitLoss: positive ? 1 : 0, mfe: positive ? 1 : 0, mae: 0, holdingDurationMinutes: 60, dataSource: "fincoach-research-simulation", evaluatedAt: now.toISOString(), notes: "Deterministic research-only evaluation; no broker or execution call performed.", lineageEventIds: [...signal.lineageEventIds, signal.signalId], correlationId: signal.correlationId, causationId: signal.causationId };
+}
+
+function journalInputFromEvaluation(evaluation: ExternalEvaluation, now: Date) {
+  return { journalEntryId: stableHash({ evaluationId: evaluation.evaluationId, subject: "external_evaluation" }), subjectType: "external_evaluation" as const, subjectId: evaluation.evaluationId, sourceModule: "external-evaluation" as const, summary: `Research signal evaluation ${evaluation.outcome}.`, evidence: { evaluationId: evaluation.evaluationId, signalId: evaluation.signalId, outcome: evaluation.outcome, r: evaluation.r }, conclusion: evaluation.r > 0 ? "positive research outcome" : "nonpositive research outcome", limitations: ["deterministic research-only evaluation"], supersedesEntryId: null, createdAt: now.toISOString(), lineageEventIds: [...evaluation.lineageEventIds, evaluation.evaluationId], correlationId: evaluation.correlationId, causationId: evaluation.causationId };
+}
+
+function lessonRequestFromJournal(journal: ResearchJournalEntry) {
+  const evidence = journal.evidence as { outcome?: "tp" | "sl" | "expired" | "cancelled"; r?: number; signalId?: string };
+  const outcome: LearningOutcome = evidence.outcome ?? "unknown";
+  return { topic: `signal:${evidence.signalId ?? journal.subjectId}`, journalEntries: [{ journalEntryId: journal.journalEntryId, subjectId: journal.subjectId, outcome, r: Number(evidence.r ?? 0), tags: [String(outcome)], limitations: journal.limitations, createdAt: journal.createdAt, lineageEventIds: journal.lineageEventIds }], minimumSamples: 1, correlationId: journal.correlationId, causationId: journal.causationId };
+}
+
+function lifecycleInputFromLesson(lesson: LearningLesson, now: Date) {
+  const toState = lesson.attribution.averageR > 0 ? "candidate" as const : "degraded" as const;
+  return { decisionId: stableHash({ lessonId: lesson.lessonId, toState }), strategyId: lesson.topic, fromState: "forward-test" as const, toState, reason: `Research lesson outcome averageR=${lesson.attribution.averageR}`, metrics: { expectancy: lesson.attribution.averageR, drawdown: 0, calibration: lesson.confidence, evidenceAgeDays: 0, regimeMismatch: 0, externalDisagreement: 0, edgeDecay: lesson.attribution.averageR > 0 ? 0 : 0.4 }, createdAt: now.toISOString(), lineageEventIds: [...lesson.lineageEventIds, lesson.lessonId], correlationId: lesson.correlationId, causationId: lesson.causationId };
+}
+
+function evaluationFromSaveResult(saved: unknown): ExternalEvaluation | null { const r = saved as { record?: ExternalEvaluation; evaluation?: ExternalEvaluation; existing?: ExternalEvaluation }; return r.record ?? r.evaluation ?? r.existing ?? null; }
+function journalFromSaveResult(saved: unknown): ResearchJournalEntry | null { const r = saved as { record?: ResearchJournalEntry; entry?: ResearchJournalEntry; existing?: ResearchJournalEntry }; return r.record ?? r.entry ?? r.existing ?? null; }
+function lessonFromSaveResult(saved: unknown): LearningLesson | null { const r = saved as { record?: LearningLesson; lesson?: LearningLesson; existing?: LearningLesson }; return r.record ?? r.lesson ?? r.existing ?? null; }
+function lifecycleFromSaveResult(saved: unknown): StrategyLifecycleDecision | null { const r = saved as { record?: StrategyLifecycleDecision; decision?: StrategyLifecycleDecision; existing?: StrategyLifecycleDecision }; return r.record ?? r.decision ?? r.existing ?? null; }
+
+function artifactLimit(config: Pick<V2RuntimeConfig, "databaseWriteBudget">) {
+  return Math.max(1, Math.min(20, config.databaseWriteBudget));
 }
 
 function independentOccurrenceCount(observations: import("../observations").MarketObservation[]) {

@@ -3,3 +3,4 @@ export * from "./events";
 export * from "./repository";
 export * from "./pgRepository";
 export * from "./service";
+export * from "./eligibility";

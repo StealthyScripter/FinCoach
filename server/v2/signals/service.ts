@@ -21,7 +21,7 @@ function validate(r: SignalRequest): string | null {
   if (!r.demoOnly) return "demo_only_required";
   if (r.killSwitchActive) return "kill_switch_active";
   if (!r.marketSnapshotFresh) return "stale_market_snapshot";
-  if (r.forwardTestStatus !== "monitoring") return "forward_test_not_monitoring";
+  if (r.forwardTestStatus !== "monitoring" && r.forwardTestStatus !== "completed") return "forward_test_status_ineligible";
   if (!r.lineageEventIds.length) return "missing_lineage";
   if (![r.entryPrice, r.stopLoss, r.takeProfit, r.confidence, r.evidenceScore].every(Number.isFinite)) return "malformed_prices_or_scores";
   if (r.entryPrice <= 0 || r.stopLoss <= 0 || r.takeProfit <= 0) return "invalid_prices";

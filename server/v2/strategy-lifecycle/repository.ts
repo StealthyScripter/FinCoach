@@ -9,10 +9,10 @@ export class InMemoryStrategyLifecycleRepository {
 
   save(decision: StrategyLifecycleDecision) {
     const existing = this.decisions.get(decision.decisionId);
-    if (existing) return { inserted: false, decision: existing };
+    if (existing) return { inserted: false, decision: existing, record: existing, conflict: fingerprint(existing) === fingerprint(decision) ? "idempotent" as const : "conflicting" as const };
     const frozen = freezeRecord(decision);
     this.decisions.set(frozen.decisionId, frozen);
-    return { inserted: true, decision: frozen };
+    return { inserted: true, decision: frozen, record: frozen };
   }
 
   history(strategyId: string) {
@@ -27,6 +27,8 @@ export class InMemoryStrategyLifecycleRepository {
     return this.list();
   }
 }
+
+function fingerprint(value: unknown) { return JSON.stringify(value); }
 
 function freezeRecord<T>(record: T): T {
   if (record && typeof record === "object") {
