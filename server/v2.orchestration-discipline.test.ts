@@ -10,6 +10,7 @@ await testRuntimeAdmissionBeforeLease();
 await testRuntimeTimeoutCancelsCycle();
 await testRuntimeLeaseLossCancelsCycle();
 await testRuntimeBlocksMutationAfterLeaseLoss();
+await testStaleCycleRecovery();
 testRuntimePersistenceStagesAreGuarded();
 await testConfigAlignment();
 
@@ -32,7 +33,7 @@ async function testDailyAdmission() {
   const nextDay = repo.admitCycle({ cycle: cycle("cycle-3", "manual", "2026-08-01T00:00:00.000Z"), maxCyclesPerDay: 1, now: new Date("2026-08-01T00:00:00.000Z") });
   assert.equal(nextDay.admitted, true);
 
-  const duplicate = repo.admitCycle({ cycle: cycle("cycle-duplicate", "manual", "2026-08-01T00:00:00.000Z"), maxCyclesPerDay: 10, now: new Date("2026-08-01T00:01:00.000Z") });
+  const duplicate = repo.admitCycle({ cycle: cycle("cycle-3", "manual", "2026-08-01T00:00:00.000Z"), maxCyclesPerDay: 10, now: new Date("2026-08-01T00:01:00.000Z") });
   assert.equal(duplicate.admitted, false);
   assert.equal(duplicate.reason, "duplicate_cycle_window_suppressed");
 }
@@ -188,6 +189,31 @@ async function testRuntimeBlocksMutationAfterLeaseLoss() {
   assert.equal(saved.hypotheses, 0);
 }
 
+async function testStaleCycleRecovery() {
+  const repo = new InMemoryOrchestrationRepository();
+  repo.saveCycle(cycle("stale-1", "manual", "2026-07-31T00:00:00.000Z", "running"));
+  repo.saveCycle(cycle("stale-2", "manual", "2026-07-31T00:01:00.000Z", "running"));
+  repo.saveCycle(cycle("fresh-running", "manual", "2026-07-31T00:59:00.000Z", "running"));
+  repo.saveCycle(cycle("completed", "manual", "2026-07-31T00:00:00.000Z", "completed"));
+
+  const firstBatch = repo.recoverStaleCycles({ now: new Date("2026-07-31T01:00:00.000Z"), staleAfterMs: 30 * 60_000, limit: 1, correlationId: "00000000-0000-4000-8000-000000000099" });
+  assert.deepEqual(firstBatch.map(item => item.cycleId), ["stale-1"]);
+  assert.equal(firstBatch[0].status, "failed");
+  assert.equal(firstBatch[0].payload?.terminalReason, "stale_cycle_recovered");
+
+  const secondBatch = repo.recoverStaleCycles({ now: new Date("2026-07-31T01:00:01.000Z"), staleAfterMs: 30 * 60_000, limit: 10, correlationId: "00000000-0000-4000-8000-000000000099" });
+  assert.deepEqual(secondBatch.map(item => item.cycleId), ["stale-2"]);
+
+  const thirdBatch = repo.recoverStaleCycles({ now: new Date("2026-07-31T01:00:02.000Z"), staleAfterMs: 30 * 60_000, limit: 10, correlationId: "00000000-0000-4000-8000-000000000099" });
+  assert.deepEqual(thirdBatch, []);
+
+  const guarded = new InMemoryOrchestrationRepository();
+  guarded.saveCycle(cycle("active-stale", "manual", "2026-07-31T00:00:00.000Z", "running"));
+  const lease = guarded.acquireLease({ leaseName: "fincoach-v2-runtime", workerId: "active-worker", now: new Date("2026-07-31T01:00:00.000Z"), ttlMs: 60_000 });
+  assert.ok(lease);
+  assert.deepEqual(guarded.recoverStaleCycles({ now: new Date("2026-07-31T01:00:01.000Z"), staleAfterMs: 30 * 60_000, limit: 10, correlationId: "00000000-0000-4000-8000-000000000099" }), []);
+}
+
 function testRuntimePersistenceStagesAreGuarded() {
   const source = readFileSync(new URL("./v2/runtime/composition.ts", import.meta.url), "utf8");
   for (const stage of [
@@ -304,12 +330,12 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function cycle(cycleId: string, requestedBy: string, createdAt: string) {
+function cycle(cycleId: string, requestedBy: string, createdAt: string, status: "requested" | "running" | "completed" | "failed" = "requested") {
   return {
     cycleId,
-    status: "requested" as const,
+    status,
     requestedBy,
-    idempotencyKey: `cycle-key:${createdAt}`,
+    idempotencyKey: `cycle-key:${cycleId}:${createdAt}`,
     correlationId: "00000000-0000-4000-8000-000000000001",
     createdAt,
     updatedAt: createdAt,

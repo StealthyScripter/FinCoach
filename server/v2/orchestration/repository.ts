@@ -109,6 +109,27 @@ export class InMemoryOrchestrationRepository {
     return true;
   }
 
+  recoverStaleCycles(input: { now: Date; staleAfterMs: number; limit: number; correlationId: string }) {
+    const nowMs = input.now.getTime();
+    this.expireLeases(nowMs);
+    const hasActiveLease = [...this.workerLeases.values()].some(lease => lease.expiresAt > nowMs);
+    if (hasActiveLease) return [];
+    const staleBefore = new Date(nowMs - Math.max(0, input.staleAfterMs)).toISOString();
+    const stale = [...this.cycles.values()]
+      .filter(cycle => cycle.status === "running" && cycle.updatedAt <= staleBefore)
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.cycleId.localeCompare(b.cycleId))
+      .slice(0, Math.max(0, input.limit));
+    const recovered = stale.map(cycle => freezeRecord({
+      ...cycle,
+      status: "failed" as const,
+      correlationId: input.correlationId,
+      updatedAt: input.now.toISOString(),
+      payload: { ...(cycle.payload ?? {}), terminalReason: "stale_cycle_recovered" },
+    }));
+    for (const cycle of recovered) this.cycles.set(cycle.idempotencyKey, cycle);
+    return recovered;
+  }
+
   activeLeases(now: number) {
     this.expireLeases(now);
     return [...this.workerLeases.values()];
