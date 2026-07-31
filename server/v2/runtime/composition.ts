@@ -19,7 +19,7 @@ import { PgHypothesisRepository } from "../hypothesis/pgRepository";
 import { PgExperimentRepository } from "../experiments/pgRepository";
 import { PgBacktestRepository } from "../backtesting/pgRepository";
 import { PgStrategyDefinitionRepository } from "../rules/pgRepository";
-import type { OrchestrationErrorCode } from "../orchestration/contracts";
+import type { CycleAdmissionResult, DurableWorkerLease, OrchestrationErrorCode, ResearchCycleRecord } from "../orchestration/contracts";
 import { ObservationsV2Service, breakoutDetector, compressionDetector, evidence as observationEvidence, stableHash } from "../observations";
 import type { MarketObservation, ObservationSemanticGroup } from "../observations";
 import { semanticGroupFromObservation, semanticGroupKey } from "../observations";
@@ -179,52 +179,76 @@ export class FinCoachV2Runtime {
     const correlationId = randomUUID();
     const workerId = `v2-runtime-${process.pid}-${this.bootId}`;
     const startedAt = Date.now();
+    const now = new Date();
+    const recovered = await recoverStaleCycles(repositories.orchestration, { now, staleAfterMs: this.config.cycleTimeoutMs + this.config.leaseTtlMs, correlationId });
+    if (recovered.length) {
+      structuredLogger.v2({ level: "warn", event: "stale_cycle_recovered", message: "Recovered stale V2 running cycles", correlationId, runtimeInstanceId: this.bootId, recoveredCycles: recovered.map(cycle => cycle.cycleId) });
+    }
+    const scheduledWindowStart = scheduledWindow(now, this.config.cadenceMs);
+    const idempotencyKey = input.requestedBy?.startsWith("v2-autostart") ? `v2-cycle:${scheduledWindowStart}` : `v2-cycle:${input.requestedBy ?? "manual"}:${scheduledWindowStart}`;
+    const cycleId = `cycle-${scheduledWindowStart}-${randomUUID().slice(0, 8)}`;
+    const admission = await admitResearchCycle(repositories.orchestration, {
+      cycle: { cycleId, status: "requested", requestedBy: input.requestedBy ?? "manual", idempotencyKey, correlationId, createdAt: now.toISOString(), updatedAt: now.toISOString(), payload: { requestedBy: input.requestedBy ?? "manual" } },
+      maxCyclesPerDay: this.config.maxCyclesPerDay,
+      now,
+      admissionTimezone: "UTC",
+    });
+    if (!admission.admitted) {
+      this.lastError = admission.reason ?? "cycle_admission_rejected";
+      this.lastRunResult = { completed: false, reason: this.lastError, idempotencyKey, admissionDate: admission.admissionDate, admittedCount: admission.admittedCount, maxCyclesPerDay: admission.limit, liveExecutionBlocked: true };
+      structuredLogger.v2({ level: "warn", event: admission.reason === "daily_limit_reached" ? "cycle_daily_limit_reached" : "cycle_admission_rejected", message: "V2 research cycle admission rejected", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, reason: this.lastError, admissionDate: admission.admissionDate, admittedCount: admission.admittedCount, limit: admission.limit });
+      return this.lastRunResult;
+    }
+    structuredLogger.v2({ level: "info", event: "cycle_admission_granted", message: "V2 research cycle admission granted", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, admissionDate: admission.admissionDate, admittedCount: admission.admittedCount, limit: admission.limit });
+    const admittedCycle = (admission.cycle ?? { cycleId, idempotencyKey }) as Pick<ResearchCycleRecord, "cycleId" | "idempotencyKey">;
     const lease = await repositories.orchestration.acquireLease({ leaseName: "fincoach-v2-runtime", workerId, now: new Date(), ttlMs: this.config.leaseTtlMs, correlationId });
     if (!lease) {
       this.state = "blocked";
       this.lastError = "runtime_lease_unavailable";
-      this.lastRunResult = { completed: false, reason: this.lastError };
-      structuredLogger.v2({ level: "warn", event: "research_cycle_blocked", message: "V2 research cycle could not acquire runtime lease", correlationId, runtimeInstanceId: this.bootId, requestedBy: input.requestedBy ?? "manual", reason: this.lastError });
+      await repositories.orchestration.updateCycleStatus({ cycleId: admittedCycle.cycleId, status: "failed", reason: "lease_unavailable" }).catch(() => undefined);
+      this.lastRunResult = { cycleId: admittedCycle.cycleId, completed: false, reason: this.lastError, liveExecutionBlocked: true };
+      structuredLogger.v2({ level: "warn", event: "lease_acquisition_rejected", message: "V2 research cycle could not acquire runtime lease", cycleId: admittedCycle.cycleId, correlationId, runtimeInstanceId: this.bootId, requestedBy: input.requestedBy ?? "manual", reason: this.lastError });
       return this.lastRunResult;
     }
+    structuredLogger.v2({ level: "info", event: "lease_acquired", message: "V2 runtime lease acquired", cycleId: admittedCycle.cycleId, correlationId, runtimeInstanceId: this.bootId, leaseKey: lease.leaseName, ownerId: safeOwnerId(lease.workerId), fencingToken: lease.fencingToken });
     this.activeCycle = true;
-    const now = new Date();
-    const scheduledWindowStart = scheduledWindow(now, this.config.cadenceMs);
-    const idempotencyKey = input.requestedBy?.startsWith("v2-autostart") ? `v2-cycle:${scheduledWindowStart}` : `v2-cycle:${input.requestedBy ?? "manual"}:${scheduledWindowStart}`;
-    const cycleId = `cycle-${scheduledWindowStart}-${randomUUID().slice(0, 8)}`;
-    structuredLogger.v2({ level: "info", event: "research_cycle_started", message: "V2 research cycle started", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, workerId, leaseName: lease.leaseName });
-    const savedCycle = await repositories.orchestration.saveCycle({ cycleId, status: "requested", requestedBy: input.requestedBy ?? "manual", idempotencyKey, correlationId, createdAt: now.toISOString(), updatedAt: now.toISOString() });
-    if (!savedCycle.inserted) {
-      await repositories.orchestration.releaseLease({ leaseName: lease.leaseName, workerId: lease.workerId, fencingToken: lease.fencingToken, now: new Date() }).catch(() => undefined);
-      this.activeCycle = false;
-      this.lastRunResult = { completed: false, reason: "duplicate_cycle_window_suppressed", idempotencyKey, liveExecutionBlocked: true };
-      structuredLogger.v2({ level: "warn", event: "scheduler_duplicate_suppressed", message: "Duplicate V2 research cycle window suppressed", cycleId, correlationId, runtimeInstanceId: this.bootId, idempotencyKey });
-      return this.lastRunResult;
-    }
-    const cycleRequested = createDomainEvent({ eventType: OrchestrationV2EventTypes.ResearchCycleRequested, sourceModule: "orchestration", correlationId, causationId: null, payload: { cycleId, requestedBy: input.requestedBy ?? "manual" } });
-    await repositories.orchestration.updateCycleStatus({ cycleId, status: "running" });
+    const guard = new CycleLeaseGuard(repositories.orchestration, lease, { ttlMs: this.config.leaseTtlMs, renewIntervalMs: this.config.leaseRenewIntervalMs, correlationId, cycleId: admittedCycle.cycleId, runtimeInstanceId: this.bootId });
+    const timeout = setTimeout(() => guard.cancel("cycle_timeout"), this.config.cycleTimeoutMs);
+    timeout.unref?.();
+    const cycleRequested = createDomainEvent({ eventType: OrchestrationV2EventTypes.ResearchCycleRequested, sourceModule: "orchestration", correlationId, causationId: null, payload: { cycleId: admittedCycle.cycleId, requestedBy: input.requestedBy ?? "manual" } });
     try {
-      const result = await this.runResearchPath({ cycleId, cycleEventId: cycleRequested.eventId, correlationId, now });
-      await repositories.orchestration.updateCycleStatus({ cycleId, status: "completed" });
-      await repositories.orchestration.checkpoint({ consumerId: "v2-runtime-cycle", sourceEventId: cycleId, idempotencyKey: cycleId, checkpointedAt: new Date().toISOString(), attempt: 1, correlationId });
+      await repositories.orchestration.updateCycleStatus({ cycleId: admittedCycle.cycleId, status: "running", lease });
+      guard.start();
+      structuredLogger.v2({ level: "info", event: "research_cycle_started", message: "V2 research cycle started", cycleId: admittedCycle.cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, ownerId: safeOwnerId(lease.workerId), leaseKey: lease.leaseName, fencingToken: lease.fencingToken });
+      const result = await this.runResearchPath({ cycleId: admittedCycle.cycleId, cycleEventId: cycleRequested.eventId, correlationId, now, guard });
+      await guard.assertOwned("cycle_completion");
+      await repositories.orchestration.updateCycleStatus({ cycleId: admittedCycle.cycleId, status: "completed", lease });
+      await guard.assertOwned("cycle_checkpoint");
+      await repositories.orchestration.checkpoint({ consumerId: "v2-runtime-cycle", sourceEventId: admittedCycle.cycleId, idempotencyKey: admittedCycle.cycleId, checkpointedAt: new Date().toISOString(), attempt: 1, correlationId });
       this.lastRunAt = new Date().toISOString();
       this.lastError = null;
-      this.lastRunResult = { ...result, cycleId, completed: true };
+      this.lastRunResult = { ...result, cycleId: admittedCycle.cycleId, completed: true };
       this.state = this.config.autostart ? "running" : "idle";
-      structuredLogger.v2({ level: "info", event: "research_cycle_completed", message: "V2 research cycle completed", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, durationMs: Date.now() - startedAt, result });
+      structuredLogger.v2({ level: "info", event: "research_cycle_completed", message: "V2 research cycle completed", cycleId: admittedCycle.cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, durationMs: Date.now() - startedAt, result });
       return this.lastRunResult;
     } catch (error) {
-      await repositories.orchestration.updateCycleStatus({ cycleId, status: "failed" }).catch(() => undefined);
+      const reason = cycleFailureReason(error, guard);
+      if (reason !== "lease_lost") {
+        await repositories.orchestration.updateCycleStatus({ cycleId: admittedCycle.cycleId, status: "failed", reason, lease }).catch(() => undefined);
+      }
       const nextRetryAt = null;
-      await repositories.orchestration.saveRetry({ sourceEventId: cycleId, consumerId: "v2-runtime-cycle", idempotencyKey: `${cycleId}:retry`, attempt: 1, maxAttempts: this.config.retryBudget, exhausted: this.config.retryBudget <= 1, nextRetryAt, lastErrorCode: classifyRuntimeErrorCode(error), correlationId, causationId: null });
-      this.lastError = error instanceof Error ? error.message : "unknown";
-      this.lastRunResult = { cycleId, completed: false, reason: this.lastError };
+      await guard.tryAssertOwned("retry_record").then(ok => ok ? repositories.orchestration.saveRetry({ sourceEventId: admittedCycle.cycleId, consumerId: "v2-runtime-cycle", idempotencyKey: `${admittedCycle.cycleId}:retry`, attempt: 1, maxAttempts: this.config.retryBudget, exhausted: this.config.retryBudget <= 1, nextRetryAt, lastErrorCode: classifyRuntimeErrorCode(error), correlationId, causationId: null }) : null).catch(() => undefined);
+      this.lastError = reason;
+      this.lastRunResult = { cycleId: admittedCycle.cycleId, completed: false, reason, liveExecutionBlocked: true };
       this.state = "failed";
-      structuredLogger.v2Error({ level: "error", event: "research_cycle_failed", message: "Research cycle failed", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, durationMs: Date.now() - startedAt, retryAttempt: 1, nextRetryAt, error });
+      structuredLogger.v2Error({ level: "error", event: reason === "cycle_timeout" ? "cycle_timed_out" : reason === "lease_lost" ? "lease_lost" : "research_cycle_failed", message: "Research cycle failed", cycleId: admittedCycle.cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, durationMs: Date.now() - startedAt, retryAttempt: 1, nextRetryAt, reason, error });
       return this.lastRunResult;
     } finally {
+      clearTimeout(timeout);
+      guard.stop();
       this.activeCycle = false;
-      await repositories.orchestration.releaseLease({ leaseName: lease.leaseName, workerId: lease.workerId, fencingToken: lease.fencingToken, now: new Date() }).catch(() => undefined);
+      const released = await repositories.orchestration.releaseLease({ leaseName: lease.leaseName, workerId: lease.workerId, fencingToken: lease.fencingToken, now: new Date() }).catch(() => false);
+      structuredLogger.v2({ level: released ? "info" : "warn", event: released ? "lease_release_succeeded" : "lease_release_skipped", message: released ? "V2 runtime lease released" : "V2 runtime lease release skipped due to ownership mismatch", cycleId: admittedCycle.cycleId, correlationId, runtimeInstanceId: this.bootId, leaseKey: lease.leaseName, ownerId: safeOwnerId(lease.workerId), fencingToken: lease.fencingToken });
     }
   }
 
@@ -275,6 +299,10 @@ export class FinCoachV2Runtime {
         forwardTestingEnabled: this.config.forwardTestingEnabled,
         maxActiveForwardTests: this.config.maxActiveForwardTests,
         liveExecutionEnabled: this.config.liveExecutionEnabled,
+        maxCyclesPerDay: this.config.maxCyclesPerDay,
+        cycleTimeoutMs: this.config.cycleTimeoutMs,
+        leaseTtlMs: this.config.leaseTtlMs,
+        leaseRenewIntervalMs: this.config.leaseRenewIntervalMs,
       },
       economicEvidenceState: "available_empty",
       providerHealth: this.config.researchEnabled ? "available" : "disabled",
@@ -302,7 +330,7 @@ export class FinCoachV2Runtime {
     }).catch(() => undefined);
   }
 
-  private async runResearchPath(input: { cycleId: string; cycleEventId: string; correlationId: string; now: Date }) {
+  private async runResearchPath(input: { cycleId: string; cycleEventId: string; correlationId: string; now: Date; guard: CycleLeaseGuard }) {
     const repositories = this.requireRepositories();
     const observations = new ObservationsV2Service();
     const hypotheses = new HypothesisV2Service();
@@ -338,13 +366,13 @@ export class FinCoachV2Runtime {
       if (observationsCount >= this.config.maxObservationsPerCycle) break;
       const { symbol, timeframe, detector } = plan;
       evaluationsAttempted += 1;
-      await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "attempted", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() });
+      await guarded(input.guard, "detector_evaluation_attempted", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "attempted", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
       structuredLogger.v2({ level: "info", event: "detector_evaluation_started", message: "V2 detector evaluation started", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId, strategyFamily: detector.capability?.strategyFamily });
       const candles = demoCandles(symbol, timeframe, input.now, 80);
       const lastCandle = candles.at(-1)!;
       if (!lastCandle.complete) {
         blockers.push(blocker("warning", "incomplete_candle_skipped", "observations", "Detector evaluation skipped because latest candle is incomplete.", false, true, "Wait for completed candle boundary.", input.now));
-        await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "skipped", reason: "incomplete_candle", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() });
+        await guarded(input.guard, "detector_evaluation_skipped", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "skipped", reason: "incomplete_candle", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
         structuredLogger.v2({ level: "warn", event: "detector_evaluation_skipped", message: "V2 detector evaluation skipped", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId, reason: "incomplete_candle" });
         continue;
       }
@@ -381,12 +409,12 @@ export class FinCoachV2Runtime {
         const observationEventId = firstEventId(obs.events, "observations", observation.observationId);
         addSemanticCandidate(semanticCandidates, observation);
         candidateCausationIds.set(semanticGroupKey(semanticGroupFromObservation(observation)), observationEventId);
-        const saved = await repositories.observations.save(observation);
+        const saved = await guarded(input.guard, "observation_save", () => repositories.observations.save(observation));
         if (!saved.inserted) {
           observationsDeduplicated += 1;
           const durableObservation = observationFromSaveResult(saved) ?? observation;
           addSemanticCandidate(semanticCandidates, durableObservation);
-          await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: observation.detectorId, detectorVersion: observation.detectorVersion, strategyFamily: observation.strategyFamily, status: "duplicate_suppressed", reason: "semantic_natural_key_conflict", candleStart: observation.candleStart, candleEnd: observation.candleEnd, sourceDataHash: observation.sourceDataHash, correlationId: input.correlationId, causationId: itemEventCausation(input.cycleEventId), createdAt: input.now.toISOString() });
+          await guarded(input.guard, "detector_evaluation_duplicate", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: observation.detectorId, detectorVersion: observation.detectorVersion, strategyFamily: observation.strategyFamily, status: "duplicate_suppressed", reason: "semantic_natural_key_conflict", candleStart: observation.candleStart, candleEnd: observation.candleEnd, sourceDataHash: observation.sourceDataHash, correlationId: input.correlationId, causationId: itemEventCausation(input.cycleEventId), createdAt: input.now.toISOString() }));
           structuredLogger.v2({ level: "info", event: "observation_duplicate_suppressed", message: "Duplicate V2 observation suppressed", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: observation.detectorId, naturalKey: observation.naturalKey, semanticCandidateKey: semanticGroupKey(semanticGroupFromObservation(durableObservation)) });
           continue;
         }
@@ -395,7 +423,7 @@ export class FinCoachV2Runtime {
         addSemanticCandidate(semanticCandidates, durableObservation);
         observationsCount += 1;
       }
-      await saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "completed", candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), sourceDataHash, correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() });
+      await guarded(input.guard, "detector_evaluation_completed", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "completed", candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), sourceDataHash, correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
       structuredLogger.v2({ level: "info", event: "detector_evaluation_completed", message: "V2 detector evaluation completed", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId });
     }
 
@@ -461,8 +489,9 @@ export class FinCoachV2Runtime {
           createdAt: input.now.toISOString(),
         });
         if (!hypothesis.hypothesis) continue;
-        const savedHypothesis = await repositories.hypotheses.save(hypothesis.hypothesis);
-        const persistedHypothesis = hypothesisFromSaveResult(savedHypothesis) ?? hypothesis.hypothesis;
+        const generatedHypothesis = hypothesis.hypothesis;
+        const savedHypothesis = await guarded(input.guard, "hypothesis_save", () => repositories.hypotheses.save(generatedHypothesis));
+        const persistedHypothesis = hypothesisFromSaveResult(savedHypothesis) ?? generatedHypothesis;
         if (!savedHypothesis.inserted) {
           structuredLogger.v2({ level: "info", event: "hypothesis_duplicate_suppressed", message: "Duplicate V2 hypothesis suppressed", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, hypothesisId: persistedHypothesis.hypothesisId, hypothesisFingerprint: persistedHypothesis.fingerprint, inserted: false, conflict: conflictFromSaveResult(savedHypothesis) ?? "idempotent", skipReason: "hypothesis_save_not_inserted" });
           continue;
@@ -495,8 +524,9 @@ export class FinCoachV2Runtime {
           createdAt: input.now.toISOString(),
         });
         if (!compiled.strategy) continue;
-        const strategyEventId = firstEventId(compiled.events, "rules", compiled.strategy.strategyId);
-        await repositories.strategies.save(compiled.strategy);
+        const compiledStrategy = compiled.strategy;
+        const strategyEventId = firstEventId(compiled.events, "rules", compiledStrategy.strategyId);
+        await guarded(input.guard, "strategy_save", () => repositories.strategies.save(compiledStrategy));
         strategiesCount += 1;
         const experiment = experiments.create({
           hypothesisId: persistedHypothesis.hypothesisId,
@@ -515,13 +545,13 @@ export class FinCoachV2Runtime {
           createdAt: input.now.toISOString(),
         });
         const experimentEventId = firstEventId(experiment.events, "experiments", experiment.experiment.experimentId);
-        await repositories.experiments.save(experiment.experiment);
+        await guarded(input.guard, "experiment_save", () => repositories.experiments.save(experiment.experiment));
         experimentsCount += 1;
         const backtestCandles = demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80);
         const observationLineageEventId = candidateCausationIds.get(candidateKey) ?? input.cycleEventId;
         const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles: backtestCandles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [observationLineageEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
         const backtestEventId = firstEventId(backtest.events, "backtesting", backtest.result.backtestId);
-        await repositories.backtests.save(backtest.result);
+        await guarded(input.guard, "backtest_save", () => repositories.backtests.save(backtest.result));
         backtestsCount += 1;
         const court = courtroom.open({
           strategyId: compiled.strategy.strategyId,
@@ -536,7 +566,7 @@ export class FinCoachV2Runtime {
           causationId: backtestEventId,
         });
         const courtEventId = firstEventId(court.events, "courtroom", court.courtCase.caseId);
-        await repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtestEventId, experimentEventId, hypothesisEventId] });
+        await guarded(input.guard, "courtroom_save", () => repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtestEventId, experimentEventId, hypothesisEventId] }));
         verdictsCount += 1;
         const rankingCandidate = candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, persistedHypothesis.hypothesisId, backtest.result, candidate.timeframe, courtEventId);
         rankingCandidates.push(rankingCandidate);
@@ -547,7 +577,7 @@ export class FinCoachV2Runtime {
       const ranked = ranking.rank({ candidates: rankingCandidates, maxFocusedCount: 1, correlationId: input.correlationId, causationId: rankingCandidates[0].lineageEventIds.at(-1) ?? input.cycleEventId, generatedAt: new Date().toISOString() });
       const rankingEventId = firstEventId(ranked.events, "ranking", ranked.decision.rankingId);
       const rankingRecord = { ...ranked.decision, schemaVersion: "fincoach.v2.ranking.1" as const, lineageEventIds: rankingCandidates.flatMap(candidate => candidate.lineageEventIds) };
-      const savedRanking = await repositories.ranking.save(rankingRecord);
+      const savedRanking = await guarded(input.guard, "ranking_save", () => repositories.ranking.save(rankingRecord));
       const persistedRanking = rankingFromSaveResult(savedRanking) ?? rankingRecord;
       if (!saveInserted(savedRanking)) {
         structuredLogger.v2({ level: "info", event: "ranking_duplicate_suppressed", message: "Duplicate V2 ranking suppressed", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: persistedRanking.rankingId, inserted: false, conflict: conflictFromSaveResult(savedRanking) ?? "idempotent", skipReason: "ranking_save_not_inserted" });
@@ -562,6 +592,7 @@ export class FinCoachV2Runtime {
           cycleId: input.cycleId,
           correlationId: input.correlationId,
           now: input.now,
+          guard: input.guard,
         });
       }
     }
@@ -571,11 +602,12 @@ export class FinCoachV2Runtime {
       cycleId: input.cycleId,
       correlationId: input.correlationId,
       now: input.now,
+      guard: input.guard,
     });
-    evaluationsCount = await createEvaluationsFromSignals({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config) });
-    journalEntriesCount = await createJournalEntriesFromEvaluations({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config) });
-    lessonsCount = await createLessonsFromJournalEntries({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, limit: artifactLimit(this.config) });
-    lifecycleDecisionsCount = await createLifecycleDecisionsFromLessons({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config) });
+    evaluationsCount = await createEvaluationsFromSignals({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
+    journalEntriesCount = await createJournalEntriesFromEvaluations({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
+    lessonsCount = await createLessonsFromJournalEntries({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, limit: artifactLimit(this.config), guard: input.guard });
+    lifecycleDecisionsCount = await createLifecycleDecisionsFromLessons({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
     const completedEvent = blockers.length ? "pipeline_cycle_completed_with_blockers" : "pipeline_cycle_completed";
     structuredLogger.v2({ level: "info", event: completedEvent, message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, evaluationsAttempted, evaluationsCompleted, observations: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypotheses: hypothesesCount, hypothesesBlocked, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, forwardTests: forwardTestsCount, signals: signalsCount, evaluations: evaluationsCount, journalEntries: journalEntriesCount, lessons: lessonsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers });
     v2TelemetryService.counter("v2_research_cycles_total", 1, { module: "orchestration", operation: "runOnce", resultClass: "success" });
@@ -790,6 +822,7 @@ export async function createForwardTestsFromRanking(input: {
   cycleId: string;
   correlationId: string;
   now: Date;
+  guard?: CycleLeaseGuard;
 }) {
   if (!input.config.forwardTestingEnabled) {
     structuredLogger.v2({ level: "info", event: "forward_test_creation_skipped", message: "V2 forward-test creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, reason: "forward_testing_disabled" });
@@ -843,7 +876,7 @@ export async function createForwardTestsFromRanking(input: {
       continue;
     }
     try {
-      const saved = await repository.save(created.record);
+      const saved = await guarded(input.guard, "forward_test_save", () => repository.save(created.record!));
       const persisted = forwardTestFromSaveResult(saved) ?? created.record;
       if (!saveInserted(saved)) {
         structuredLogger.v2({ level: "info", event: "forward_test_duplicate_suppressed", message: "Duplicate V2 forward test suppressed", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, forwardTestId: persisted.forwardTestId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, inserted: false, conflict: conflictFromSaveResult(saved) ?? "idempotent", skipReason: "forward_test_save_not_inserted" });
@@ -894,6 +927,7 @@ export async function createSignalsFromForwardTests(input: {
   cycleId: string;
   correlationId: string;
   now: Date;
+  guard?: CycleLeaseGuard;
 }) {
   if (!input.config.researchSignalEnabled) {
     structuredLogger.v2({ level: "info", event: "signal_creation_skipped", message: "V2 signal creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, reason: "research_signal_disabled" });
@@ -942,7 +976,7 @@ export async function createSignalsFromForwardTests(input: {
       continue;
     }
     try {
-      const saved = await signalRepository.save(published.signal);
+      const saved = await guarded(input.guard, "signal_save", () => signalRepository.save(published.signal!));
       const persisted = signalFromSaveResult(saved) ?? published.signal;
       if (!saveInserted(saved)) {
         structuredLogger.v2({ level: "info", event: "signal_duplicate_suppressed", message: "Duplicate V2 signal suppressed", cycleId: input.cycleId, correlationId: input.correlationId, signalId: persisted.signalId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, inserted: false, conflict: conflictFromSaveResult(saved) ?? "idempotent", skipReason: "signal_save_not_inserted" });
@@ -997,7 +1031,7 @@ type JournalRepositoryLike = { append(record: ResearchJournalEntry): Promise<unk
 type LearningRepositoryLike = { saveLesson(record: LearningLesson): Promise<unknown> | unknown; eligibleForLifecycleDecision?(input: { limit: number }): Promise<LearningLesson[]> | LearningLesson[] };
 type LifecycleRepositoryLike = { save(record: StrategyLifecycleDecision): Promise<unknown> | unknown };
 
-export async function createEvaluationsFromSignals(input: { repositories: { signals?: SignalSourceRepositoryLike; evaluations?: EvaluationRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number }) {
+export async function createEvaluationsFromSignals(input: { repositories: { signals?: SignalSourceRepositoryLike; evaluations?: EvaluationRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number; guard?: CycleLeaseGuard }) {
   const source = input.repositories.signals;
   const target = input.repositories.evaluations;
   if (!source?.eligibleForEvaluation || !target?.saveEvaluation) return 0;
@@ -1011,7 +1045,7 @@ export async function createEvaluationsFromSignals(input: { repositories: { sign
     const evaluation = service.receive(evaluationInputFromSignal(signal, input.now));
     if (!evaluation.evaluation) continue;
     try {
-      const saved = await target.saveEvaluation(evaluation.evaluation);
+      const saved = await guarded(input.guard, "evaluation_save", () => target.saveEvaluation(evaluation.evaluation!));
       const persisted = evaluationFromSaveResult(saved) ?? evaluation.evaluation;
       if (!saveInserted(saved)) {
         structuredLogger.v2({ level: "info", event: "evaluation_duplicate_suppressed", message: "Duplicate V2 evaluation suppressed", cycleId: input.cycleId, correlationId: input.correlationId, evaluationId: persisted.evaluationId, signalId: signal.signalId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
@@ -1026,7 +1060,7 @@ export async function createEvaluationsFromSignals(input: { repositories: { sign
   return inserted;
 }
 
-export async function createJournalEntriesFromEvaluations(input: { repositories: { evaluations?: EvaluationRepositoryLike; journal?: JournalRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number }) {
+export async function createJournalEntriesFromEvaluations(input: { repositories: { evaluations?: EvaluationRepositoryLike; journal?: JournalRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number; guard?: CycleLeaseGuard }) {
   const source = input.repositories.evaluations;
   const target = input.repositories.journal;
   if (!source?.eligibleForJournal || !target?.append) return 0;
@@ -1040,7 +1074,7 @@ export async function createJournalEntriesFromEvaluations(input: { repositories:
     const entry = service.record(journalInputFromEvaluation(evaluation, input.now));
     if (!entry.entry) continue;
     try {
-      const saved = await target.append(entry.entry);
+      const saved = await guarded(input.guard, "journal_save", () => target.append(entry.entry!));
       const persisted = journalFromSaveResult(saved) ?? entry.entry;
       if (!saveInserted(saved)) {
         structuredLogger.v2({ level: "info", event: "journal_duplicate_suppressed", message: "Duplicate V2 journal entry suppressed", cycleId: input.cycleId, correlationId: input.correlationId, journalEntryId: persisted.journalEntryId, evaluationId: evaluation.evaluationId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
@@ -1054,7 +1088,7 @@ export async function createJournalEntriesFromEvaluations(input: { repositories:
   return inserted;
 }
 
-export async function createLessonsFromJournalEntries(input: { repositories: { journal?: JournalRepositoryLike; learning?: LearningRepositoryLike }; cycleId: string; correlationId: string; limit: number }) {
+export async function createLessonsFromJournalEntries(input: { repositories: { journal?: JournalRepositoryLike; learning?: LearningRepositoryLike }; cycleId: string; correlationId: string; limit: number; guard?: CycleLeaseGuard }) {
   const source = input.repositories.journal;
   const target = input.repositories.learning;
   if (!source?.eligibleForLesson || !target?.saveLesson) return 0;
@@ -1068,7 +1102,7 @@ export async function createLessonsFromJournalEntries(input: { repositories: { j
     const lesson = service.generateLesson(lessonRequestFromJournal(journal));
     if (!lesson.lesson) continue;
     try {
-      const saved = await target.saveLesson(lesson.lesson);
+      const saved = await guarded(input.guard, "lesson_save", () => target.saveLesson(lesson.lesson!));
       const persisted = lessonFromSaveResult(saved) ?? lesson.lesson;
       if (!saveInserted(saved)) {
         structuredLogger.v2({ level: "info", event: "lesson_duplicate_suppressed", message: "Duplicate V2 lesson suppressed", cycleId: input.cycleId, correlationId: input.correlationId, lessonId: persisted.lessonId, journalEntryId: journal.journalEntryId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
@@ -1082,7 +1116,7 @@ export async function createLessonsFromJournalEntries(input: { repositories: { j
   return inserted;
 }
 
-export async function createLifecycleDecisionsFromLessons(input: { repositories: { learning?: LearningRepositoryLike; lifecycle?: LifecycleRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number }) {
+export async function createLifecycleDecisionsFromLessons(input: { repositories: { learning?: LearningRepositoryLike; lifecycle?: LifecycleRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number; guard?: CycleLeaseGuard }) {
   const source = input.repositories.learning;
   const target = input.repositories.lifecycle;
   if (!source?.eligibleForLifecycleDecision || !target?.save) return 0;
@@ -1096,7 +1130,7 @@ export async function createLifecycleDecisionsFromLessons(input: { repositories:
     const decision = service.recordDecision(lifecycleInputFromLesson(lesson, input.now));
     if (!decision.decision) continue;
     try {
-      const saved = await target.save(decision.decision);
+      const saved = await guarded(input.guard, "lifecycle_save", () => target.save(decision.decision!));
       const persisted = lifecycleFromSaveResult(saved) ?? decision.decision;
       if (!saveInserted(saved)) {
         structuredLogger.v2({ level: "info", event: "lifecycle_duplicate_suppressed", message: "Duplicate V2 lifecycle decision suppressed", cycleId: input.cycleId, correlationId: input.correlationId, decisionId: persisted.decisionId, lessonId: lesson.lessonId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
@@ -1138,6 +1172,127 @@ function lifecycleFromSaveResult(saved: unknown): StrategyLifecycleDecision | nu
 
 function artifactLimit(config: Pick<V2RuntimeConfig, "databaseWriteBudget">) {
   return Math.max(1, Math.min(20, config.databaseWriteBudget));
+}
+
+type RuntimeOrchestrationRepository = {
+  renewLease?(input: { leaseName: string; workerId: string; fencingToken: number; now: Date; ttlMs: number; correlationId: string }): Promise<DurableWorkerLease | null> | DurableWorkerLease | null;
+  verifyLease?(input: { leaseName: string; workerId: string; fencingToken: number; now: Date }): Promise<boolean> | boolean;
+  recoverStaleCycles?(input: { now: Date; staleAfterMs: number; limit: number; correlationId: string }): Promise<Array<{ cycleId: string }>> | Array<{ cycleId: string }>;
+};
+
+class LeaseLostError extends Error {
+  constructor(readonly reason: "lease_lost" | "cycle_timeout", readonly stage: string) {
+    super(`${reason}:${stage}`);
+  }
+}
+
+class CycleLeaseGuard {
+  private timer: NodeJS.Timeout | null = null;
+  private lostReason: "lease_lost" | "cycle_timeout" | null = null;
+  private renewals = 0;
+
+  constructor(
+    private readonly repository: RuntimeOrchestrationRepository,
+    private readonly lease: DurableWorkerLease,
+    private readonly config: { ttlMs: number; renewIntervalMs: number; correlationId: string; cycleId: string; runtimeInstanceId: string },
+  ) {}
+
+  start() {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      void this.renew();
+    }, this.config.renewIntervalMs);
+    this.timer.unref?.();
+  }
+
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    if (this.renewals > 0) {
+      structuredLogger.v2({ level: "debug", event: "lease_renewal_summary", message: "V2 runtime lease renewal summary", cycleId: this.config.cycleId, correlationId: this.config.correlationId, runtimeInstanceId: this.config.runtimeInstanceId, leaseKey: this.lease.leaseName, ownerId: safeOwnerId(this.lease.workerId), fencingToken: this.lease.fencingToken, renewals: this.renewals });
+    }
+  }
+
+  cancel(reason: "cycle_timeout" | "lease_lost") {
+    this.lostReason = reason;
+  }
+
+  currentReason() {
+    return this.lostReason;
+  }
+
+  async assertOwned(stage: string) {
+    if (this.lostReason) throw new LeaseLostError(this.lostReason, stage);
+    if (!this.repository.verifyLease) return;
+    const owned = await this.repository.verifyLease({ leaseName: this.lease.leaseName, workerId: this.lease.workerId, fencingToken: this.lease.fencingToken, now: new Date() });
+    if (!owned) {
+      this.lostReason = "lease_lost";
+      throw new LeaseLostError("lease_lost", stage);
+    }
+  }
+
+  async tryAssertOwned(stage: string) {
+    try {
+      await this.assertOwned(stage);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async renew() {
+    if (this.lostReason) return;
+    if (!this.repository.renewLease) return;
+    try {
+      const renewed = await this.repository.renewLease({ leaseName: this.lease.leaseName, workerId: this.lease.workerId, fencingToken: this.lease.fencingToken, now: new Date(), ttlMs: this.config.ttlMs, correlationId: this.config.correlationId });
+      if (!renewed) {
+        this.lostReason = "lease_lost";
+        structuredLogger.v2({ level: "error", event: "lease_renewal_failed", message: "V2 runtime lease renewal failed", cycleId: this.config.cycleId, correlationId: this.config.correlationId, runtimeInstanceId: this.config.runtimeInstanceId, leaseKey: this.lease.leaseName, ownerId: safeOwnerId(this.lease.workerId), fencingToken: this.lease.fencingToken, reason: "ownership_mismatch_or_expired" });
+        return;
+      }
+      this.renewals += 1;
+      if (this.renewals === 1 || this.renewals % 10 === 0) {
+        structuredLogger.v2({ level: "debug", event: "lease_renewed", message: "V2 runtime lease renewed", cycleId: this.config.cycleId, correlationId: this.config.correlationId, runtimeInstanceId: this.config.runtimeInstanceId, leaseKey: this.lease.leaseName, ownerId: safeOwnerId(this.lease.workerId), fencingToken: this.lease.fencingToken, renewals: this.renewals });
+      }
+    } catch (error) {
+      this.lostReason = "lease_lost";
+      structuredLogger.v2Error({ level: "error", event: "lease_renewal_failed", message: "V2 runtime lease renewal failed", cycleId: this.config.cycleId, correlationId: this.config.correlationId, runtimeInstanceId: this.config.runtimeInstanceId, leaseKey: this.lease.leaseName, ownerId: safeOwnerId(this.lease.workerId), fencingToken: this.lease.fencingToken, error });
+    }
+  }
+}
+
+async function guarded<T>(guard: CycleLeaseGuard | undefined, stage: string, write: () => Promise<T> | T): Promise<T> {
+  await guard?.assertOwned(stage);
+  return write();
+}
+
+async function recoverStaleCycles(repository: { recoverStaleCycles?: RuntimeOrchestrationRepository["recoverStaleCycles"] }, input: { now: Date; staleAfterMs: number; correlationId: string }) {
+  return repository.recoverStaleCycles?.({ ...input, limit: 10 }) ?? [];
+}
+
+async function admitResearchCycle(repository: {
+  admitCycle?: (input: { cycle: ResearchCycleRecord; maxCyclesPerDay: number; now: Date; admissionTimezone?: "UTC" }) => Promise<CycleAdmissionResult> | CycleAdmissionResult;
+  saveCycle?: (cycle: ResearchCycleRecord) => Promise<{ inserted: boolean; record?: ResearchCycleRecord; cycle?: ResearchCycleRecord }> | { inserted: boolean; record?: ResearchCycleRecord; cycle?: ResearchCycleRecord };
+}, input: { cycle: ResearchCycleRecord; maxCyclesPerDay: number; now: Date; admissionTimezone: "UTC" }): Promise<CycleAdmissionResult> {
+  if (repository.admitCycle) return repository.admitCycle(input);
+  const saved = await repository.saveCycle?.(input.cycle);
+  return {
+    admitted: saved?.inserted === true,
+    reason: saved?.inserted === false ? "duplicate_cycle_window_suppressed" : undefined,
+    cycle: saved?.record ?? saved?.cycle ?? input.cycle,
+    admittedCount: saved?.inserted ? 1 : 0,
+    limit: input.maxCyclesPerDay,
+    admissionDate: input.now.toISOString().slice(0, 10),
+  };
+}
+
+function cycleFailureReason(error: unknown, guard: CycleLeaseGuard) {
+  if (error instanceof LeaseLostError) return error.reason;
+  return guard.currentReason() ?? classifyRuntimeErrorCode(error);
+}
+
+function safeOwnerId(ownerId: string) {
+  return createHash("sha256").update(ownerId).digest("hex").slice(0, 12);
 }
 
 function independentOccurrenceCount(observations: import("../observations").MarketObservation[]) {

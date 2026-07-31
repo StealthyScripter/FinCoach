@@ -17,8 +17,18 @@ export type ResearchCycleRecord = {
   requestedBy: string;
   idempotencyKey: string;
   correlationId: string;
+  payload?: Readonly<Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
+};
+
+export type CycleAdmissionResult = {
+  admitted: boolean;
+  reason?: "daily_limit_reached" | "duplicate_cycle_window_suppressed";
+  cycle?: ResearchCycleRecord;
+  admittedCount: number;
+  limit: number;
+  admissionDate: string;
 };
 
 export type OrchestrationConsumerInput = {

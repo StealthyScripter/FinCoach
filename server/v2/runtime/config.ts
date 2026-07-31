@@ -47,6 +47,7 @@ export type V2RuntimeConfig = {
   cycleTimeoutMs: number;
   memoryRetentionLimit: number;
   leaseTtlMs: number;
+  leaseRenewIntervalMs: number;
 };
 
 export type V2RuntimeConfigValidation = {
@@ -107,6 +108,7 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
     cycleTimeoutMs: int(env.FINCOACH_V2_CYCLE_TIMEOUT_MS, 120_000),
     memoryRetentionLimit: int(env.FINCOACH_V2_MEMORY_RETENTION_LIMIT, 1000),
     leaseTtlMs: int(env.FINCOACH_V2_LEASE_TTL_MS, 60_000),
+    leaseRenewIntervalMs: int(env.FINCOACH_V2_LEASE_RENEW_INTERVAL_MS, 20_000),
   };
 
   const errors: string[] = [];
@@ -123,6 +125,11 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.timeframes.length === 0) errors.push("At least one V2 timeframe is required.");
   if (config.targetEvaluationsPerHour < config.minEvaluationsPerHour) warnings.push("V2 target evaluations per hour is below the minimum target.");
   if (config.cadenceMs < 60_000) errors.push("V2 cadence must be at least 60000ms.");
+  if (config.maxCyclesPerDay < 0) errors.push("FINCOACH_V2_MAX_CYCLES_PER_DAY must be >= 0.");
+  if (config.cycleTimeoutMs <= 0) errors.push("FINCOACH_V2_CYCLE_TIMEOUT_MS must be > 0.");
+  if (config.leaseTtlMs <= 0) errors.push("FINCOACH_V2_LEASE_TTL_MS must be > 0.");
+  if (config.leaseRenewIntervalMs <= 0) errors.push("FINCOACH_V2_LEASE_RENEW_INTERVAL_MS must be > 0.");
+  if (config.leaseRenewIntervalMs >= config.leaseTtlMs) errors.push("FINCOACH_V2_LEASE_RENEW_INTERVAL_MS must be less than FINCOACH_V2_LEASE_TTL_MS.");
   if (config.telegramTransport === "webhook" && env.TELEGRAM_LONG_POLLING_ENABLED === "true") errors.push("Webhook and long polling cannot both be active.");
   if (config.telegramTransport === "long_polling" && env.TELEGRAM_WEBHOOK_ENABLED === "true") errors.push("Long polling and webhook cannot both be active.");
   if (!config.researchSignalEnabled) warnings.push("V2 research signal creation is disabled.");
@@ -147,12 +154,16 @@ function bool(value: string | undefined, fallback: boolean) {
 }
 
 function int(value: string | undefined, fallback: number) {
-  const parsed = Number(clean(value));
+  const cleaned = clean(value);
+  if (cleaned === null) return fallback;
+  const parsed = Number(cleaned);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function num(value: string | undefined, fallback: number) {
-  const parsed = Number(clean(value));
+  const cleaned = clean(value);
+  if (cleaned === null) return fallback;
+  const parsed = Number(cleaned);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 

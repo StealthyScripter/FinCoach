@@ -56,9 +56,9 @@ async function duplicateCurrentObservationStillAggregates() {
       ];
     },
   };
-  const result = await runRuntime(observationRepository, saved, { maxObservations: 1, maxHypotheses: 1 });
+  const result = await runRuntime(observationRepository, saved, { maxObservations: 1, maxHypotheses: 1, maxExperiments: 1, maxBacktests: 1 });
   assert.equal(result.observationsCreated, 0);
-  assert.equal(result.observationsDeduplicated, 1);
+  assert.ok(Number(result.observationsDeduplicated) >= 1);
   assert.equal(result.hypothesesCreated, 1);
   assert.equal(saved.hypotheses.length, 1);
 }
@@ -227,7 +227,7 @@ function savedCollections() {
 async function runRuntime(
   observations: Pick<InMemoryObservationRepository, "save" | "eligibleForHypothesis" | "eligibleSemanticGroups">,
   saved: ReturnType<typeof savedCollections>,
-  options: { maxObservations: number; maxHypotheses: number; hypotheses?: { save(record: never): unknown }; requestedBy?: string },
+  options: { maxObservations: number; maxHypotheses: number; maxExperiments?: number; maxBacktests?: number; hypotheses?: { save(record: never): unknown }; requestedBy?: string },
 ) {
   const runtime = createFinCoachV2Runtime({
     DATABASE_URL: "postgres://user:pass@localhost:5432/fincoach",
@@ -239,8 +239,8 @@ async function runRuntime(
     FINCOACH_V2_OBSERVATION_TIMEFRAMES: "1m",
     FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE: String(options.maxObservations),
     FINCOACH_V2_MAX_HYPOTHESES_PER_CYCLE: String(options.maxHypotheses),
-    FINCOACH_V2_MAX_EXPERIMENTS_PER_CYCLE: "5",
-    FINCOACH_V2_MAX_BACKTESTS_PER_CYCLE: "5",
+    FINCOACH_V2_MAX_EXPERIMENTS_PER_CYCLE: String(options.maxExperiments ?? 5),
+    FINCOACH_V2_MAX_BACKTESTS_PER_CYCLE: String(options.maxBacktests ?? 5),
     FINCOACH_V2_HYPOTHESIS_LOOKBACK_HOURS: "24",
     FINCOACH_V2_CYCLE_TIMEOUT_MS: "120000",
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",

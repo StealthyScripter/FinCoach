@@ -68,17 +68,24 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
     FINCOACH_V2_MAX_HYPOTHESES_PER_CYCLE: "1",
     FINCOACH_V2_MAX_EXPERIMENTS_PER_CYCLE: "1",
     FINCOACH_V2_MAX_BACKTESTS_PER_CYCLE: "1",
+    FINCOACH_V2_LEASE_RENEW_INTERVAL_MS: "20",
+    FINCOACH_V2_LEASE_TTL_MS: "100",
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",
     FINCOACH_TELEGRAM_TRANSPORT: "disabled",
   } as NodeJS.ProcessEnv);
+  const lease = { leaseName: "fincoach-v2-runtime", workerId: "test-worker", fencingToken: 1 };
   (runtime as unknown as { repositories: unknown }).repositories = {
     orchestration: {
-      acquireLease: async () => ({ leaseName: "fincoach-v2-runtime", workerId: "test-worker", fencingToken: 1 }),
+      admitCycle: async ({ cycle, maxCyclesPerDay }: { cycle: unknown; maxCyclesPerDay: number }) => ({ admitted: true, cycle, admittedCount: 1, limit: maxCyclesPerDay, admissionDate: "2026-07-31" }),
+      acquireLease: async () => lease,
+      renewLease: async () => ({ ...lease, acquiredAt: Date.now(), expiresAt: Date.now() + 100 }),
+      verifyLease: async () => true,
       saveCycle: async (record: unknown) => ({ inserted: true, record }),
       updateCycleStatus: async (record: unknown) => record,
       checkpoint: async (record: unknown) => record,
       saveRetry: async (record: unknown) => record,
-      releaseLease: async () => undefined,
+      releaseLease: async () => true,
+      recoverStaleCycles: async () => [],
     },
     runtime: { health: async () => undefined, recordBoot: async () => undefined },
     observations: { save: save(saved.observations), eligibleForHypothesis: async () => [], eligibleSemanticGroups: async () => [] },

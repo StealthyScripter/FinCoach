@@ -6,6 +6,7 @@ import type {
   OrchestrationCheckpoint,
   OrchestrationDeadLetter,
   OrchestrationErrorCode,
+  CycleAdmissionResult,
   ResearchCycleRecord,
   RetryState,
 } from "./contracts";
@@ -40,6 +41,57 @@ export class PgOrchestrationRepository {
       return { inserted: true, record: mapCycle(inserted.rows[0]) };
     } catch (error) {
       throw classifyPostgresError(error);
+    }
+  }
+
+  async admitCycle(input: { cycle: ResearchCycleRecord; maxCyclesPerDay: number; now: Date; admissionTimezone?: "UTC" }): Promise<CycleAdmissionResult> {
+    const admissionDate = input.now.toISOString().slice(0, 10);
+    const limit = Math.max(0, input.maxCyclesPerDay);
+    if (limit <= 0) return { admitted: false, reason: "daily_limit_reached", admittedCount: 0, limit, admissionDate };
+    const client = await this.requirePoolClient();
+    await client.query("BEGIN");
+    try {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`fincoach-v2-cycle-admission:${admissionDate}`]);
+      const existing = await client.query("SELECT * FROM v2_orchestration_cycles WHERE idempotency_key = $1", [input.cycle.idempotencyKey]);
+      if (existing.rowCount) {
+        await client.query("COMMIT");
+        return { admitted: false, reason: "duplicate_cycle_window_suppressed", cycle: mapCycle(existing.rows[0]), admittedCount: 0, limit, admissionDate };
+      }
+      const windowStart = `${admissionDate}T00:00:00.000Z`;
+      const windowEnd = new Date(Date.parse(windowStart) + 24 * 60 * 60_000).toISOString();
+      const countResult = await client.query(
+        "SELECT count(*)::int AS total FROM v2_orchestration_cycles WHERE created_at >= $1 AND created_at < $2",
+        [windowStart, windowEnd],
+      );
+      const admittedCount = Number(countResult.rows[0]?.total ?? 0);
+      if (admittedCount >= limit) {
+        await client.query("COMMIT");
+        return { admitted: false, reason: "daily_limit_reached", admittedCount, limit, admissionDate };
+      }
+      const inserted = await client.query(
+        `INSERT INTO v2_orchestration_cycles
+          (cycle_id, schema_version, status, requested_by, idempotency_key, correlation_id, causation_id, payload, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7::jsonb, $8, $9)
+         RETURNING *`,
+        [
+          input.cycle.cycleId,
+          ORCHESTRATION_SCHEMA_VERSION,
+          input.cycle.status,
+          input.cycle.requestedBy,
+          input.cycle.idempotencyKey,
+          input.cycle.correlationId,
+          JSON.stringify({ ...(input.cycle.payload ?? {}), admissionDate, admittedAt: input.now.toISOString() }),
+          input.cycle.createdAt,
+          input.cycle.updatedAt,
+        ],
+      );
+      await client.query("COMMIT");
+      return { admitted: true, cycle: mapCycle(inserted.rows[0]), admittedCount: admittedCount + 1, limit, admissionDate };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw classifyPostgresError(error);
+    } finally {
+      client.release();
     }
   }
 
@@ -139,15 +191,47 @@ export class PgOrchestrationRepository {
     }
   }
 
-  async updateCycleStatus(input: { cycleId: string; status: ResearchCycleRecord["status"]; now?: string }): Promise<ResearchCycleRecord> {
+  async updateCycleStatus(input: { cycleId: string; status: ResearchCycleRecord["status"]; now?: string; reason?: string; lease?: { leaseName: string; workerId: string; fencingToken: number } }): Promise<ResearchCycleRecord> {
     try {
       const updatedAt = input.now ?? new Date().toISOString();
+      if (input.lease) {
+        const result = await this.db.query(
+          `UPDATE v2_orchestration_cycles c
+           SET status = $2,
+               updated_at = $3,
+               payload = c.payload || $7::jsonb
+           WHERE c.cycle_id = $1
+             AND EXISTS (
+               SELECT 1
+               FROM v2_orchestration_worker_leases l
+               WHERE l.lease_name = $4
+                 AND l.worker_id = $5
+                 AND l.fencing_token = $6
+                 AND l.released_at IS NULL
+                 AND l.expires_at > $3
+             )
+           RETURNING c.*`,
+          [
+            input.cycleId,
+            input.status,
+            updatedAt,
+            input.lease.leaseName,
+            input.lease.workerId,
+            input.lease.fencingToken,
+            JSON.stringify(input.reason ? { terminalReason: input.reason } : {}),
+          ],
+        );
+        if (!result.rowCount) throw new V2PersistenceError("optimistic_concurrency_conflict", "Research cycle status update failed lease fencing");
+        return mapCycle(result.rows[0]);
+      }
       const result = await this.db.query(
         `UPDATE v2_orchestration_cycles
-         SET status = $2, updated_at = $3
+         SET status = $2,
+             updated_at = $3,
+             payload = payload || $4::jsonb
          WHERE cycle_id = $1
          RETURNING *`,
-        [input.cycleId, input.status, updatedAt],
+        [input.cycleId, input.status, updatedAt, JSON.stringify(input.reason ? { terminalReason: input.reason } : {})],
       );
       if (!result.rowCount) throw new V2PersistenceError("persistence_integrity_failure", "Research cycle not found for status update");
       return mapCycle(result.rows[0]);
@@ -251,6 +335,20 @@ export class PgOrchestrationRepository {
     }
   }
 
+  async verifyLease(input: { leaseName: string; workerId: string; fencingToken: number; now: Date }): Promise<boolean> {
+    try {
+      const result = await this.db.query(
+        `SELECT 1 FROM v2_orchestration_worker_leases
+         WHERE lease_name = $1 AND worker_id = $2 AND fencing_token = $3 AND released_at IS NULL AND expires_at > $4
+         LIMIT 1`,
+        [input.leaseName, input.workerId, input.fencingToken, input.now.toISOString()],
+      );
+      return Boolean(result.rowCount);
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
   async releaseLease(input: { leaseName: string; workerId: string; fencingToken: number; now: Date }): Promise<boolean> {
     try {
       const result = await this.db.query(
@@ -278,6 +376,40 @@ export class PgOrchestrationRepository {
     try {
       const result = await this.db.query("SELECT * FROM v2_orchestration_worker_leases WHERE released_at IS NULL AND expires_at <= $1 ORDER BY expires_at ASC, lease_name ASC", [now.toISOString()]);
       return result.rows.map(mapLease);
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
+  async recoverStaleCycles(input: { now: Date; staleAfterMs: number; limit: number; correlationId: string }): Promise<ResearchCycleRecord[]> {
+    try {
+      const staleBefore = new Date(input.now.getTime() - Math.max(0, input.staleAfterMs)).toISOString();
+      const result = await this.db.query(
+        `WITH stale AS (
+           SELECT c.cycle_id
+           FROM v2_orchestration_cycles c
+           WHERE c.status = 'running'
+             AND c.updated_at <= $1
+             AND NOT EXISTS (
+               SELECT 1
+               FROM v2_orchestration_worker_leases l
+               WHERE l.released_at IS NULL
+                 AND l.expires_at > $2
+             )
+           ORDER BY c.updated_at ASC, c.cycle_id ASC
+           LIMIT $3
+         )
+         UPDATE v2_orchestration_cycles c
+         SET status = 'failed',
+             updated_at = $2,
+             correlation_id = $4,
+             payload = c.payload || '{"terminalReason":"stale_cycle_recovered"}'::jsonb
+         FROM stale
+         WHERE c.cycle_id = stale.cycle_id
+         RETURNING c.*`,
+        [staleBefore, input.now.toISOString(), input.limit, input.correlationId],
+      );
+      return result.rows.map(mapCycle);
     } catch (error) {
       throw classifyPostgresError(error);
     }
@@ -391,6 +523,7 @@ function mapCycle(row: QueryResultRow): ResearchCycleRecord {
     requestedBy: String(row.requested_by),
     idempotencyKey: String(row.idempotency_key),
     correlationId: String(row.correlation_id),
+    payload: requireObject(row.payload ?? {}, "cycle payload"),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
