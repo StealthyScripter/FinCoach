@@ -220,7 +220,10 @@ export class FinCoachV2Runtime {
       await repositories.orchestration.updateCycleStatus({ cycleId: admittedCycle.cycleId, status: "running", lease });
       guard.start();
       structuredLogger.v2({ level: "info", event: "research_cycle_started", message: "V2 research cycle started", cycleId: admittedCycle.cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, ownerId: safeOwnerId(lease.workerId), leaseKey: lease.leaseName, fencingToken: lease.fencingToken });
-      const result = await this.runResearchPath({ cycleId: admittedCycle.cycleId, cycleEventId: cycleRequested.eventId, correlationId, now, guard });
+      const result = await Promise.race([
+        this.runResearchPath({ cycleId: admittedCycle.cycleId, cycleEventId: cycleRequested.eventId, correlationId, now, guard }),
+        guard.waitForLoss("research_cycle"),
+      ]);
       await guard.assertOwned("cycle_completion");
       await repositories.orchestration.updateCycleStatus({ cycleId: admittedCycle.cycleId, status: "completed", lease });
       await guard.assertOwned("cycle_checkpoint");
@@ -1190,12 +1193,18 @@ class CycleLeaseGuard {
   private timer: NodeJS.Timeout | null = null;
   private lostReason: "lease_lost" | "cycle_timeout" | null = null;
   private renewals = 0;
+  private readonly lostPromise: Promise<"lease_lost" | "cycle_timeout">;
+  private resolveLost!: (reason: "lease_lost" | "cycle_timeout") => void;
 
   constructor(
     private readonly repository: RuntimeOrchestrationRepository,
     private readonly lease: DurableWorkerLease,
     private readonly config: { ttlMs: number; renewIntervalMs: number; correlationId: string; cycleId: string; runtimeInstanceId: string },
-  ) {}
+  ) {
+    this.lostPromise = new Promise(resolve => {
+      this.resolveLost = resolve;
+    });
+  }
 
   start() {
     if (this.timer) return;
@@ -1214,7 +1223,9 @@ class CycleLeaseGuard {
   }
 
   cancel(reason: "cycle_timeout" | "lease_lost") {
+    if (this.lostReason) return;
     this.lostReason = reason;
+    this.resolveLost(reason);
   }
 
   currentReason() {
@@ -1226,7 +1237,7 @@ class CycleLeaseGuard {
     if (!this.repository.verifyLease) return;
     const owned = await this.repository.verifyLease({ leaseName: this.lease.leaseName, workerId: this.lease.workerId, fencingToken: this.lease.fencingToken, now: new Date() });
     if (!owned) {
-      this.lostReason = "lease_lost";
+      this.cancel("lease_lost");
       throw new LeaseLostError("lease_lost", stage);
     }
   }
@@ -1240,13 +1251,18 @@ class CycleLeaseGuard {
     }
   }
 
+  async waitForLoss(stage: string): Promise<never> {
+    const reason = await this.lostPromise;
+    throw new LeaseLostError(reason, stage);
+  }
+
   private async renew() {
     if (this.lostReason) return;
     if (!this.repository.renewLease) return;
     try {
       const renewed = await this.repository.renewLease({ leaseName: this.lease.leaseName, workerId: this.lease.workerId, fencingToken: this.lease.fencingToken, now: new Date(), ttlMs: this.config.ttlMs, correlationId: this.config.correlationId });
       if (!renewed) {
-        this.lostReason = "lease_lost";
+        this.cancel("lease_lost");
         structuredLogger.v2({ level: "error", event: "lease_renewal_failed", message: "V2 runtime lease renewal failed", cycleId: this.config.cycleId, correlationId: this.config.correlationId, runtimeInstanceId: this.config.runtimeInstanceId, leaseKey: this.lease.leaseName, ownerId: safeOwnerId(this.lease.workerId), fencingToken: this.lease.fencingToken, reason: "ownership_mismatch_or_expired" });
         return;
       }
@@ -1255,7 +1271,7 @@ class CycleLeaseGuard {
         structuredLogger.v2({ level: "debug", event: "lease_renewed", message: "V2 runtime lease renewed", cycleId: this.config.cycleId, correlationId: this.config.correlationId, runtimeInstanceId: this.config.runtimeInstanceId, leaseKey: this.lease.leaseName, ownerId: safeOwnerId(this.lease.workerId), fencingToken: this.lease.fencingToken, renewals: this.renewals });
       }
     } catch (error) {
-      this.lostReason = "lease_lost";
+      this.cancel("lease_lost");
       structuredLogger.v2Error({ level: "error", event: "lease_renewal_failed", message: "V2 runtime lease renewal failed", cycleId: this.config.cycleId, correlationId: this.config.correlationId, runtimeInstanceId: this.config.runtimeInstanceId, leaseKey: this.lease.leaseName, ownerId: safeOwnerId(this.lease.workerId), fencingToken: this.lease.fencingToken, error });
     }
   }
