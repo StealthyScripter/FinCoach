@@ -116,6 +116,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
     FINCOACH_V2_LEASE_TTL_MS: "100",
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",
     FINCOACH_TELEGRAM_TRANSPORT: "disabled",
+    FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "false",
   } as NodeJS.ProcessEnv);
   const lease = { leaseName: "fincoach-v2-runtime", workerId: "test-worker", fencingToken: 1 };
   (runtime as unknown as { repositories: unknown }).repositories = {

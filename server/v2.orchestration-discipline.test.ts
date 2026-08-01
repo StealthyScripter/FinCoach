@@ -70,6 +70,7 @@ async function testRuntimeAdmissionBeforeLease() {
     FINCOACH_V2_MAX_CYCLES_PER_DAY: "0",
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",
     FINCOACH_TELEGRAM_TRANSPORT: "disabled",
+    FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "false",
   } as NodeJS.ProcessEnv);
   let leaseAttempts = 0;
   (runtime as unknown as { repositories: unknown }).repositories = {
@@ -135,6 +136,7 @@ async function testRuntimeBlocksMutationAfterLeaseLoss() {
     FINCOACH_V2_LEASE_TTL_MS: "1000",
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",
     FINCOACH_TELEGRAM_TRANSPORT: "disabled",
+    FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "false",
   } as NodeJS.ProcessEnv);
   const lease = { leaseName: "fincoach-v2-runtime", workerId: "test-worker", fencingToken: 1 };
   (runtime as unknown as { repositories: unknown }).repositories = {
@@ -279,6 +281,7 @@ async function runRuntimeWithBlockedObservation(input: {
     FINCOACH_V2_LEASE_TTL_MS: String(input.leaseTtlMs),
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",
     FINCOACH_TELEGRAM_TRANSPORT: "disabled",
+    FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "false",
   } as NodeJS.ProcessEnv);
   const lease = { leaseName: "fincoach-v2-runtime", workerId: "test-worker", fencingToken: 1 };
   (runtime as unknown as { repositories: unknown }).repositories = {
