@@ -244,6 +244,7 @@ async function runRuntime(
     FINCOACH_V2_HYPOTHESIS_LOOKBACK_HOURS: "24",
     FINCOACH_V2_CYCLE_TIMEOUT_MS: "120000",
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",
+    FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "false",
   } as NodeJS.ProcessEnv);
   (runtime as unknown as { repositories: unknown }).repositories = repositories(observations, saved, options.hypotheses);
   return await runtime.runOnce({ requestedBy: options.requestedBy ?? randomUUID() }) as Record<string, unknown>;

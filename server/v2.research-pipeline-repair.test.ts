@@ -105,6 +105,7 @@ import { InMemoryTelegramRepository } from "./telegram/repository";
     FINCOACH_V2_AUTOSTART: "true",
     FINCOACH_V2_CADENCE_MS: "60000",
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",
+    FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "false",
   } as NodeJS.ProcessEnv);
   (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
   const first = await runtime.start();
@@ -138,6 +139,7 @@ import { InMemoryTelegramRepository } from "./telegram/repository";
     FINCOACH_V2_MAX_BACKTESTS_PER_CYCLE: "1",
     FINCOACH_V2_CYCLE_TIMEOUT_MS: "120000",
     FINCOACH_LIVE_EXECUTION_ENABLED: "false",
+    FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "false",
   } as NodeJS.ProcessEnv);
   (runtime as unknown as { repositories: unknown }).repositories = e2eRepositories(saved);
   const result = await runtime.runOnce({ requestedBy: "synthetic-dry-run" }) as Record<string, unknown>;
