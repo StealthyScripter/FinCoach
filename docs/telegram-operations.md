@@ -40,6 +40,10 @@ Read-only:
 - `/week`
 - `/strategies`
 - `/kill_status`
+- `/open_exchanges`, `/markets_open`, `/market_status`
+- `/market_snapshot`, `/snapshot`
+- `/morning_snapshot`, `/evening_snapshot`
+- `/upcoming_events`, `/market_events`
 - `/help`
 
 Confirmation-required:
@@ -68,12 +72,28 @@ The notification layer supports:
 - demo run state
 - research pipeline state
 - market session transitions
+- consolidated weekly tradable-window open and final-close notifications
+- twice-daily market snapshots at 8:00 AM and 8:00 PM `America/New_York`
 - kill-switch and safety events
 - open trades and exposure
 - daily and weekly summaries
 - signal lifecycle updates
 
 Critical kill-switch alerts bypass digest behavior.
+
+Individual exchange/session open-close Telegram noise is suppressed. Calendar tracking still runs, but Telegram receives one consolidated weekly open notification and one consolidated final weekly close notification keyed by the aggregate configured tradable boundary.
+
+Market snapshots are execution-oriented but non-prescriptive. They distinguish fresh, delayed, stale, and unavailable data. Missing live prices, yields, breadth, volatility, news, or consensus values are stated as unavailable rather than replaced with fixtures. Event impact scores are deterministic, bounded from 1 through 10, and include component scores in persisted snapshot payloads.
+
+Example commands:
+
+```text
+/open_exchanges
+/market_snapshot
+/upcoming_events
+```
+
+Snapshot delivery is idempotent by `market-snapshot:<America/New_York date>:morning` and `market-snapshot:<America/New_York date>:evening`. Manual commands retrieve or generate snapshots without forcing scheduled duplicate delivery.
 
 ## PM2/systemd Behavior
 

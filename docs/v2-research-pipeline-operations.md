@@ -78,6 +78,68 @@ curl -s http://127.0.0.1:${PORT:-5000}/api/v2/research/progress
 curl -s http://127.0.0.1:${PORT:-5000}/api/v2/research/blockers
 ```
 
+## Weekly Research Schedule
+
+The V2 research scheduler remains inside the application process. It does not stop PM2, Express, PostgreSQL, Telegram long polling, health reporting, daily summaries, weekly summaries, or read-only Telegram commands.
+
+Research cycle admission is gated by the aggregate configured tradable window. FinCoach derives whether any configured instrument remains tradable from, in order, existing calendar/session services, configured instrument metadata, and labeled conservative fallback rules. Unknown configured symbols fail closed and are reported as unavailable calendar metadata.
+
+The default operator opening window is Sunday 5:00 PM `America/New_York` with a five-minute lead. The closing boundary is dynamic: research stops only after the final configured tradable instrument is no longer tradable. A single exchange close does not suspend research while another configured instrument remains tradable.
+
+Continuously traded symbols such as crypto use an operator-defined weekly maintenance window so they do not prevent maintenance forever:
+
+```env
+FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_ENABLED=true
+FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_DAY=5
+FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_TIME=18:00
+FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_DAY=0
+FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_TIME=17:00
+```
+
+All weekly and snapshot schedule calculations use IANA timezones such as `America/New_York`; fixed EST offsets are not used.
+
+Read-only verification:
+
+```bash
+curl -fsS http://127.0.0.1:5000/api/v2/runtime/status |
+jq '{
+  state,
+  weeklyResearchSchedule: .weeklyResearchSchedule,
+  aggregateTradableWindow: .aggregateTradableWindow,
+  marketSnapshotScheduler: .marketSnapshotScheduler,
+  researchSchedulerActive: .researchSchedulerActive,
+  liveExecutionBlocked
+}'
+```
+
+```bash
+curl -fsS http://127.0.0.1:5000/api/v2/market-sessions | jq
+curl -fsS 'http://127.0.0.1:5000/api/v2/market-snapshot/events?lookaheadHours=24&minimumImpact=5&limit=20' | jq
+curl -fsS http://127.0.0.1:5000/api/v2/market-snapshot | jq
+```
+
+PostgreSQL read-only checks:
+
+```sql
+SELECT idempotency_key, transition_type, boundary_at, status, delivery_id, updated_at
+FROM telegram_weekly_session_notifications
+ORDER BY updated_at DESC
+LIMIT 5;
+
+SELECT snapshot_id, period, scheduled_local_date, generated_at, delivery_status, delivery_id
+FROM telegram_market_snapshots
+ORDER BY generated_at DESC
+LIMIT 5;
+
+SELECT id, kind, status, metadata, created_at
+FROM telegram_deliveries
+WHERE kind IN ('market_session', 'report')
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+Rollback: deploy the prior application build and leave migration `0018` in place. It is additive and backward compatible. Keep `FINCOACH_LIVE_EXECUTION_ENABLED=false`; do not enable paper, demo broker, or live execution as part of rollback.
+
 ## Telegram Verification
 
 From an authorized Telegram user:
