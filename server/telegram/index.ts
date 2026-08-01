@@ -11,6 +11,7 @@ import { telegramMetrics } from "./metrics";
 import { loadTelegramConfig, validateTelegramConfig } from "./telegramClient";
 import { telegramCommandRouter } from "./commandRouter";
 import { telegramUpdateReceiver } from "./updateReceiver";
+import { marketSnapshotService } from "../marketSnapshotService";
 
 const signalPreviewSchema = z.object({
   signal: z.record(z.unknown()).optional(),
@@ -31,8 +32,9 @@ export async function startTelegramOperations() {
   }
   await telegramLifecycleMonitor.start();
   const scheduler = telegramScheduler.start();
+  const marketSnapshotScheduler = marketSnapshotService.start();
   const updateReceiver = telegramUpdateReceiver.start();
-  return { started: true, validation, scheduler, updateReceiver };
+  return { started: true, validation, scheduler, marketSnapshotScheduler, updateReceiver };
 }
 
 export function registerTelegramOperationsRoutes(app: Express) {

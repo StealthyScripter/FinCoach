@@ -231,12 +231,46 @@ export class V2OperationsService {
       return { status: 200, body: { schemaVersion: "fincoach.v2.research-blockers.1", generatedAt: new Date().toISOString(), highestSeverity: "warning", blockers: [{ code: "postgres_projection_not_configured", severity: "warning", phase: "operations", reason: "PostgreSQL research blocker projection is not configured.", currentValue: "not_configured", requiredValue: "configured", recommendedAction: "Initialize V2 runtime with PostgreSQL repositories.", firstObservedAt: new Date().toISOString(), lastObservedAt: new Date().toISOString() }], liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
     }
     try {
-      return { status: 200, body: { ...(await repository.researchBlockers()), liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
+      return { status: 200, body: this.withWeeklyBlocker(await repository.researchBlockers()), events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
     } catch (error) {
       const at = new Date().toISOString();
       const reason = projectionErrorCode(error);
       return { status: 200, body: { schemaVersion: "fincoach.v2.research-blockers.1", status: "degraded", generatedAt: at, highestSeverity: "warning", blockers: [{ code: reason, severity: "warning", phase: "operations", reason: "PostgreSQL blocker projection failed.", currentValue: "failed", requiredValue: "healthy", recommendedAction: "Check database connectivity and migrations.", firstObservedAt: at, lastObservedAt: at }], projectionError: reason, liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers_degraded" })] };
     }
+  }
+
+  private withWeeklyBlocker(body: Record<string, unknown>) {
+    const runtime = this.runtimeStatusProvider?.() ?? {};
+    const aggregate = runtime.aggregateTradableWindow as { anyConfiguredInstrumentTradable?: boolean; calendarQuality?: string } | undefined;
+    if (aggregate?.anyConfiguredInstrumentTradable !== false) return { ...body, liveExecutionBlocked: true };
+    const blockers = Array.isArray(body.blockers) ? [...body.blockers] : [];
+    blockers.push({
+      code: "weekly_market_window_closed",
+      severity: "info",
+      phase: "scheduler",
+      reason: "Weekly research market window is closed.",
+      currentValue: "closed",
+      requiredValue: "open",
+      recommendedAction: "No action required. Research resumes automatically at the next weekly opening.",
+      firstObservedAt: new Date().toISOString(),
+      lastObservedAt: new Date().toISOString(),
+    });
+    if (aggregate.calendarQuality === "unavailable") {
+      blockers.push({
+        code: "market_session_calendar_unavailable",
+        severity: "critical",
+        phase: "scheduler",
+        reason: "At least one configured instrument has unavailable session metadata.",
+        currentValue: "unavailable",
+        requiredValue: "configured",
+        recommendedAction: "Add explicit session metadata or remove the unsupported configured symbol.",
+        firstObservedAt: new Date().toISOString(),
+        lastObservedAt: new Date().toISOString(),
+      });
+    }
+    const severities = blockers.map((item) => typeof item === "object" && item && "severity" in item ? String((item as { severity?: unknown }).severity) : "info");
+    const highestSeverity = severities.includes("critical") ? "critical" : severities.includes("warning") ? "warning" : "info";
+    return { ...body, highestSeverity, blockers, liveExecutionBlocked: true };
   }
 
   list(collection: V2OperationsCollection, query: V2OperationsQuery = {}): V2OperationsResponse<Record<string, unknown>> {

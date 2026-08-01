@@ -1,7 +1,5 @@
 import { INSTRUMENTS } from "../execution/domain";
 import { marketSessionRulesService } from "../execution/marketSessionRules";
-import { emitTelegramEvent } from "./events";
-import { formatMarketSession } from "./formatter";
 import { telegramNotificationService, type TelegramNotificationService } from "./notificationService";
 
 type SessionState = {
@@ -24,18 +22,7 @@ export class TelegramMarketSessionMonitor {
       const prior = this.lastStates.get(state.key);
       this.lastStates.set(state.key, state.open);
       if (prior === undefined || prior === state.open) continue;
-      const eventType = state.open ? "MarketSessionOpened" : "MarketSessionClosed";
-      emitTelegramEvent(eventType, { market: state.market, session: state.label, opened: state.open, time: now.toISOString() });
-      const sent = await this.notifications.sendOperations("market_session", formatMarketSession({
-        opened: state.open,
-        market: state.market,
-        session: state.label,
-        time: now.toISOString(),
-        instruments: state.instruments,
-        dataStatus: "freshness tracked",
-      }));
-      emitTelegramEvent("MarketSessionAlertSent", { market: state.market, session: state.label, opened: state.open, sent: sent.sent });
-      alerts.push({ state, sent });
+      alerts.push({ state, sent: { sent: false, reason: "individual_exchange_notifications_suppressed" } });
     }
     return alerts;
   }

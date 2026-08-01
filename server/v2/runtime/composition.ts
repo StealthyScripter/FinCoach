@@ -43,19 +43,24 @@ import { v2TelemetryService } from "../telemetry";
 import { loadV2RuntimeConfig, type V2RuntimeConfig, type V2RuntimeConfigValidation } from "./config";
 import { memorySnapshot } from "./memory";
 import { PgV2RuntimeRepository } from "./repository";
+import { weeklyResearchWindowState, type WeeklyResearchWindowState } from "./weeklyResearchWindow";
+import { marketSessionsService, type AggregateTradableWindow } from "../../marketSessionsService";
 import { eventLogService } from "../../eventLogService";
 import { structuredLogger } from "../../structuredLogger";
 import { createDomainEvent, type DomainEvent } from "../contracts";
 import { OrchestrationV2EventTypes } from "../orchestration/events";
+import { weeklyMarketNotificationService } from "../../telegram/weeklyMarketNotificationService";
+import { marketSnapshotService } from "../../marketSnapshotService";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
 
-export type V2RuntimeState = "disabled" | "initialized" | "running" | "idle" | "blocked" | "failed" | "stopping" | "stopped";
+export type V2RuntimeState = "disabled" | "initialized" | "running" | "idle" | "blocked" | "failed" | "stopping" | "stopped" | "scheduled_closed" | "starting_for_week" | "stopping_for_week" | "configuration_blocked";
 
 export class FinCoachV2Runtime {
   private pool: Pool | null = null;
   private repositories: V2Repositories | null = null;
   private timer: NodeJS.Timeout | null = null;
+  private weeklyTimer: NodeJS.Timeout | null = null;
   private bootId = randomUUID();
   private state: V2RuntimeState = "disabled";
   private lastRunAt: string | null = null;
@@ -64,6 +69,9 @@ export class FinCoachV2Runtime {
   private nextScheduledCycleAt: string | null = null;
   private activeCycle = false;
   private schedulerStarted = false;
+  private lastWeeklyWindowReason: string | null = null;
+  private lastWeeklyTransition: Record<string, unknown> | null = null;
+  private pendingWeeklyTransitionAt: string | null = null;
 
   constructor(
     private readonly env: NodeJS.ProcessEnv = process.env,
@@ -114,23 +122,11 @@ export class FinCoachV2Runtime {
       structuredLogger.v2({ level: "info", event: "v2_runtime_idle", message: "V2 runtime initialized without autostart", runtimeInstanceId: this.bootId });
       return this.status();
     }
-    if (this.schedulerStarted || this.timer) {
-      structuredLogger.v2({ level: "info", event: "scheduler_duplicate_suppressed", message: "Duplicate V2 scheduler start suppressed", runtimeInstanceId: this.bootId, activeTimers: this.timer ? 1 : 0 });
-      return this.status();
+    if (this.config.weeklyResearchSchedule.enabled) {
+      await this.applyWeeklyWindow("startup");
+    } else {
+      this.startCadence("v2-autostart-initial");
     }
-    this.schedulerStarted = true;
-    this.state = "running";
-    const schedule = () => {
-      if (!this.schedulerStarted || this.state === "stopping" || this.state === "stopped") return;
-      this.nextScheduledCycleAt = new Date(Date.now() + this.config.cadenceMs).toISOString();
-      structuredLogger.v2({ level: "info", event: "v2_cycle_scheduled", message: "Next V2 research cycle scheduled", runtimeInstanceId: this.bootId, nextScheduledCycleAt: this.nextScheduledCycleAt, cadenceMs: this.config.cadenceMs });
-      this.timer = setTimeout(() => {
-        this.timer = null;
-        void this.runOnce({ requestedBy: "v2-autostart" }).finally(schedule);
-      }, this.config.cadenceMs);
-      this.timer.unref();
-    };
-    void this.runOnce({ requestedBy: "v2-autostart-initial" }).finally(schedule);
     return this.status();
   }
 
@@ -139,7 +135,9 @@ export class FinCoachV2Runtime {
     this.state = "stopping";
     this.schedulerStarted = false;
     if (this.timer) clearTimeout(this.timer);
+    if (this.weeklyTimer) clearTimeout(this.weeklyTimer);
     this.timer = null;
+    this.weeklyTimer = null;
     this.nextScheduledCycleAt = null;
     await this.pool?.end().catch(() => undefined);
     this.state = "stopped";
@@ -151,7 +149,8 @@ export class FinCoachV2Runtime {
   async resume() {
     if (!this.config.runtimeEnabled) return this.status();
     if (!this.repositories) await this.initialize();
-    this.state = this.config.autostart ? "running" : "idle";
+    if (this.config.autostart && this.config.weeklyResearchSchedule.enabled) await this.applyWeeklyWindow("resume");
+    else this.state = this.config.autostart ? "running" : "idle";
     return this.status();
   }
 
@@ -172,6 +171,21 @@ export class FinCoachV2Runtime {
     }
     if (!this.repositories) await this.initialize();
     const repositories = this.requireRepositories();
+    const aggregate = marketSessionsService.aggregateTradableWindow(new Date());
+    const insideLead = isInsideAggregateLead(this.config.weeklyResearchSchedule.startLeadMinutes, aggregate.nextTradableOpenAt, new Date());
+    if (this.config.weeklyResearchSchedule.enabled && !aggregate.anyConfiguredInstrumentTradable && !insideLead) {
+      this.state = aggregate.calendarQuality === "unavailable" ? "configuration_blocked" : "scheduled_closed";
+      this.lastError = "weekly_market_window_closed";
+      this.lastRunResult = {
+        completed: false,
+        reason: "weekly_market_window_closed",
+        currentWindowClosesAt: aggregate.finalWeeklyCloseAt,
+        nextWindowOpensAt: aggregate.nextTradableOpenAt,
+        liveExecutionBlocked: true,
+      };
+      this.logAggregateWindowState(aggregate);
+      return this.lastRunResult;
+    }
     if (this.activeCycle) {
       structuredLogger.v2({ level: "warn", event: "research_cycle_suppressed", message: "V2 research cycle suppressed because one is already active", runtimeInstanceId: this.bootId, requestedBy: input.requestedBy ?? "manual" });
       return { completed: false, reason: "cycle_already_active" };
@@ -256,7 +270,10 @@ export class FinCoachV2Runtime {
   }
 
   status() {
-    const memory = memorySnapshot({ eventLogItems: eventLogService.snapshot().eventCount, activeCycles: this.activeCycle ? 1 : 0, activeTimers: this.timer ? 1 : 0 });
+    const weeklyWindow = weeklyResearchWindowState(this.config.weeklyResearchSchedule, new Date());
+    const aggregateTradableWindow = marketSessionsService.aggregateTradableWindow(new Date());
+    const activeTimers = (this.timer ? 1 : 0) + (this.weeklyTimer ? 1 : 0);
+    const memory = memorySnapshot({ eventLogItems: eventLogService.snapshot().eventCount, activeCycles: this.activeCycle ? 1 : 0, activeTimers });
     return {
       schemaVersion: "fincoach.v2.runtime-status.1",
       bootId: this.bootId,
@@ -267,6 +284,30 @@ export class FinCoachV2Runtime {
       lastRunResult: this.lastRunResult,
       lastError: this.lastError,
       nextScheduledCycleAt: this.nextScheduledCycleAt,
+      weeklyResearchSchedule: {
+        enabled: this.config.weeklyResearchSchedule.enabled,
+        timezone: this.config.weeklyResearchSchedule.timezone,
+        openDay: this.config.weeklyResearchSchedule.openDay,
+        openTime: this.config.weeklyResearchSchedule.openTime,
+        closeDay: this.config.weeklyResearchSchedule.closeDay,
+        closeTime: this.config.weeklyResearchSchedule.closeTime,
+        startLeadMinutes: this.config.weeklyResearchSchedule.startLeadMinutes,
+        currentWindow: weeklyWindow,
+        nextOpen: weeklyWindow.nextWindowOpensAt,
+        nextClose: weeklyWindow.nextWindowClosesAt,
+        timerActive: Boolean(this.weeklyTimer),
+      },
+      aggregateTradableWindow: {
+        anyConfiguredInstrumentTradable: aggregateTradableWindow.anyConfiguredInstrumentTradable,
+        finalWeeklyCloseAt: aggregateTradableWindow.finalWeeklyCloseAt,
+        nextTradableOpenAt: aggregateTradableWindow.nextTradableOpenAt,
+        instrumentsRemainingOpen: aggregateTradableWindow.instrumentsRemainingOpen,
+        calendarQuality: aggregateTradableWindow.calendarQuality,
+      },
+      researchSchedulerActive: this.schedulerStarted,
+      lastWeeklyTransition: this.lastWeeklyTransition,
+      weeklyNotificationDeliveryState: weeklyMarketNotificationService.snapshot(),
+      marketSnapshotScheduler: marketSnapshotService.status(),
       liveExecutionBlocked: true,
       liveMoneyExecution: this.config.liveExecutionEnabled ? "enabled_blocked_by_policy" : "blocked",
       demoBrokerExecution: this.config.demoBrokerExecutionEnabled ? "enabled_demo_only" : "disabled",
@@ -620,6 +661,105 @@ export class FinCoachV2Runtime {
     v2TelemetryService.counter("v2_research_cycles_total", 1, { module: "orchestration", operation: "runOnce", resultClass: "success" });
     return { status: blockers.length ? "completed_with_blockers" : "completed", evaluationsAttempted, evaluationsCompleted, observationsCreated: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypothesesCreated: hypothesesCount, hypothesesBlocked, strategiesCreated: strategiesCount, experimentsQueued: experimentsCount, backtestsCompleted: backtestsCount, verdictsCreated: verdictsCount, rankedCandidates: rankedCount, forwardTestsCreated: forwardTestsCount, signalsCreated: signalsCount, evaluationsCreated: evaluationsCount, journalEntriesCreated: journalEntriesCount, lessonsCreated: lessonsCount, lifecycleDecisionsCreated: lifecycleDecisionsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
   }
+
+  private startCadence(initialRequestedBy: string) {
+    if (this.schedulerStarted || this.timer) {
+      structuredLogger.v2({ level: "info", event: "scheduler_duplicate_suppressed", message: "Duplicate V2 scheduler start suppressed", runtimeInstanceId: this.bootId, activeTimers: this.timer ? 1 : 0 });
+      return;
+    }
+    this.schedulerStarted = true;
+    this.state = "running";
+    const schedule = () => {
+      if (!this.schedulerStarted || this.state === "stopping" || this.state === "stopped" || this.state === "scheduled_closed") return;
+      this.nextScheduledCycleAt = new Date(Date.now() + this.config.cadenceMs).toISOString();
+      structuredLogger.v2({ level: "info", event: "v2_cycle_scheduled", message: "Next V2 research cycle scheduled", runtimeInstanceId: this.bootId, nextScheduledCycleAt: this.nextScheduledCycleAt, cadenceMs: this.config.cadenceMs });
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        void this.runOnce({ requestedBy: "v2-autostart" }).finally(schedule);
+      }, this.config.cadenceMs);
+      this.timer.unref?.();
+    };
+    void this.runOnce({ requestedBy: initialRequestedBy }).finally(schedule);
+  }
+
+  private suspendCadence(reason: string) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.nextScheduledCycleAt = null;
+    this.schedulerStarted = false;
+    this.state = "scheduled_closed";
+    this.lastRunResult = { completed: false, reason, liveExecutionBlocked: true };
+  }
+
+  private async applyWeeklyWindow(trigger: string) {
+    const window = weeklyResearchWindowState(this.config.weeklyResearchSchedule, new Date());
+    const aggregate = marketSessionsService.aggregateTradableWindow(new Date());
+    const insideLead = isInsideAggregateLead(this.config.weeklyResearchSchedule.startLeadMinutes, aggregate.nextTradableOpenAt, new Date());
+    this.logWeeklyWindowState(window);
+    this.logAggregateWindowState(aggregate);
+    if (window.reason === "configuration_invalid" || aggregate.calendarQuality === "unavailable") {
+      this.suspendCadence("weekly_schedule_configuration_invalid");
+      this.state = "configuration_blocked";
+      this.scheduleWeeklyTimer(window);
+      return;
+    }
+    if (aggregate.anyConfiguredInstrumentTradable || insideLead) {
+      this.state = "starting_for_week";
+      const openBoundary = aggregate.openInstrumentSessions.map((session) => session.openedAt).filter(Boolean).sort()[0] ?? aggregate.nextTradableOpenAt;
+      if (aggregate.anyConfiguredInstrumentTradable && openBoundary) {
+        const result = await weeklyMarketNotificationService.sendOpen({ boundaryAt: openBoundary, window, aggregate });
+        this.lastWeeklyTransition = { kind: "open", boundaryAt: openBoundary, delivery: result };
+      }
+      this.startCadence(trigger === "startup" ? "v2-weekly-startup" : "v2-weekly-open");
+    } else {
+      this.state = "stopping_for_week";
+      if (trigger === "weekly_transition") {
+        const boundaryAt = this.pendingWeeklyTransitionAt ?? aggregate.finalWeeklyCloseAt ?? previousCloseBoundary(window);
+        const result = await weeklyMarketNotificationService.sendClose({ boundaryAt, window, aggregate });
+        this.lastWeeklyTransition = { kind: "close", boundaryAt, delivery: result };
+      }
+      this.suspendCadence("weekly_market_window_closed");
+    }
+    this.scheduleWeeklyTimer(window);
+  }
+
+  private scheduleWeeklyTimer(window: WeeklyResearchWindowState) {
+    if (this.weeklyTimer) clearTimeout(this.weeklyTimer);
+    const aggregate = marketSessionsService.aggregateTradableWindow(new Date());
+    const next = aggregate.anyConfiguredInstrumentTradable ? aggregate.finalWeeklyCloseAt : aggregate.nextTradableOpenAt;
+    if (!next) return;
+    this.pendingWeeklyTransitionAt = next;
+    const delay = Math.max(1_000, Math.min(Date.parse(next) - Date.now(), 2_147_000_000));
+    this.weeklyTimer = setTimeout(() => {
+      this.weeklyTimer = null;
+      void this.applyWeeklyWindow("weekly_transition");
+    }, delay);
+    this.weeklyTimer.unref?.();
+    structuredLogger.v2({ level: "info", event: "weekly_research_transition_scheduled", message: "Next weekly research transition scheduled", runtimeInstanceId: this.bootId, nextTransitionAt: next, activeTimers: (this.timer ? 1 : 0) + 1, reason: window.reason });
+  }
+
+  private logWeeklyWindowState(window: WeeklyResearchWindowState) {
+    if (this.lastWeeklyWindowReason === window.reason) return;
+    this.lastWeeklyWindowReason = window.reason;
+    structuredLogger.v2({ level: "info", event: "weekly_research_window_state_changed", message: "Weekly research window state changed", runtimeInstanceId: this.bootId, weeklyWindow: window, liveExecutionBlocked: true });
+  }
+
+  private logAggregateWindowState(window: AggregateTradableWindow) {
+    const reason = `${window.anyConfiguredInstrumentTradable}:${window.finalWeeklyCloseAt}:${window.nextTradableOpenAt}:${window.calendarQuality}`;
+    if (this.lastWeeklyWindowReason === reason) return;
+    this.lastWeeklyWindowReason = reason;
+    structuredLogger.v2({ level: "info", event: "aggregate_tradable_window_state_changed", message: "Aggregate tradable window state changed", runtimeInstanceId: this.bootId, aggregateTradableWindow: window, liveExecutionBlocked: true });
+  }
+}
+
+function previousCloseBoundary(window: WeeklyResearchWindowState) {
+  return window.currentWindowClosesAt ?? window.nextWindowClosesAt;
+}
+
+function isInsideAggregateLead(minutes: number, nextOpenAt: string | null, now: Date) {
+  if (!nextOpenAt || minutes <= 0) return false;
+  const delta = Date.parse(nextOpenAt) - now.getTime();
+  return delta > 0 && delta <= minutes * 60_000;
 }
 
 export function createFinCoachV2Runtime(env: NodeJS.ProcessEnv = process.env) {

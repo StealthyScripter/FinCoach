@@ -3,10 +3,12 @@ import { Pool } from "pg";
 import type {
   TelegramCommandAuditRecord,
   TelegramDeliveryRecord,
+  MarketSnapshotRecord,
   TelegramSchedulerRunRecord,
   TelegramSignalLifecycleUpdate,
   TelegramSignalRecord,
   TelegramSummaryRecord,
+  WeeklySessionNotificationRecord,
 } from "./contracts";
 
 export interface TelegramRepository {
@@ -31,6 +33,12 @@ export interface TelegramRepository {
   saveUpdateCursor(transport: string, updateId: number): Promise<void>;
   latestLifecycleHeartbeat(): Promise<{ heartbeatAt: string; cleanShutdown: boolean; processId: string | null } | null>;
   saveLifecycleState(input: { processId: string; heartbeatAt: string; cleanShutdown: boolean; startedAt: string; stoppedAt?: string | null }): Promise<void>;
+  claimWeeklySessionNotification(record: WeeklySessionNotificationRecord): Promise<{ claimed: boolean; record: WeeklySessionNotificationRecord }>;
+  completeWeeklySessionNotification(idempotencyKey: string, input: { status: "delivered" | "failed"; deliveryId?: string | null; lastError?: string | null; metadata?: Record<string, unknown> }): Promise<WeeklySessionNotificationRecord | null>;
+  latestWeeklySessionNotification(): Promise<WeeklySessionNotificationRecord | null>;
+  saveMarketSnapshot(record: MarketSnapshotRecord): Promise<{ inserted: boolean; record: MarketSnapshotRecord }>;
+  latestMarketSnapshot(period?: "morning" | "evening"): Promise<MarketSnapshotRecord | null>;
+  markMarketSnapshotDelivered(snapshotId: string, input: { deliveryId: string | null; deliveryStatus: "delivered" | "failed" }): Promise<MarketSnapshotRecord | null>;
   health(): { provider: "memory" | "postgres"; status: "healthy" | "disabled"; records: number };
 }
 
@@ -41,6 +49,8 @@ export class InMemoryTelegramRepository implements TelegramRepository {
   private summaries: TelegramSummaryRecord[] = [];
   private schedulerRuns = new Map<string, TelegramSchedulerRunRecord>();
   private commands: TelegramCommandAuditRecord[] = [];
+  private weeklySessionNotifications = new Map<string, WeeklySessionNotificationRecord>();
+  private marketSnapshots = new Map<string, MarketSnapshotRecord>();
   private updateCursors = new Map<string, number>();
   private lifecycle: { heartbeatAt: string; cleanShutdown: boolean; processId: string | null; startedAt: string; stoppedAt?: string | null } | null = null;
 
@@ -143,6 +153,46 @@ export class InMemoryTelegramRepository implements TelegramRepository {
 
   async saveLifecycleState(input: { processId: string; heartbeatAt: string; cleanShutdown: boolean; startedAt: string; stoppedAt?: string | null }) {
     this.lifecycle = input;
+  }
+
+  async claimWeeklySessionNotification(record: WeeklySessionNotificationRecord) {
+    const existing = this.weeklySessionNotifications.get(record.idempotencyKey);
+    if (existing?.status === "delivered" || existing?.status === "claimed") return { claimed: false, record: existing };
+    if (existing?.status === "failed" && existing.attemptCount >= 3) return { claimed: false, record: existing };
+    const claimed = { ...record, attemptCount: (existing?.attemptCount ?? 0) + 1, status: "claimed" as const, createdAt: existing?.createdAt ?? record.createdAt, updatedAt: record.updatedAt };
+    this.weeklySessionNotifications.set(record.idempotencyKey, claimed);
+    return { claimed: true, record: claimed };
+  }
+
+  async completeWeeklySessionNotification(idempotencyKey: string, input: { status: "delivered" | "failed"; deliveryId?: string | null; lastError?: string | null; metadata?: Record<string, unknown> }) {
+    const existing = this.weeklySessionNotifications.get(idempotencyKey);
+    if (!existing) return null;
+    const updated = { ...existing, status: input.status, deliveryId: input.deliveryId ?? existing.deliveryId, lastError: input.lastError ?? null, metadata: { ...existing.metadata, ...(input.metadata ?? {}) }, updatedAt: new Date().toISOString() };
+    this.weeklySessionNotifications.set(idempotencyKey, updated);
+    return updated;
+  }
+
+  async latestWeeklySessionNotification() {
+    return [...this.weeklySessionNotifications.values()].sort(desc("updatedAt"))[0] ?? null;
+  }
+
+  async saveMarketSnapshot(record: MarketSnapshotRecord) {
+    const existing = this.marketSnapshots.get(record.snapshotId);
+    if (existing) return { inserted: false, record: existing };
+    this.marketSnapshots.set(record.snapshotId, record);
+    return { inserted: true, record };
+  }
+
+  async latestMarketSnapshot(period?: "morning" | "evening") {
+    return [...this.marketSnapshots.values()].filter((snapshot) => !period || snapshot.period === period).sort(desc("generatedAt"))[0] ?? null;
+  }
+
+  async markMarketSnapshotDelivered(snapshotId: string, input: { deliveryId: string | null; deliveryStatus: "delivered" | "failed" }) {
+    const existing = this.marketSnapshots.get(snapshotId);
+    if (!existing) return null;
+    const updated = { ...existing, deliveryId: input.deliveryId, deliveryStatus: input.deliveryStatus, updatedAt: new Date().toISOString() };
+    this.marketSnapshots.set(snapshotId, updated);
+    return updated;
   }
 
   health() {
@@ -359,6 +409,93 @@ export class PgTelegramRepository implements TelegramRepository {
     );
   }
 
+  async claimWeeklySessionNotification(record: WeeklySessionNotificationRecord) {
+    if (!this.pool) throw new Error("DATABASE_URL is not configured");
+    const rows = await this.pool.query(
+      `INSERT INTO telegram_weekly_session_notifications
+       (idempotency_key, transition_type, boundary_at, status, delivery_id, attempt_count, last_error, metadata, created_at, updated_at)
+       VALUES ($1,$2,$3,'claimed',$4,1,$5,$6::jsonb,$7,$8)
+       ON CONFLICT (idempotency_key) DO UPDATE SET
+         status = CASE
+           WHEN telegram_weekly_session_notifications.status = 'failed' AND telegram_weekly_session_notifications.attempt_count < 3 THEN 'claimed'
+           ELSE telegram_weekly_session_notifications.status
+         END,
+         attempt_count = CASE
+           WHEN telegram_weekly_session_notifications.status = 'failed' AND telegram_weekly_session_notifications.attempt_count < 3 THEN telegram_weekly_session_notifications.attempt_count + 1
+           ELSE telegram_weekly_session_notifications.attempt_count
+         END,
+         updated_at = CASE
+           WHEN telegram_weekly_session_notifications.status = 'failed' AND telegram_weekly_session_notifications.attempt_count < 3 THEN EXCLUDED.updated_at
+           ELSE telegram_weekly_session_notifications.updated_at
+         END
+       RETURNING *`,
+      [record.idempotencyKey, record.transitionType, record.boundaryAt, record.deliveryId, record.lastError, JSON.stringify(record.metadata), record.createdAt, record.updatedAt],
+    );
+    const claimed = rowToWeeklySessionNotification(rows.rows[0]);
+    return { claimed: claimed.status === "claimed" && claimed.updatedAt === record.updatedAt, record: claimed };
+  }
+
+  async completeWeeklySessionNotification(idempotencyKey: string, input: { status: "delivered" | "failed"; deliveryId?: string | null; lastError?: string | null; metadata?: Record<string, unknown> }) {
+    if (!this.pool) return null;
+    const rows = await this.pool.query(
+      `UPDATE telegram_weekly_session_notifications
+       SET status = $2, delivery_id = COALESCE($3, delivery_id), last_error = $4, metadata = metadata || $5::jsonb, updated_at = $6
+       WHERE idempotency_key = $1
+       RETURNING *`,
+      [idempotencyKey, input.status, input.deliveryId ?? null, input.lastError ?? null, JSON.stringify(input.metadata ?? {}), new Date().toISOString()],
+    );
+    return rows.rows[0] ? rowToWeeklySessionNotification(rows.rows[0]) : null;
+  }
+
+  async latestWeeklySessionNotification() {
+    if (!this.pool) return null;
+    const rows = await this.pool.query(`SELECT * FROM telegram_weekly_session_notifications ORDER BY updated_at DESC LIMIT 1`);
+    return rows.rows[0] ? rowToWeeklySessionNotification(rows.rows[0]) : null;
+  }
+
+  async saveMarketSnapshot(record: MarketSnapshotRecord) {
+    if (!this.pool) throw new Error("DATABASE_URL is not configured");
+    const rows = await this.pool.query(
+      `INSERT INTO telegram_market_snapshots
+       (snapshot_id, period, scheduled_local_date, scheduled_local_time, generated_at, timezone, payload, message, delivery_id, delivery_status, schema_version, correlation_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (snapshot_id) DO UPDATE SET
+         payload = telegram_market_snapshots.payload,
+         message = telegram_market_snapshots.message,
+         delivery_id = telegram_market_snapshots.delivery_id,
+         delivery_status = telegram_market_snapshots.delivery_status,
+         updated_at = telegram_market_snapshots.updated_at
+       RETURNING *`,
+      marketSnapshotValues(record),
+    );
+    const saved = rowToMarketSnapshot(rows.rows[0]);
+    return { inserted: saved.createdAt === record.createdAt && saved.updatedAt === record.updatedAt, record: saved };
+  }
+
+  async latestMarketSnapshot(period?: "morning" | "evening") {
+    if (!this.pool) return null;
+    const rows = await this.pool.query(
+      `SELECT * FROM telegram_market_snapshots
+       WHERE ($1::text IS NULL OR period = $1)
+       ORDER BY generated_at DESC
+       LIMIT 1`,
+      [period ?? null],
+    );
+    return rows.rows[0] ? rowToMarketSnapshot(rows.rows[0]) : null;
+  }
+
+  async markMarketSnapshotDelivered(snapshotId: string, input: { deliveryId: string | null; deliveryStatus: "delivered" | "failed" }) {
+    if (!this.pool) return null;
+    const rows = await this.pool.query(
+      `UPDATE telegram_market_snapshots
+       SET delivery_id = $2, delivery_status = $3, updated_at = $4
+       WHERE snapshot_id = $1
+       RETURNING *`,
+      [snapshotId, input.deliveryId, input.deliveryStatus, new Date().toISOString()],
+    );
+    return rows.rows[0] ? rowToMarketSnapshot(rows.rows[0]) : null;
+  }
+
   health() {
     return { provider: "postgres" as const, status: this.pool ? "healthy" as const : "disabled" as const, records: this.records };
   }
@@ -408,6 +545,59 @@ function rowToDelivery(row: Record<string, unknown>): TelegramDeliveryRecord {
     latencyMs: row.latency_ms === null ? null : Number(row.latency_ms),
     correlationId: String(row.correlation_id),
     metadata: (row.metadata ?? {}) as Record<string, unknown>,
+    createdAt: new Date(row.created_at as string).toISOString(),
+    updatedAt: new Date(row.updated_at as string).toISOString(),
+  };
+}
+
+function rowToWeeklySessionNotification(row: Record<string, unknown>): WeeklySessionNotificationRecord {
+  return {
+    idempotencyKey: String(row.idempotency_key),
+    transitionType: row.transition_type as WeeklySessionNotificationRecord["transitionType"],
+    boundaryAt: new Date(row.boundary_at as string).toISOString(),
+    status: row.status as WeeklySessionNotificationRecord["status"],
+    deliveryId: row.delivery_id ? String(row.delivery_id) : null,
+    attemptCount: Number(row.attempt_count),
+    lastError: row.last_error ? String(row.last_error) : null,
+    metadata: (row.metadata ?? {}) as Record<string, unknown>,
+    createdAt: new Date(row.created_at as string).toISOString(),
+    updatedAt: new Date(row.updated_at as string).toISOString(),
+  };
+}
+
+function marketSnapshotValues(record: MarketSnapshotRecord) {
+  return [
+    record.snapshotId,
+    record.period,
+    record.scheduledLocalDate,
+    record.scheduledLocalTime,
+    record.generatedAt,
+    record.timezone,
+    JSON.stringify(record.payload),
+    record.message,
+    record.deliveryId,
+    record.deliveryStatus,
+    record.schemaVersion,
+    record.correlationId,
+    record.createdAt,
+    record.updatedAt,
+  ];
+}
+
+function rowToMarketSnapshot(row: Record<string, unknown>): MarketSnapshotRecord {
+  return {
+    snapshotId: String(row.snapshot_id),
+    period: row.period as MarketSnapshotRecord["period"],
+    scheduledLocalDate: String(row.scheduled_local_date),
+    scheduledLocalTime: String(row.scheduled_local_time),
+    generatedAt: new Date(row.generated_at as string).toISOString(),
+    timezone: String(row.timezone),
+    payload: (row.payload ?? {}) as Record<string, unknown>,
+    message: String(row.message),
+    deliveryId: row.delivery_id ? String(row.delivery_id) : null,
+    deliveryStatus: row.delivery_status as MarketSnapshotRecord["deliveryStatus"],
+    schemaVersion: String(row.schema_version),
+    correlationId: String(row.correlation_id),
     createdAt: new Date(row.created_at as string).toISOString(),
     updatedAt: new Date(row.updated_at as string).toISOString(),
   };

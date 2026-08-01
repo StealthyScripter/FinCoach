@@ -7,6 +7,7 @@ import { telegramMetrics } from "./metrics";
 import { telegramReportingService, type TelegramReportingService } from "./reportingService";
 import { telegramRepository, type TelegramRepository } from "./repository";
 import { buildHealthMessage } from "./health";
+import { structuredLogger } from "../structuredLogger";
 
 const READ_ONLY_COMMANDS = new Set([
   "/status",
@@ -29,6 +30,15 @@ const READ_ONLY_COMMANDS = new Set([
   "/progress",
   "/pipeline",
   "/research_blockers",
+  "/open_exchanges",
+  "/markets_open",
+  "/market_status",
+  "/market_snapshot",
+  "/snapshot",
+  "/morning_snapshot",
+  "/evening_snapshot",
+  "/upcoming_events",
+  "/market_events",
   "/blockers",
   "/readiness",
   "/observations",
@@ -98,6 +108,8 @@ export class TelegramCommandRouter {
       "/open_trades /exposure /today /week /strategies /kill_status /performance /restarts",
       "/v2_status /v2_metrics /research_today /research_throughput /data_reconciliation",
       "/research_progress /research_blockers",
+      "/open_exchanges /markets_open /market_status",
+      "/market_snapshot /morning_snapshot /evening_snapshot /upcoming_events",
       "/observations /hypotheses /experiments /backtests",
       "/court_cases /strategy_leaderboard /forward_tests /signals /evaluator_results /lessons /strategy_health",
       "Confirmation required: /pause_demo /resume_demo /disable_automation /kill",
@@ -158,6 +170,47 @@ export class TelegramCommandRouter {
       case "/readiness": {
         const { v2OperationsService } = await import("../v2/operations");
         return v2OperationsService.telegramResearchBlockers();
+      }
+      case "/open_exchanges":
+      case "/markets_open":
+      case "/market_status": {
+        const startedAt = Date.now();
+        const { marketSessionsService } = await import("../marketSessionsService");
+        const message = marketSessionsService.openExchangesTelegramMessage();
+        const exchanges = marketSessionsService.marketSessions().exchanges;
+        structuredLogger.telegram({
+          level: "info",
+          event: "open_exchanges_command_rendered",
+          message: "Telegram open exchanges command rendered",
+          durationMs: Date.now() - startedAt,
+          exchangeCount: exchanges.length,
+          openExchangeCount: exchanges.filter((exchange) => exchange.status === "open").length,
+          delivery: "reply_returned_to_transport",
+        });
+        return message;
+      }
+      case "/market_snapshot":
+      case "/snapshot": {
+        const { marketSnapshotService } = await import("../marketSnapshotService");
+        const latest = await marketSnapshotService.latest();
+        return latest ? [`Market Snapshot`, `Generated: ${latest.generatedAt}`, `Freshness: ${freshnessSummary(latest.payload)}`, "", latest.message].join("\n") : "No market snapshot has been generated yet. Live execution: blocked";
+      }
+      case "/morning_snapshot": {
+        const { marketSnapshotService } = await import("../marketSnapshotService");
+        const result = await marketSnapshotService.generateOrRetrieve("morning");
+        return result.snapshot.message;
+      }
+      case "/evening_snapshot": {
+        const { marketSnapshotService } = await import("../marketSnapshotService");
+        const result = await marketSnapshotService.generateOrRetrieve("evening");
+        return result.snapshot.message;
+      }
+      case "/upcoming_events":
+      case "/market_events": {
+        const { marketSnapshotService } = await import("../marketSnapshotService");
+        const events = marketSnapshotService.upcomingEvents();
+        if (!events.length) return "No upcoming configured market events in the lookahead window.\nLive execution: blocked";
+        return ["Upcoming Market Events", ...events.map((item, index) => `${index + 1}. ${item.event.title}\n   Time: ${item.event.startsAt}\n   Impact: ${item.impactScore.finalScore}/10\n   Affected configured symbols: ${item.impactScore.affectedInstruments.join(", ") || "none mapped"}\n   Score basis: ${item.impactScore.explanation}`), "Live execution: blocked"].join("\n");
       }
       case "/performance":
         return this.performanceMessage();
@@ -346,6 +399,15 @@ function normalizeCommand(command: string) {
 
 function isLiveTradingCommand(command: string) {
   return /\b(live|real|funded|disable_demo|override|live_account|real_money|enable_live|connect_live)\b/i.test(command);
+}
+
+function freshnessSummary(payload: Record<string, unknown>) {
+  const freshness = payload.freshness;
+  if (!freshness || typeof freshness !== "object") return "unknown";
+  const values = Object.values(freshness as Record<string, { status?: string }>).map((item) => item.status ?? "unknown");
+  if (values.includes("stale") || values.includes("unavailable")) return "degraded";
+  if (values.includes("delayed")) return "delayed";
+  return "healthy";
 }
 
 export const telegramCommandRouter = new TelegramCommandRouter();

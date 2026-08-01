@@ -268,6 +268,38 @@ export type TelegramCommandAuditRecord = {
   createdAt: string;
 };
 
+export type WeeklySessionNotificationRecord = {
+  idempotencyKey: string;
+  transitionType: "open" | "close";
+  boundaryAt: string;
+  status: "claimed" | "delivered" | "failed" | "skipped";
+  deliveryId: string | null;
+  attemptCount: number;
+  lastError: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MarketSnapshotPeriod = "morning" | "evening";
+
+export type MarketSnapshotRecord = {
+  snapshotId: string;
+  period: MarketSnapshotPeriod;
+  scheduledLocalDate: string;
+  scheduledLocalTime: string;
+  generatedAt: string;
+  timezone: string;
+  payload: Record<string, unknown>;
+  message: string;
+  deliveryId: string | null;
+  deliveryStatus: "pending" | "delivered" | "failed";
+  schemaVersion: string;
+  correlationId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type TelegramMetricsSnapshot = {
   sendsAttempted: number;
   sendsSucceeded: number;

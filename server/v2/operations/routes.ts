@@ -3,6 +3,8 @@ import { v2OperationsService, type V2OperationsService } from "./service";
 import type { V2OperationsCollection } from "./contracts";
 import { v2TelemetryService } from "../telemetry";
 import { getFinCoachV2Runtime } from "../runtime/composition";
+import { marketSessionsService } from "../../marketSessionsService";
+import { marketSnapshotService } from "../../marketSnapshotService";
 
 const routes: [string, V2OperationsCollection][] = [
   ["/api/v2/observations", "observations"],
@@ -27,6 +29,18 @@ export function registerV2OperationsRoutes(app: Express, service: V2OperationsSe
   app.get("/api/v2/research/blockers", async (_req: Request, res: Response) => send(res, await service.researchBlockers()));
   app.get("/api/v2/metrics", async (_req: Request, res: Response) => res.status(200).json({ ...v2TelemetryService.snapshot(), liveExecutionBlocked: true }));
   app.get("/api/v2/runtime/status", async (_req: Request, res: Response) => res.status(200).json(getFinCoachV2Runtime().status()));
+  app.get("/api/v2/market-sessions", async (_req: Request, res: Response) => res.status(200).json(marketSessionsService.marketSessions()));
+  app.get("/api/v2/market-snapshot", async (_req: Request, res: Response) => res.status(200).json((await marketSnapshotService.latest()) ?? { schemaVersion: "fincoach.v2.market-snapshot.1", status: "available_empty", liveExecutionBlocked: true }));
+  app.get("/api/v2/market-snapshot/events", async (req: Request, res: Response) => res.status(200).json({
+    schemaVersion: "fincoach.v2.market-snapshot-events.1",
+    generatedAt: new Date().toISOString(),
+    events: marketSnapshotService.upcomingEvents(new Date(), {
+      lookaheadHours: boundedNumberParam(req.query.lookaheadHours, 1, 168),
+      minimumImpact: boundedNumberParam(req.query.minimumImpact, 1, 10),
+      limit: boundedNumberParam(req.query.limit, 1, 50),
+    }),
+    liveExecutionBlocked: true,
+  }));
   if (typeof (app as Express & { post?: Express["post"] }).post === "function") {
     app.post("/api/v2/runtime/run-once", async (_req: Request, res: Response) => res.status(200).json(await getFinCoachV2Runtime().runOnce({ requestedBy: "api" })));
     app.post("/api/v2/runtime/resume", async (_req: Request, res: Response) => res.status(200).json(await getFinCoachV2Runtime().resume()));
@@ -63,4 +77,10 @@ function numberParam(value: unknown) {
 
 function stringParam(value: unknown) {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function boundedNumberParam(value: unknown, min: number, max: number) {
+  const parsed = numberParam(value);
+  if (parsed === undefined) return undefined;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
 }

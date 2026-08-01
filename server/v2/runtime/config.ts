@@ -48,6 +48,9 @@ export type V2RuntimeConfig = {
   memoryRetentionLimit: number;
   leaseTtlMs: number;
   leaseRenewIntervalMs: number;
+  weeklyResearchSchedule: WeeklyResearchScheduleConfig;
+  continuousMarketWeeklyPause: ContinuousMarketWeeklyPauseConfig;
+  marketSnapshot: MarketSnapshotConfig;
 };
 
 export type V2RuntimeConfigValidation = {
@@ -55,6 +58,35 @@ export type V2RuntimeConfigValidation = {
   errors: string[];
   warnings: string[];
   config: V2RuntimeConfig;
+};
+
+export type WeeklyResearchScheduleConfig = {
+  enabled: boolean;
+  timezone: string;
+  openDay: number;
+  openTime: string;
+  closeDay: number;
+  closeTime: string;
+  startLeadMinutes: number;
+};
+
+export type ContinuousMarketWeeklyPauseConfig = {
+  enabled: boolean;
+  timezone: string;
+  pauseDay: number;
+  pauseTime: string;
+  resumeDay: number;
+  resumeTime: string;
+};
+
+export type MarketSnapshotConfig = {
+  enabled: boolean;
+  timezone: string;
+  morningTime: string;
+  eveningTime: string;
+  includeWeekends: boolean;
+  maxEvents: number;
+  lookaheadHours: number;
 };
 
 const DEFAULT_SYMBOLS = ["EUR_USD", "GBP_USD"];
@@ -109,6 +141,32 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
     memoryRetentionLimit: int(env.FINCOACH_V2_MEMORY_RETENTION_LIMIT, 1000),
     leaseTtlMs: int(env.FINCOACH_V2_LEASE_TTL_MS, 60_000),
     leaseRenewIntervalMs: int(env.FINCOACH_V2_LEASE_RENEW_INTERVAL_MS, 20_000),
+    weeklyResearchSchedule: {
+      enabled: bool(env.FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED, true),
+      timezone: clean(env.FINCOACH_WEEKLY_RESEARCH_TIMEZONE) ?? "America/New_York",
+      openDay: int(env.FINCOACH_WEEKLY_RESEARCH_OPEN_DAY, 0),
+      openTime: clean(env.FINCOACH_WEEKLY_RESEARCH_OPEN_TIME) ?? "17:00",
+      closeDay: int(env.FINCOACH_WEEKLY_RESEARCH_CLOSE_DAY, 5),
+      closeTime: clean(env.FINCOACH_WEEKLY_RESEARCH_CLOSE_TIME) ?? "18:00",
+      startLeadMinutes: int(env.FINCOACH_WEEKLY_RESEARCH_START_LEAD_MINUTES, 5),
+    },
+    continuousMarketWeeklyPause: {
+      enabled: bool(env.FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_ENABLED, true),
+      timezone: "America/New_York",
+      pauseDay: int(env.FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_DAY, 5),
+      pauseTime: clean(env.FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_TIME) ?? "18:00",
+      resumeDay: int(env.FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_DAY, 0),
+      resumeTime: clean(env.FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_TIME) ?? "17:00",
+    },
+    marketSnapshot: {
+      enabled: bool(env.FINCOACH_MARKET_SNAPSHOT_ENABLED, true),
+      timezone: clean(env.FINCOACH_MARKET_SNAPSHOT_TIMEZONE) ?? "America/New_York",
+      morningTime: clean(env.FINCOACH_MARKET_SNAPSHOT_MORNING_TIME) ?? "08:00",
+      eveningTime: clean(env.FINCOACH_MARKET_SNAPSHOT_EVENING_TIME) ?? "20:00",
+      includeWeekends: bool(env.FINCOACH_MARKET_SNAPSHOT_INCLUDE_WEEKENDS, true),
+      maxEvents: Math.min(50, int(env.FINCOACH_MARKET_SNAPSHOT_MAX_EVENTS, 12)),
+      lookaheadHours: Math.min(168, int(env.FINCOACH_MARKET_SNAPSHOT_LOOKAHEAD_HOURS, 24)),
+    },
   };
 
   const errors: string[] = [];
@@ -132,12 +190,53 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.leaseRenewIntervalMs >= config.leaseTtlMs) errors.push("FINCOACH_V2_LEASE_RENEW_INTERVAL_MS must be less than FINCOACH_V2_LEASE_TTL_MS.");
   if (config.telegramTransport === "webhook" && env.TELEGRAM_LONG_POLLING_ENABLED === "true") errors.push("Webhook and long polling cannot both be active.");
   if (config.telegramTransport === "long_polling" && env.TELEGRAM_WEBHOOK_ENABLED === "true") errors.push("Long polling and webhook cannot both be active.");
+  if (config.weeklyResearchSchedule.enabled) {
+    const weeklyErrors = validateWeeklyResearchSchedule(config.weeklyResearchSchedule);
+    errors.push(...weeklyErrors);
+  }
+  if (config.continuousMarketWeeklyPause.enabled) {
+    if (!validDay(config.continuousMarketWeeklyPause.pauseDay)) errors.push("FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_DAY must be an integer from 0 to 6.");
+    if (!validDay(config.continuousMarketWeeklyPause.resumeDay)) errors.push("FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_DAY must be an integer from 0 to 6.");
+    if (!validTime(config.continuousMarketWeeklyPause.pauseTime)) errors.push("FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_TIME must use HH:mm.");
+    if (!validTime(config.continuousMarketWeeklyPause.resumeTime)) errors.push("FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_TIME must use HH:mm.");
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: config.marketSnapshot.timezone }).format(new Date());
+  } catch {
+    errors.push("FINCOACH_MARKET_SNAPSHOT_TIMEZONE must be a valid IANA timezone.");
+  }
+  if (!validTime(config.marketSnapshot.morningTime)) errors.push("FINCOACH_MARKET_SNAPSHOT_MORNING_TIME must use HH:mm.");
+  if (!validTime(config.marketSnapshot.eveningTime)) errors.push("FINCOACH_MARKET_SNAPSHOT_EVENING_TIME must use HH:mm.");
   if (!config.researchSignalEnabled) warnings.push("V2 research signal creation is disabled.");
   if (!config.telegramSignalPublicationEnabled) warnings.push("Telegram trading signal publication is disabled.");
   if (!config.paperExecutionEnabled) warnings.push("Internal paper execution is disabled.");
   if (!config.demoBrokerExecutionEnabled) warnings.push("Demo broker execution is disabled.");
 
   return { ok: errors.length === 0, errors, warnings, config };
+}
+
+function validateWeeklyResearchSchedule(config: WeeklyResearchScheduleConfig) {
+  const errors: string[] = [];
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: config.timezone }).format(new Date());
+  } catch {
+    errors.push("FINCOACH_WEEKLY_RESEARCH_TIMEZONE must be a valid IANA timezone.");
+  }
+  if (!Number.isInteger(config.openDay) || config.openDay < 0 || config.openDay > 6) errors.push("FINCOACH_WEEKLY_RESEARCH_OPEN_DAY must be an integer from 0 to 6.");
+  if (!Number.isInteger(config.closeDay) || config.closeDay < 0 || config.closeDay > 6) errors.push("FINCOACH_WEEKLY_RESEARCH_CLOSE_DAY must be an integer from 0 to 6.");
+  if (!validTime(config.openTime)) errors.push("FINCOACH_WEEKLY_RESEARCH_OPEN_TIME must use HH:mm.");
+  if (!validTime(config.closeTime)) errors.push("FINCOACH_WEEKLY_RESEARCH_CLOSE_TIME must use HH:mm.");
+  if (!Number.isInteger(config.startLeadMinutes) || config.startLeadMinutes < 0 || config.startLeadMinutes > 1440) errors.push("FINCOACH_WEEKLY_RESEARCH_START_LEAD_MINUTES must be an integer from 0 to 1440.");
+  return errors;
+}
+
+function validTime(value: string) {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+  return Boolean(match);
+}
+
+function validDay(value: number) {
+  return Number.isInteger(value) && value >= 0 && value <= 6;
 }
 
 function clean(value: string | undefined) {
