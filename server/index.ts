@@ -8,7 +8,8 @@ import { strategyEvidenceStore } from "./execution/strategyEvidenceStore";
 import { startDemoRunScheduler } from "./demoRunScheduler";
 import { demoOnlyPolicyService } from "./execution/demoOnlyPolicy";
 import { startTelegramOperations } from "./telegram";
-import { getFinCoachV2Runtime } from "./v2/runtime/composition";
+import { configureWeeklyTransitionNotifier, getFinCoachV2Runtime } from "./v2/runtime/composition";
+import { weeklyMarketNotificationService } from "./telegram/weeklyMarketNotificationService";
 import { structuredLogger } from "./structuredLogger";
 
 const app = express();
@@ -86,6 +87,9 @@ app.use((req, res, next) => {
   }
   structuredLogger.audit({ level: "info", event: "startup_safety_check_passed", message: "MarketPilot demo-only safety check passed" });
   await strategyEvidenceStore.bootstrap();
+  configureWeeklyTransitionNotifier((input) => input.kind === "open"
+    ? weeklyMarketNotificationService.sendOpen(input)
+    : weeklyMarketNotificationService.sendClose(input));
   const v2Runtime = getFinCoachV2Runtime();
   await v2Runtime.initialize();
   await registerRoutes(httpServer, app);

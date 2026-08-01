@@ -49,10 +49,11 @@ import { eventLogService } from "../../eventLogService";
 import { structuredLogger } from "../../structuredLogger";
 import { createDomainEvent, type DomainEvent } from "../contracts";
 import { OrchestrationV2EventTypes } from "../orchestration/events";
-import { weeklyMarketNotificationService } from "../../telegram/weeklyMarketNotificationService";
 import { marketSnapshotService } from "../../marketSnapshotService";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
+type WeeklyTransitionNotifier = (input: { kind: "open" | "close"; boundaryAt: string; window: WeeklyResearchWindowState; aggregate: AggregateTradableWindow }) => Promise<unknown>;
+let weeklyTransitionNotifier: WeeklyTransitionNotifier | null = null;
 
 export type V2RuntimeState = "disabled" | "initialized" | "running" | "idle" | "blocked" | "failed" | "stopping" | "stopped" | "scheduled_closed" | "starting_for_week" | "stopping_for_week" | "configuration_blocked";
 
@@ -306,7 +307,7 @@ export class FinCoachV2Runtime {
       },
       researchSchedulerActive: this.schedulerStarted,
       lastWeeklyTransition: this.lastWeeklyTransition,
-      weeklyNotificationDeliveryState: weeklyMarketNotificationService.snapshot(),
+      weeklyNotificationDeliveryState: this.lastWeeklyTransition,
       marketSnapshotScheduler: marketSnapshotService.status(),
       liveExecutionBlocked: true,
       liveMoneyExecution: this.config.liveExecutionEnabled ? "enabled_blocked_by_policy" : "blocked",
@@ -707,7 +708,7 @@ export class FinCoachV2Runtime {
       this.state = "starting_for_week";
       const openBoundary = aggregate.openInstrumentSessions.map((session) => session.openedAt).filter(Boolean).sort()[0] ?? aggregate.nextTradableOpenAt;
       if (aggregate.anyConfiguredInstrumentTradable && openBoundary) {
-        const result = await weeklyMarketNotificationService.sendOpen({ boundaryAt: openBoundary, window, aggregate });
+        const result = await weeklyTransitionNotifier?.({ kind: "open", boundaryAt: openBoundary, window, aggregate }) ?? { skipped: true, reason: "weekly_transition_notifier_not_configured" };
         this.lastWeeklyTransition = { kind: "open", boundaryAt: openBoundary, delivery: result };
       }
       this.startCadence(trigger === "startup" ? "v2-weekly-startup" : "v2-weekly-open");
@@ -715,7 +716,7 @@ export class FinCoachV2Runtime {
       this.state = "stopping_for_week";
       if (trigger === "weekly_transition") {
         const boundaryAt = this.pendingWeeklyTransitionAt ?? aggregate.finalWeeklyCloseAt ?? previousCloseBoundary(window);
-        const result = await weeklyMarketNotificationService.sendClose({ boundaryAt, window, aggregate });
+        const result = await weeklyTransitionNotifier?.({ kind: "close", boundaryAt, window, aggregate }) ?? { skipped: true, reason: "weekly_transition_notifier_not_configured" };
         this.lastWeeklyTransition = { kind: "close", boundaryAt, delivery: result };
       }
       this.suspendCadence("weekly_market_window_closed");
@@ -764,6 +765,10 @@ function isInsideAggregateLead(minutes: number, nextOpenAt: string | null, now: 
 
 export function createFinCoachV2Runtime(env: NodeJS.ProcessEnv = process.env) {
   return new FinCoachV2Runtime(env);
+}
+
+export function configureWeeklyTransitionNotifier(notifier: WeeklyTransitionNotifier | null) {
+  weeklyTransitionNotifier = notifier;
 }
 
 let runtime: FinCoachV2Runtime | null = null;
