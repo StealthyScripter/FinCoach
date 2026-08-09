@@ -97,6 +97,48 @@ import { InMemoryTelegramRepository } from "./telegram/repository";
 }
 
 {
+  const operations = new V2OperationsService({
+    operations: {
+      async latestReport() { return null; },
+      async getReportByDate() { return null; },
+      async saveReport(record) { return { inserted: true, record }; },
+      async saveDelivery(record) { return { inserted: true, record }; },
+      async researchProgress() {
+        return {
+          schemaVersion: "fincoach.v2.research-progress.1",
+          status: "ok",
+          generatedAt: "2026-08-09T19:18:00.000Z",
+          windows: { currentHour: { observations: 0 }, running24Hours: { observations: 0 }, running7Days: { observations: 0 }, total: { observations: 0 } },
+          coverage: { symbols: [], timeframes: [], detectors: [], strategyFamilies: [], mostRecentMarketDataTimestamp: null },
+          pipeline: { observations: 0, hypotheses: 1, strategies: 1, experiments: 1, backtests: 1, verdicts: 1, rankedCandidates: 1, forwardTests: 0, signals: 0, evaluations: 0, journalEntries: 0, lessons: 0, lifecycleDecisions: 0, pilotScorecards: 0, detectorEvaluations: { attemptedCurrentHour: 0, completedCurrentHour: 0, duplicatesSuppressedCurrentHour: 0, failuresCurrentHour: 0 } },
+          readiness: { currentStage: "ranked candidate", nextStage: "forward-test eligible", liveExecutionBlocked: true, paperExecutionState: "disabled", demoExecutionState: "demo_only_gated" },
+        };
+      },
+      async researchBlockers() {
+        return {
+          schemaVersion: "fincoach.v2.research-blockers.1",
+          generatedAt: "2026-08-09T19:18:00.000Z",
+          highestSeverity: "info",
+          pipeline: { rankedCandidates: 1, forwardTests: 0 },
+          blockers: [],
+        };
+      },
+    },
+    ranking: { listPage: async () => ({ items: [{ rankingId: "ranking-1" }], total: 1 }) },
+    evidence: { "forward-tests": { listPage: async () => ({ items: [], total: 0 }) } },
+  }, {}, () => ({
+    runtimeConfiguration: { forwardTestingEnabled: false, maxActiveForwardTests: 0, researchSignalEnabled: false },
+    aggregateTradableWindow: { anyConfiguredInstrumentTradable: true, calendarQuality: "partial" },
+  }));
+  assert.match(await operations.telegramSummary("/strategy_leaderboard"), /Items: 1/);
+  assert.match(await operations.telegramSummary("/strategy_leaderboard"), /Availability: available/);
+  assert.match(await operations.telegramSummary("/forward_tests"), /Availability: available_empty/);
+  const blockers = await operations.telegramResearchBlockers();
+  assert.match(blockers, /forward_testing_disabled/);
+  assert.match(blockers, /forward_test_capacity_zero/);
+}
+
+{
   const runtime = createFinCoachV2Runtime({
     DATABASE_URL: "postgres://user:pass@localhost:5432/fincoach",
     FINCOACH_V2_RUNTIME_ENABLED: "true",
@@ -113,6 +155,101 @@ import { InMemoryTelegramRepository } from "./telegram/repository";
   assert.equal(first.memory.activeTimers, 0);
   assert.equal(second.memory.activeTimers <= 1, true);
   await runtime.stop("test");
+}
+
+{
+  const restoreClock = useFakeClock("2026-08-08T19:00:00.000Z");
+  try {
+    const runtime = createFinCoachV2Runtime(autostartEnv());
+    (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
+    const boot = await runtime.start();
+    assert.equal(boot.state, "suspended_waiting_for_market");
+    assert.equal(boot.weeklyResearchSchedule.timerActive, true);
+    assert.equal(boot.weeklyResearchSchedule.nextWakeKind, "lead");
+    assert.equal(boot.weeklyResearchSchedule.nextWakeAt, "2026-08-09T20:55:00.000Z");
+    assert.equal(boot.researchSchedulerActive, false);
+    assert.equal(boot.researchCadenceActive, false);
+    assert.equal(boot.nextScheduledCycleAt, null);
+    assert.equal((boot.memory as { activeTimers: number }).activeTimers, 1);
+    await runtime.stop("test");
+  } finally {
+    restoreClock();
+  }
+}
+
+{
+  const restoreClock = useFakeClock("2026-08-09T20:56:00.000Z");
+  try {
+    const runtime = createFinCoachV2Runtime(autostartEnv());
+    (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
+    await runtime.start();
+    const lead = runtime.status();
+    assert.equal(lead.state, "starting_for_week");
+    assert.equal(lead.weeklyResearchSchedule.nextWakeKind, "open");
+    assert.equal(lead.weeklyResearchSchedule.nextWakeAt, "2026-08-09T21:00:00.000Z");
+    assert.equal(lead.researchSchedulerActive, false);
+    assert.equal(lead.researchCadenceActive, false);
+    assert.equal(lead.nextScheduledCycleAt, null);
+    await runtime.stop("test");
+  } finally {
+    restoreClock();
+  }
+}
+
+{
+  const restoreClock = useFakeClock("2026-08-09T21:00:00.000Z");
+  try {
+    const runtime = createFinCoachV2Runtime(autostartEnv());
+    (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
+    await runtime.start();
+    await flushAsync();
+    const opened = runtime.status();
+    assert.equal(opened.weeklyResearchSchedule.nextWakeKind, "close");
+    assert.equal(opened.weeklyResearchSchedule.nextWakeAt, "2026-08-14T21:00:00.000Z");
+    assert.equal(opened.researchSchedulerActive, true);
+    assert.equal(opened.researchCadenceActive, true);
+    assert.ok(opened.nextScheduledCycleAt);
+    assert.equal((opened.memory as { activeTimers: number }).activeTimers <= 2, true);
+    await runtime.resume();
+    const resumed = runtime.status();
+    assert.equal((resumed.memory as { activeTimers: number }).activeTimers <= 2, true);
+    await runtime.stop("test");
+  } finally {
+    restoreClock();
+  }
+}
+
+{
+  const restoreClock = useFakeClock("2026-08-14T21:00:00.000Z");
+  try {
+    const runtime = createFinCoachV2Runtime(autostartEnv());
+    (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
+    await runtime.start();
+    const closed = runtime.status();
+    assert.equal(closed.state, "suspended_waiting_for_market");
+    assert.equal(closed.weeklyResearchSchedule.nextWakeKind, "lead");
+    assert.equal(closed.weeklyResearchSchedule.nextWakeAt, "2026-08-16T20:55:00.000Z");
+    assert.equal(closed.researchSchedulerActive, false);
+    assert.equal(closed.researchCadenceActive, false);
+    await runtime.stop("test");
+  } finally {
+    restoreClock();
+  }
+}
+
+{
+  const restoreClock = useFakeClock("2026-11-01T19:00:00.000Z");
+  try {
+    const runtime = createFinCoachV2Runtime(autostartEnv());
+    (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
+    const status = await runtime.start();
+    assert.equal(status.weeklyResearchSchedule.nextWakeKind, "lead");
+    assert.equal(status.weeklyResearchSchedule.nextWakeAt, "2026-11-01T21:55:00.000Z");
+    assert.equal(status.weeklyResearchSchedule.nextOpen, "2026-11-01T22:00:00.000Z");
+    await runtime.stop("test");
+  } finally {
+    restoreClock();
+  }
 }
 
 {
@@ -231,6 +368,40 @@ function minimalRepositories() {
     evolution: {},
     evidence: {},
   };
+}
+
+function autostartEnv() {
+  return {
+    DATABASE_URL: "postgres://user:pass@localhost:5432/fincoach",
+    FINCOACH_V2_RUNTIME_ENABLED: "true",
+    FINCOACH_V2_RESEARCH_ENABLED: "true",
+    FINCOACH_V2_PILOT_ENABLED: "true",
+    FINCOACH_V2_AUTOSTART: "true",
+    FINCOACH_V2_CADENCE_MS: "3600000",
+    FINCOACH_LIVE_EXECUTION_ENABLED: "false",
+    FINCOACH_TELEGRAM_TRANSPORT: "disabled",
+  } as NodeJS.ProcessEnv;
+}
+
+function useFakeClock(iso: string) {
+  const RealDate = Date;
+  const fixed = new RealDate(iso).getTime();
+  class FakeDate extends RealDate {
+    constructor(value?: string | number | Date) {
+      super(value === undefined ? fixed : value);
+    }
+    static now() {
+      return fixed;
+    }
+  }
+  globalThis.Date = FakeDate as DateConstructor;
+  return () => {
+    globalThis.Date = RealDate;
+  };
+}
+
+function flushAsync() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function e2eRepositories(saved: {

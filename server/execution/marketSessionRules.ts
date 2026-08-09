@@ -76,14 +76,14 @@ export class MarketSessionRulesService {
 
   private marketHoursOpen(assetClass: z.infer<typeof marketSessionAssetClassSchema>, eastern: EasternMoment) {
     if (isUsMarketHoliday(eastern.year, eastern.month, eastern.day)) return false;
-    if (assetClass === "equity") return isWeekday(eastern.weekday) && after(eastern, 9, 30) && before(eastern, 16, 0);
+    if (assetClass === "equity") return isWeekday(eastern.weekday) && afterOrEqual(eastern, 9, 30) && before(eastern, 16, 0);
     if (assetClass === "commodity") {
-      if (eastern.weekday === 0) return after(eastern, 18, 0);
+      if (eastern.weekday === 0) return afterOrEqual(eastern, 18, 0);
       if (eastern.weekday === 6) return false;
       if (eastern.weekday === 5) return before(eastern, 17, 0);
       return !(afterOrEqual(eastern, 17, 0) && before(eastern, 18, 0));
     }
-    if (eastern.weekday === 0) return after(eastern, 17, 0);
+    if (eastern.weekday === 0) return afterOrEqual(eastern, 17, 0);
     if (eastern.weekday === 6) return false;
     if (eastern.weekday === 5) return before(eastern, 17, 0);
     return true;

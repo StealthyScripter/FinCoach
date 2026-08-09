@@ -58,6 +58,7 @@ export type V2RuntimeConfigValidation = {
   errors: string[];
   warnings: string[];
   config: V2RuntimeConfig;
+  provenance: Record<string, { present: boolean; parsed: unknown; raw: string | null }>;
 };
 
 export type WeeklyResearchScheduleConfig = {
@@ -212,7 +213,19 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (!config.paperExecutionEnabled) warnings.push("Internal paper execution is disabled.");
   if (!config.demoBrokerExecutionEnabled) warnings.push("Demo broker execution is disabled.");
 
-  return { ok: errors.length === 0, errors, warnings, config };
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    config,
+    provenance: {
+      FINCOACH_V2_AUTOSTART: provenance(env.FINCOACH_V2_AUTOSTART, config.autostart),
+      FINCOACH_V2_RUNTIME_ENABLED: provenance(env.FINCOACH_V2_RUNTIME_ENABLED, config.runtimeEnabled),
+      FINCOACH_V2_RESEARCH_ENABLED: provenance(env.FINCOACH_V2_RESEARCH_ENABLED, config.researchEnabled),
+      FINCOACH_V2_PILOT_ENABLED: provenance(env.FINCOACH_V2_PILOT_ENABLED, config.pilotEnabled),
+      FINCOACH_LIVE_EXECUTION_ENABLED: provenance(env.FINCOACH_LIVE_EXECUTION_ENABLED, config.liveExecutionEnabled),
+    },
+  };
 }
 
 function validateWeeklyResearchSchedule(config: WeeklyResearchScheduleConfig) {
@@ -250,6 +263,16 @@ function bool(value: string | undefined, fallback: boolean) {
   if (/^(true|1|yes|on)$/i.test(trimmed)) return true;
   if (/^(false|0|no|off)$/i.test(trimmed)) return false;
   return fallback;
+}
+
+function provenance(value: string | undefined, parsed: unknown) {
+  const trimmed = value?.trim();
+  return { present: trimmed !== undefined && trimmed.length > 0, parsed, raw: trimmed ? redactEnvValue(trimmed) : null };
+}
+
+function redactEnvValue(value: string) {
+  if (/^(true|false|1|0|yes|no|on|off)$/i.test(value)) return value;
+  return "[set]";
 }
 
 function int(value: string | undefined, fallback: number) {

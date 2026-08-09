@@ -55,7 +55,7 @@ type V2Repositories = ReturnType<typeof createRepositories>;
 type WeeklyTransitionNotifier = (input: { kind: "open" | "close"; boundaryAt: string; window: WeeklyResearchWindowState; aggregate: AggregateTradableWindow }) => Promise<unknown>;
 let weeklyTransitionNotifier: WeeklyTransitionNotifier | null = null;
 
-export type V2RuntimeState = "disabled" | "initialized" | "running" | "idle" | "blocked" | "failed" | "stopping" | "stopped" | "scheduled_closed" | "starting_for_week" | "stopping_for_week" | "configuration_blocked";
+export type V2RuntimeState = "disabled" | "initialized" | "running" | "idle" | "blocked" | "failed" | "stopping" | "stopped" | "scheduled_closed" | "suspended_waiting_for_market" | "starting_for_week" | "stopping_for_week" | "configuration_blocked";
 
 export class FinCoachV2Runtime {
   private pool: Pool | null = null;
@@ -73,6 +73,7 @@ export class FinCoachV2Runtime {
   private lastWeeklyWindowReason: string | null = null;
   private lastWeeklyTransition: Record<string, unknown> | null = null;
   private pendingWeeklyTransitionAt: string | null = null;
+  private pendingWeeklyTransitionKind: "lead" | "open" | "close" | null = null;
 
   constructor(
     private readonly env: NodeJS.ProcessEnv = process.env,
@@ -173,9 +174,8 @@ export class FinCoachV2Runtime {
     if (!this.repositories) await this.initialize();
     const repositories = this.requireRepositories();
     const aggregate = marketSessionsService.aggregateTradableWindow(new Date());
-    const insideLead = isInsideAggregateLead(this.config.weeklyResearchSchedule.startLeadMinutes, aggregate.nextTradableOpenAt, new Date());
-    if (this.config.weeklyResearchSchedule.enabled && !aggregate.anyConfiguredInstrumentTradable && !insideLead) {
-      this.state = aggregate.calendarQuality === "unavailable" ? "configuration_blocked" : "scheduled_closed";
+    if (this.config.weeklyResearchSchedule.enabled && !aggregate.anyConfiguredInstrumentTradable) {
+      this.state = aggregate.calendarQuality === "unavailable" ? "configuration_blocked" : "suspended_waiting_for_market";
       this.lastError = "weekly_market_window_closed";
       this.lastRunResult = {
         completed: false,
@@ -280,6 +280,7 @@ export class FinCoachV2Runtime {
       bootId: this.bootId,
       state: this.state,
       config: redactedConfig(this.config),
+      configProvenance: this.configValidation.provenance,
       configuration: { ok: this.configValidation.ok, errors: this.configValidation.errors, warnings: this.configValidation.warnings },
       lastRunAt: this.lastRunAt,
       lastRunResult: this.lastRunResult,
@@ -296,6 +297,8 @@ export class FinCoachV2Runtime {
         currentWindow: weeklyWindow,
         nextOpen: weeklyWindow.nextWindowOpensAt,
         nextClose: weeklyWindow.nextWindowClosesAt,
+        nextWakeAt: this.pendingWeeklyTransitionAt,
+        nextWakeKind: this.pendingWeeklyTransitionKind,
         timerActive: Boolean(this.weeklyTimer),
       },
       aggregateTradableWindow: {
@@ -306,6 +309,7 @@ export class FinCoachV2Runtime {
         calendarQuality: aggregateTradableWindow.calendarQuality,
       },
       researchSchedulerActive: this.schedulerStarted,
+      researchCadenceActive: Boolean(this.timer),
       lastWeeklyTransition: this.lastWeeklyTransition,
       weeklyNotificationDeliveryState: this.lastWeeklyTransition,
       marketSnapshotScheduler: marketSnapshotService.status(),
@@ -671,7 +675,7 @@ export class FinCoachV2Runtime {
     this.schedulerStarted = true;
     this.state = "running";
     const schedule = () => {
-      if (!this.schedulerStarted || this.state === "stopping" || this.state === "stopped" || this.state === "scheduled_closed") return;
+      if (!this.schedulerStarted || this.state === "stopping" || this.state === "stopped" || this.state === "scheduled_closed" || this.state === "suspended_waiting_for_market" || this.state === "starting_for_week") return;
       this.nextScheduledCycleAt = new Date(Date.now() + this.config.cadenceMs).toISOString();
       structuredLogger.v2({ level: "info", event: "v2_cycle_scheduled", message: "Next V2 research cycle scheduled", runtimeInstanceId: this.bootId, nextScheduledCycleAt: this.nextScheduledCycleAt, cadenceMs: this.config.cadenceMs });
       this.timer = setTimeout(() => {
@@ -688,7 +692,7 @@ export class FinCoachV2Runtime {
     this.timer = null;
     this.nextScheduledCycleAt = null;
     this.schedulerStarted = false;
-    this.state = "scheduled_closed";
+    this.state = reason === "weekly_market_window_closed" ? "suspended_waiting_for_market" : "scheduled_closed";
     this.lastRunResult = { completed: false, reason, liveExecutionBlocked: true };
   }
 
@@ -704,7 +708,7 @@ export class FinCoachV2Runtime {
       this.scheduleWeeklyTimer(window);
       return;
     }
-    if (aggregate.anyConfiguredInstrumentTradable || insideLead) {
+    if (aggregate.anyConfiguredInstrumentTradable) {
       this.state = "starting_for_week";
       const openBoundary = aggregate.openInstrumentSessions.map((session) => session.openedAt).filter(Boolean).sort()[0] ?? aggregate.nextTradableOpenAt;
       if (aggregate.anyConfiguredInstrumentTradable && openBoundary) {
@@ -712,6 +716,9 @@ export class FinCoachV2Runtime {
         this.lastWeeklyTransition = { kind: "open", boundaryAt: openBoundary, delivery: result };
       }
       this.startCadence(trigger === "startup" ? "v2-weekly-startup" : "v2-weekly-open");
+    } else if (insideLead) {
+      this.suspendCadence("weekly_market_start_lead_waiting_for_open");
+      this.state = "starting_for_week";
     } else {
       this.state = "stopping_for_week";
       if (trigger === "weekly_transition") {
@@ -727,16 +734,27 @@ export class FinCoachV2Runtime {
   private scheduleWeeklyTimer(window: WeeklyResearchWindowState) {
     if (this.weeklyTimer) clearTimeout(this.weeklyTimer);
     const aggregate = marketSessionsService.aggregateTradableWindow(new Date());
-    const next = aggregate.anyConfiguredInstrumentTradable ? aggregate.finalWeeklyCloseAt : aggregate.nextTradableOpenAt;
-    if (!next) return;
+    const now = new Date();
+    const target = nextWeeklyWakeTarget({
+      aggregate,
+      startLeadMinutes: this.config.weeklyResearchSchedule.startLeadMinutes,
+      now,
+    });
+    const next = target?.at ?? null;
+    if (!next) {
+      this.pendingWeeklyTransitionAt = null;
+      this.pendingWeeklyTransitionKind = null;
+      return;
+    }
     this.pendingWeeklyTransitionAt = next;
-    const delay = Math.max(1_000, Math.min(Date.parse(next) - Date.now(), 2_147_000_000));
+    this.pendingWeeklyTransitionKind = target?.kind ?? null;
+    const delay = Math.max(1_000, Math.min(Date.parse(next) - now.getTime(), 2_147_000_000));
     this.weeklyTimer = setTimeout(() => {
       this.weeklyTimer = null;
       void this.applyWeeklyWindow("weekly_transition");
     }, delay);
     this.weeklyTimer.unref?.();
-    structuredLogger.v2({ level: "info", event: "weekly_research_transition_scheduled", message: "Next weekly research transition scheduled", runtimeInstanceId: this.bootId, nextTransitionAt: next, activeTimers: (this.timer ? 1 : 0) + 1, reason: window.reason });
+    structuredLogger.v2({ level: "info", event: "weekly_research_transition_scheduled", message: "Next weekly research transition scheduled", runtimeInstanceId: this.bootId, nextTransitionAt: next, transitionKind: this.pendingWeeklyTransitionKind, activeTimers: (this.timer ? 1 : 0) + 1, reason: window.reason });
   }
 
   private logWeeklyWindowState(window: WeeklyResearchWindowState) {
@@ -761,6 +779,19 @@ function isInsideAggregateLead(minutes: number, nextOpenAt: string | null, now: 
   if (!nextOpenAt || minutes <= 0) return false;
   const delta = Date.parse(nextOpenAt) - now.getTime();
   return delta > 0 && delta <= minutes * 60_000;
+}
+
+function nextWeeklyWakeTarget(input: { aggregate: AggregateTradableWindow; startLeadMinutes: number; now: Date }): { at: string; kind: "lead" | "open" | "close" } | null {
+  if (input.aggregate.anyConfiguredInstrumentTradable) {
+    return input.aggregate.finalWeeklyCloseAt ? { at: input.aggregate.finalWeeklyCloseAt, kind: "close" } : null;
+  }
+  if (!input.aggregate.nextTradableOpenAt) return null;
+  const openMs = Date.parse(input.aggregate.nextTradableOpenAt);
+  const leadMs = openMs - Math.max(0, input.startLeadMinutes) * 60_000;
+  if (input.startLeadMinutes > 0 && leadMs > input.now.getTime()) {
+    return { at: new Date(leadMs).toISOString(), kind: "lead" };
+  }
+  return { at: input.aggregate.nextTradableOpenAt, kind: "open" };
 }
 
 export function createFinCoachV2Runtime(env: NodeJS.ProcessEnv = process.env) {
