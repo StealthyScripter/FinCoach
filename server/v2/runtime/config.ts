@@ -58,7 +58,7 @@ export type V2RuntimeConfigValidation = {
   errors: string[];
   warnings: string[];
   config: V2RuntimeConfig;
-  provenance: Record<string, { present: boolean; parsed: unknown; raw: string | null }>;
+  provenance: Record<string, { present: boolean; parsed: unknown; raw: string | null; source: string }>;
 };
 
 export type WeeklyResearchScheduleConfig = {
@@ -267,7 +267,12 @@ function bool(value: string | undefined, fallback: boolean) {
 
 function provenance(value: string | undefined, parsed: unknown) {
   const trimmed = value?.trim();
-  return { present: trimmed !== undefined && trimmed.length > 0, parsed, raw: trimmed ? redactEnvValue(trimmed) : null };
+  return {
+    present: trimmed !== undefined && trimmed.length > 0,
+    parsed,
+    raw: trimmed ? redactEnvValue(trimmed) : null,
+    source: "process.env after launch-shell preprocessing",
+  };
 }
 
 function redactEnvValue(value: string) {

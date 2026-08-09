@@ -312,21 +312,7 @@ export class TelegramCommandRouter {
 
   private async researchThroughputMessage() {
     const { v2OperationsService } = await import("../v2/operations");
-    const progress = (await v2OperationsService.researchProgress()).body as Record<string, unknown>;
-    if (progress.degraded) return `Research Throughput\nState: degraded\nReason: ${progress.reason}\nLive execution: blocked`;
-    const windows = progress.windows as Record<string, Record<string, unknown>>;
-    const pipeline = progress.pipeline as Record<string, unknown>;
-    return [
-      "Research Throughput",
-      `Window 24h observations: ${windows.running24Hours?.observations ?? 0}`,
-      `Window 7d observations: ${windows.running7Days?.observations ?? 0}`,
-      `Current-hour detector attempts: ${(pipeline.detectorEvaluations as Record<string, unknown> | undefined)?.attemptedCurrentHour ?? 0}`,
-      `Current-hour detector completions: ${(pipeline.detectorEvaluations as Record<string, unknown> | undefined)?.completedCurrentHour ?? 0}`,
-      `Current-hour duplicate suppressions: ${(pipeline.detectorEvaluations as Record<string, unknown> | undefined)?.duplicatesSuppressedCurrentHour ?? 0}`,
-      `Lifetime hypotheses: ${pipeline.hypotheses ?? 0}`,
-      `Lifetime ranked candidates: ${pipeline.rankedCandidates ?? 0}`,
-      `Latest generated: ${progress.generatedAt}`,
-      ].join("\n");
+    return v2OperationsService.telegramResearchThroughput();
   }
 
   private async performanceMessage() {

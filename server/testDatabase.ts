@@ -17,6 +17,7 @@ const TEST_MIGRATIONS = [
   "migrations/0013_telegram_update_cursor.sql",
   "migrations/0014_v2_operational_persistence.sql",
   "migrations/0015_v2_evidence_persistence.sql",
+  "migrations/0018_weekly_research_session_notifications.sql",
 ] as const;
 
 export async function bootstrapTestDatabase(databaseUrl = process.env.DATABASE_URL) {
