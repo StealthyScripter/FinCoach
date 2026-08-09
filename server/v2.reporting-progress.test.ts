@@ -10,6 +10,8 @@ await testProgressProjectionFailureIsSanitized();
 await testStatusCountsUseCurrentProjectionSources();
 await testDataReconciliationDetectsMismatches();
 await testInvalidDailyReportDateCannotBecomeLatest();
+await testResearchProgressContractHasNonNullProvenance();
+await testReportingProjectionFailureDoesNotFailDatabaseHealth();
 
 console.log("v2 reporting progress tests passed");
 
@@ -109,6 +111,13 @@ async function testProgressProjectionFailureIsSanitized() {
   assert.equal(response.body.degraded, true);
   assert.equal(response.body.reason, "database_unavailable");
   assert.equal(response.body.projectionError, "database_unavailable");
+  assert.deepEqual(response.body.reportingSource, {
+    source: "postgresql",
+    databaseBacked: true,
+    degraded: true,
+    generatedAt: response.body.generatedAt,
+    projectionError: "database_unavailable",
+  });
   assert.equal(response.body.liveExecutionBlocked, true);
   assert.doesNotMatch(JSON.stringify(response.body), /host and SQL/);
 }
@@ -133,7 +142,7 @@ async function testStatusCountsUseCurrentProjectionSources() {
   assert.equal(response.body.lessons, 14);
   assert.equal(response.body.lifecycleStates, 15);
   assert.equal((response.body.moduleAvailability as Record<string, unknown>).journal, "available");
-  assert.deepEqual(response.body.reportingSource, { source: "postgresql", databaseBacked: true, generatedAt: now.toISOString() });
+  assert.deepEqual(response.body.reportingSource, { source: "postgresql", databaseBacked: true, degraded: false, generatedAt: now.toISOString(), projectionError: null });
 }
 
 async function testDataReconciliationDetectsMismatches() {
@@ -181,6 +190,47 @@ async function testInvalidDailyReportDateCannotBecomeLatest() {
     () => new PgV2OperationsRepository({ query: async () => ({ rows: [pgReportRow(reportRecord("2099-04-93", "2099-04-93T00:00:00.000Z"))], rowCount: 1 }) } as never).latestReport(),
     /Daily report date is not a real YYYY-MM-DD/,
   );
+}
+
+async function testResearchProgressContractHasNonNullProvenance() {
+  const service = new V2OperationsService({ operations: progressRepository({ observations: 2, hypotheses: 1 }) } as never);
+  const response = await service.researchProgress();
+  assert.equal(response.body.source, "postgresql");
+  assert.equal(response.body.databaseBacked, true);
+  assert.equal(response.body.degraded, false);
+  assert.deepEqual(response.body.reportingSource, {
+    source: "postgresql",
+    databaseBacked: true,
+    degraded: false,
+    generatedAt: now.toISOString(),
+    projectionError: null,
+  });
+  assert.equal((response.body.windows as Record<string, Record<string, unknown>>).lifetime.observations, 2);
+  assert.equal((response.body.windows as Record<string, Record<string, unknown>>).total.observations, 2);
+}
+
+async function testReportingProjectionFailureDoesNotFailDatabaseHealth() {
+  const service = new V2OperationsService({
+    operations: {
+      latestReport: async () => reportRecord("2026-08-09", "2026-08-09T00:00:00.000Z"),
+      getReportByDate: async () => null,
+      saveReport: async record => ({ inserted: true, record }),
+      saveDelivery: async record => ({ inserted: true, record }),
+      invalidDailyReportCount: async () => 0,
+      researchProgress: async () => {
+        throw new V2PersistenceError("migration_mismatch", "research projection tables missing");
+      },
+    },
+  } as never);
+
+  const response = await service.statusAsync();
+  assert.equal(response.body.postgresqlHealth, "healthy");
+  assert.equal(response.body.databaseHealth, "healthy");
+  assert.deepEqual(response.body.reportingProjection, { state: "degraded", projectionError: "migration_mismatch" });
+  assert.equal((response.body.reportingSource as Record<string, unknown>).degraded, true);
+  assert.equal(response.body.observationsCreated, null);
+  assert.deepEqual(response.body.durableCounts, { state: "unavailable", projectionError: "migration_mismatch" });
+  assert.equal(response.body.degradedReason, "migration_mismatch");
 }
 
 function countRepository(total: number) {

@@ -12,48 +12,50 @@ if (!process.env.DATABASE_URL) {
   await client.connect();
   const suffix = `reporting-parity-${Date.now()}`;
   try {
+    const baseline = await durableCounts(client);
     await seed(client, suffix);
     const operations = new PgV2OperationsRepository(client);
     const progress = await operations.researchProgress(new Date("2026-08-09T15:30:00.000Z"));
-    assert.equal(progress.pipeline.observations, 10);
-    assert.equal(progress.pipeline.hypotheses, 3);
-    assert.equal(progress.pipeline.strategies, 2);
-    assert.equal(progress.pipeline.experiments, 2);
-    assert.equal(progress.pipeline.backtests, 1);
-    assert.equal(progress.pipeline.verdicts, 1);
-    assert.equal(progress.pipeline.rankedCandidates, 1);
-    assert.equal(progress.pipeline.forwardTests, 0);
-    assert.equal(progress.windows?.currentHour?.observations, 1);
-    assert.equal(progress.windows?.running24Hours?.observations, 4);
-    assert.equal(progress.windows?.running7Days?.observations, 7);
-    assert.equal(progress.windows?.lifetime?.observations, 10);
+    assert.equal(progress.pipeline.observations - baseline.observations, 10);
+    assert.equal(progress.pipeline.hypotheses - baseline.hypotheses, 3);
+    assert.equal(progress.pipeline.strategies - baseline.strategies, 2);
+    assert.equal(progress.pipeline.experiments - baseline.experiments, 2);
+    assert.equal(progress.pipeline.backtests - baseline.backtests, 1);
+    assert.equal(progress.pipeline.verdicts - baseline.verdicts, 1);
+    assert.equal(progress.pipeline.rankedCandidates - baseline.rankedCandidates, 1);
+    assert.equal(progress.pipeline.forwardTests - baseline.forwardTests, 0);
+    assert.equal(Number(progress.windows?.currentHour?.observations ?? 0) - baseline.currentHourObservations, 1);
+    assert.equal(Number(progress.windows?.running24Hours?.observations ?? 0) - baseline.running24HoursObservations, 4);
+    assert.equal(Number(progress.windows?.running7Days?.observations ?? 0) - baseline.running7DaysObservations, 7);
+    assert.equal(Number(progress.windows?.lifetime?.observations ?? 0) - baseline.observations, 10);
 
     const service = new V2OperationsService({
       operations,
-      ranking: sqlCount(client, "v2_ranking_decisions", suffix),
+      ranking: sqlCount(client, "v2_ranking_decisions"),
       evidence: {
-        observations: sqlCount(client, "v2_market_observations", suffix),
-        hypotheses: sqlCount(client, "v2_research_hypotheses", suffix),
-        strategies: sqlCount(client, "v2_strategy_definitions", suffix),
-        experiments: sqlCount(client, "v2_research_experiments", suffix),
-        backtests: sqlCount(client, "v2_backtest_results", suffix),
-        "court-cases": sqlCount(client, "v2_court_verdicts", suffix),
-        "forward-tests": sqlCount(client, "v2_forward_tests", suffix),
-        signals: sqlCount(client, "v2_research_signals", suffix),
-        evaluations: sqlCount(client, "v2_external_evaluations", suffix),
-        journal: sqlCount(client, "v2_research_journal_entries", suffix),
-        lessons: sqlCount(client, "v2_learning_lessons", suffix),
-        lifecycle: sqlCount(client, "v2_strategy_lifecycle_decisions", suffix),
+        observations: sqlCount(client, "v2_market_observations"),
+        hypotheses: sqlCount(client, "v2_research_hypotheses"),
+        strategies: sqlCount(client, "v2_strategy_definitions"),
+        experiments: sqlCount(client, "v2_research_experiments"),
+        backtests: sqlCount(client, "v2_backtest_results"),
+        "court-cases": sqlCount(client, "v2_court_verdicts"),
+        "forward-tests": sqlCount(client, "v2_forward_tests"),
+        signals: sqlCount(client, "v2_research_signals"),
+        evaluations: sqlCount(client, "v2_external_evaluations"),
+        journal: sqlCount(client, "v2_research_journal_entries"),
+        lessons: sqlCount(client, "v2_learning_lessons"),
+        lifecycle: sqlCount(client, "v2_strategy_lifecycle_decisions"),
       },
     } as never);
     const status = await service.statusAsync();
-    assert.equal(status.body.observationsCreated, 10);
-    assert.equal(status.body.hypothesesCreated, 3);
-    assert.equal(status.body.rankedCandidates, 1);
+    assert.equal(Number(status.body.observationsCreated) - baseline.observations, 10);
+    assert.equal(Number(status.body.hypothesesCreated) - baseline.hypotheses, 3);
+    assert.equal(Number(status.body.rankedCandidates) - baseline.rankedCandidates, 1);
     const reconciliation = await service.dataReconciliation();
     assert.equal(reconciliation.body.overallStatus, "match");
   } finally {
     await cleanup(client, suffix);
+    assert.equal(await seededRowCount(client, suffix), 0);
     await client.end();
   }
   console.log("v2 reporting postgres parity tests passed");
@@ -93,13 +95,60 @@ async function insertGeneric(client: Client, table: string, suffix: string, sche
   );
 }
 
-function sqlCount(client: Client, table: string, suffix: string) {
+function sqlCount(client: Client, table: string) {
   return {
     listPage: async () => {
-      const result = await client.query(`SELECT count(*)::int AS total FROM ${table} WHERE correlation_id = $1`, [suffix]);
+      const result = await client.query(`SELECT count(*)::int AS total FROM ${table}`);
       return { items: [], total: Number(result.rows[0]?.total ?? 0) };
     },
   };
+}
+
+async function durableCounts(client: Client) {
+  const result = await client.query(
+    `SELECT
+      (SELECT count(*)::int FROM v2_market_observations) AS observations,
+      (SELECT count(*)::int FROM v2_research_hypotheses) AS hypotheses,
+      (SELECT count(*)::int FROM v2_strategy_definitions) AS strategies,
+      (SELECT count(*)::int FROM v2_research_experiments) AS experiments,
+      (SELECT count(*)::int FROM v2_backtest_results) AS backtests,
+      (SELECT count(*)::int FROM v2_court_verdicts) AS verdicts,
+      (SELECT count(*)::int FROM v2_ranking_decisions) AS ranked_candidates,
+      (SELECT count(*)::int FROM v2_forward_tests) AS forward_tests,
+      (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $1::timestamp) AS current_hour_observations,
+      (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $2::timestamp - INTERVAL '24 hours') AS running_24h_observations,
+      (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $2::timestamp - INTERVAL '7 days') AS running_7d_observations`,
+    ["2026-08-09T15:00:00.000Z", "2026-08-09T15:30:00.000Z"],
+  );
+  const row = result.rows[0] ?? {};
+  return {
+    observations: Number(row.observations ?? 0),
+    hypotheses: Number(row.hypotheses ?? 0),
+    strategies: Number(row.strategies ?? 0),
+    experiments: Number(row.experiments ?? 0),
+    backtests: Number(row.backtests ?? 0),
+    verdicts: Number(row.verdicts ?? 0),
+    rankedCandidates: Number(row.ranked_candidates ?? 0),
+    forwardTests: Number(row.forward_tests ?? 0),
+    currentHourObservations: Number(row.current_hour_observations ?? 0),
+    running24HoursObservations: Number(row.running_24h_observations ?? 0),
+    running7DaysObservations: Number(row.running_7d_observations ?? 0),
+  };
+}
+
+async function seededRowCount(client: Client, suffix: string) {
+  const result = await client.query(
+    `SELECT
+      (SELECT count(*)::int FROM v2_ranking_decisions WHERE correlation_id = $1)
+      + (SELECT count(*)::int FROM v2_court_verdicts WHERE correlation_id = $1)
+      + (SELECT count(*)::int FROM v2_backtest_results WHERE correlation_id = $1)
+      + (SELECT count(*)::int FROM v2_research_experiments WHERE correlation_id = $1)
+      + (SELECT count(*)::int FROM v2_strategy_definitions WHERE correlation_id = $1)
+      + (SELECT count(*)::int FROM v2_research_hypotheses WHERE correlation_id = $1)
+      + (SELECT count(*)::int FROM v2_market_observations WHERE correlation_id = $1) AS total`,
+    [suffix],
+  );
+  return Number(result.rows[0]?.total ?? 0);
 }
 
 async function cleanup(client: Client, suffix: string) {

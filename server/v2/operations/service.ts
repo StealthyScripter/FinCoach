@@ -156,6 +156,8 @@ export class V2OperationsService {
     const body = { ...base.body };
     const moduleAvailability = { ...(body.moduleAvailability as Record<string, V2OperationsAvailability>) };
     const moduleHealth = { ...(body.moduleHealth as Record<string, string>) };
+    let canonicalProgressAttempted = false;
+    let canonicalProgressFailed = false;
     try {
       if (this.repositories.orchestration) {
         const [latestSuccessfulCycle, latestFailedCycle, retryCounts, activeLeases, staleLeases, deadLetterCount] = await Promise.all([
@@ -200,14 +202,26 @@ export class V2OperationsService {
           }
         }
         if (repository?.researchProgress) {
-          const progress = await repository.researchProgress();
-          const pipeline = progress.pipeline as Record<string, unknown> | undefined;
-          if (pipeline) {
-            applyPipelineCounts(body, pipeline);
-            applyPipelineAvailability(moduleAvailability, pipeline);
+          canonicalProgressAttempted = true;
+          try {
+            const progress = await repository.researchProgress();
+            const canonical = canonicalResearchProgressBody(progress) as Record<string, unknown>;
+            const pipeline = canonical.pipeline as Record<string, unknown> | undefined;
+            if (pipeline) {
+              applyPipelineCounts(body, pipeline);
+              applyPipelineAvailability(moduleAvailability, pipeline);
+            }
+            body.pipeline = pipeline ?? body.pipeline;
+            body.reportingSource = canonical.reportingSource;
+            body.reportingProjection = { state: canonical.degraded ? "degraded" : "available", projectionError: canonical.projectionError ?? null };
+          } catch (error) {
+            const reason = projectionErrorCode(error);
+            canonicalProgressFailed = true;
+            markDurableCountsUnavailable(body, reason);
+            body.reportingSource = { source: "postgresql", databaseBacked: true, degraded: true, projectionError: reason, generatedAt: new Date().toISOString() };
+            body.reportingProjection = { state: "degraded", projectionError: reason };
+            body.degradedReason = reason;
           }
-          body.pipeline = pipeline ?? body.pipeline;
-          body.reportingSource = { source: progress.source ?? "postgresql", databaseBacked: progress.databaseBacked ?? true, generatedAt: progress.generatedAt };
         }
       }
       const evidence = this.repositories.evidence ?? {};
@@ -215,7 +229,7 @@ export class V2OperationsService {
         const count = await countEvidence(evidence[collection]);
         moduleAvailability[collection] = count > 0 ? "available" : "available_empty";
       }
-      if (!body.pipeline) {
+      if (!body.pipeline && !canonicalProgressAttempted) {
         body.observationsCreated = await countEvidence(evidence.observations);
         body.hypothesesCreated = await countEvidence(evidence.hypotheses);
         body.experimentsQueued = await countEvidence(evidence.experiments);
@@ -229,6 +243,7 @@ export class V2OperationsService {
         body.courtroomVerdicts = await countEvidence(evidence["court-cases"]);
         body.rankedCandidates = await countEvidence(this.repositories.ranking);
       }
+      if (canonicalProgressFailed) body.pipeline = { status: "unavailable", projectionError: body.degradedReason ?? "projection_failed" };
     } catch (error) {
       const availability = availabilityFromError(error);
       body.postgresqlHealth = availability;
@@ -250,13 +265,15 @@ export class V2OperationsService {
     const correlationId = randomUUID();
     const repository = this.asyncOperationsRepository();
     if (!repository?.researchProgress) {
-      return { status: 200, body: { schemaVersion: "fincoach.v2.research-progress.1", status: "degraded", generatedAt: new Date().toISOString(), degraded: true, reason: "postgres_projection_not_configured", projectionError: "postgres_projection_not_configured", liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
+      const at = new Date().toISOString();
+      return { status: 200, body: canonicalResearchProgressBody({ schemaVersion: "fincoach.v2.research-progress.1", status: "degraded", generatedAt: at, source: "not_configured", databaseBacked: false, degraded: true, reason: "postgres_projection_not_configured", projectionError: "postgres_projection_not_configured", liveExecutionBlocked: true }), events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
     }
     try {
-      return { status: 200, body: { ...(await repository.researchProgress()), liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
+      return { status: 200, body: canonicalResearchProgressBody(await repository.researchProgress()), events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress" })] };
     } catch (error) {
       const reason = projectionErrorCode(error);
-      return { status: 200, body: { schemaVersion: "fincoach.v2.research-progress.1", status: "degraded", generatedAt: new Date().toISOString(), degraded: true, reason, projectionError: reason, liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress_degraded" })] };
+      const at = new Date().toISOString();
+      return { status: 200, body: canonicalResearchProgressBody({ schemaVersion: "fincoach.v2.research-progress.1", status: "degraded", generatedAt: at, source: "postgresql", databaseBacked: true, degraded: true, reason, projectionError: reason, liveExecutionBlocked: true }), events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_progress_degraded" })] };
     }
   }
 
@@ -750,6 +767,51 @@ function projectionErrorCode(error: unknown) {
   return "projection_failed";
 }
 
+function canonicalResearchProgressBody(progress: Record<string, unknown>) {
+  const generatedAt = String(progress.generatedAt ?? new Date().toISOString());
+  const source = String(progress.source ?? (progress.databaseBacked === false ? "not_configured" : "postgresql"));
+  const databaseBacked = progress.databaseBacked === undefined ? source === "postgresql" : Boolean(progress.databaseBacked);
+  const degraded = progress.degraded === undefined ? progress.status === "degraded" : Boolean(progress.degraded);
+  const reportingSource = {
+    source,
+    databaseBacked,
+    degraded,
+    generatedAt,
+    projectionError: progress.projectionError ?? null,
+  };
+  return {
+    ...progress,
+    schemaVersion: progress.schemaVersion ?? "fincoach.v2.research-progress.1",
+    status: progress.status ?? (degraded ? "degraded" : "ok"),
+    generatedAt,
+    source,
+    reportingSource,
+    databaseBacked,
+    degraded,
+    windows: ensureWindowContract(progress.windows as Record<string, Record<string, unknown>> | undefined),
+    liveExecutionBlocked: true,
+  };
+}
+
+function ensureWindowContract(windows: Record<string, Record<string, unknown>> | undefined) {
+  if (!windows) return {
+    currentHour: { unavailable: true, reason: "postgres_projection_unavailable" },
+    running24Hours: { unavailable: true, reason: "postgres_projection_unavailable" },
+    running7Days: { unavailable: true, reason: "postgres_projection_unavailable" },
+    lifetime: { unavailable: true, reason: "postgres_projection_unavailable" },
+    total: { unavailable: true, reason: "postgres_projection_unavailable" },
+  };
+  const lifetime = windows.lifetime ?? windows.total ?? {};
+  return {
+    ...windows,
+    currentHour: windows.currentHour ?? { unavailable: true, reason: "postgres_projection_unavailable" },
+    running24Hours: windows.running24Hours ?? { unavailable: true, reason: "postgres_projection_unavailable" },
+    running7Days: windows.running7Days ?? { unavailable: true, reason: "postgres_projection_unavailable" },
+    lifetime,
+    total: windows.total ?? lifetime,
+  };
+}
+
 function applyPipelineCounts(body: Record<string, unknown>, pipeline: Record<string, unknown>) {
   body.observationsCreated = Number(pipeline.observations ?? 0);
   body.hypothesesCreated = Number(pipeline.hypotheses ?? 0);
@@ -763,6 +825,26 @@ function applyPipelineCounts(body: Record<string, unknown>, pipeline: Record<str
   body.journalEntries = Number(pipeline.journalEntries ?? 0);
   body.lessons = Number(pipeline.lessons ?? 0);
   body.lifecycleStates = Number(pipeline.lifecycleDecisions ?? 0);
+}
+
+function markDurableCountsUnavailable(body: Record<string, unknown>, reason: string) {
+  for (const key of [
+    "observationsCreated",
+    "hypothesesCreated",
+    "experimentsQueued",
+    "backtestsCompleted",
+    "courtroomVerdicts",
+    "rankedCandidates",
+    "forwardTests",
+    "signals",
+    "externalEvaluations",
+    "journalEntries",
+    "lessons",
+    "lifecycleStates",
+  ]) {
+    body[key] = null;
+  }
+  body.durableCounts = { state: "unavailable", projectionError: reason };
 }
 
 function applyPipelineAvailability(moduleAvailability: Record<string, V2OperationsAvailability>, pipeline: Record<string, unknown>) {

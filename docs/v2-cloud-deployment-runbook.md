@@ -14,7 +14,7 @@ It does not authorize live capital deployment, live OANDA trading, unattended br
 - Historical datasets mounted read-only.
 - Replay output mounted on persistent writable storage.
 - Secrets supplied through the environment, not committed files.
-- `FINCOACH_LIVE_EXECUTION=blocked`.
+- `FINCOACH_LIVE_EXECUTION_ENABLED=false`.
 - `BROKER_EXECUTION_ENABLED=false`.
 - `TELEGRAM_DELIVERY_ENABLED=false`.
 - `EXTERNAL_SIGNAL_PUBLICATION_ENABLED=false`.
@@ -38,6 +38,23 @@ npm test
 npm run build
 ```
 
+## Application Restart
+
+This repository does not include an `ecosystem.config.cjs` PM2 ecosystem file. Do not use `pm2 restart ecosystem.config.cjs --only fincoach --env production --update-env` from this checkout.
+
+If the production process is already registered in PM2 as `fincoach`, restart the registered process by name after sourcing the production environment:
+
+```bash
+cd <REPOSITORY_PATH>
+set -a
+source .env
+set +a
+pm2 restart fincoach --update-env
+pm2 describe fincoach
+```
+
+If the PM2 process is not registered as `fincoach`, identify the existing process name first with `pm2 list` and use that exact name. Do not invent an ecosystem filename.
+
 ## PostgreSQL
 
 ```bash
@@ -57,6 +74,33 @@ npm run db:migrate:verify
 ```
 
 Never run schema push against production. `npm run db:migrate` is the only production deployment migration-apply command. If `db:migrate:assess` shows `schema_equivalent_without_ledger`, use `npm run db:migrate:baseline` instead of applying SQL. Do not choose baseline automatically.
+
+## Reporting Acceptance
+
+These checks are read-only. They must not seed, update, delete, or rewrite production research data.
+
+```bash
+psql "$DATABASE_URL" -c "
+SELECT
+  (SELECT count(*) FROM v2_market_observations) AS observations,
+  (SELECT count(*) FROM v2_research_hypotheses) AS hypotheses,
+  (SELECT count(*) FROM v2_strategy_definitions) AS strategies,
+  (SELECT count(*) FROM v2_research_experiments) AS experiments,
+  (SELECT count(*) FROM v2_backtest_results) AS backtests,
+  (SELECT count(*) FROM v2_court_verdicts) AS verdicts,
+  (SELECT count(*) FROM v2_ranking_decisions) AS ranked_candidates,
+  (SELECT count(*) FROM v2_forward_tests) AS forward_tests,
+  (SELECT count(*) FROM v2_research_signals) AS signals,
+  (SELECT count(*) FROM v2_external_evaluations) AS evaluations,
+  (SELECT count(*) FROM v2_research_journal_entries) AS journal_entries,
+  (SELECT count(*) FROM v2_learning_lessons) AS lessons,
+  (SELECT count(*) FROM v2_strategy_lifecycle_decisions) AS lifecycle_decisions;"
+
+curl -s http://127.0.0.1:5000/api/v2/research/progress
+curl -s http://127.0.0.1:5000/api/v2/status
+```
+
+Verify that the PostgreSQL counts match the API durable lifetime fields. In Telegram, run `/research_progress`, `/research_throughput`, and `/data_reconciliation`; the same durable totals must be shown or the command must report degraded/unavailable provenance.
 
 ## Gated Release Campaign
 

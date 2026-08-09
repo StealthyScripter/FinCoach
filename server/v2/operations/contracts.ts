@@ -85,6 +85,13 @@ export type V2ResearchProgress = {
   generatedAt: string;
   source?: "postgresql" | "memory" | "not_configured";
   databaseBacked?: boolean;
+  reportingSource?: {
+    source: string;
+    databaseBacked: boolean;
+    degraded: boolean;
+    generatedAt: string;
+    projectionError?: unknown;
+  };
   runtime?: Record<string, unknown>;
   windows?: Record<string, Record<string, unknown>>;
   coverage?: Record<string, unknown>;
