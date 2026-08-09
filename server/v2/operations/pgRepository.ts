@@ -120,6 +120,8 @@ export class PgV2OperationsRepository {
       schemaVersion: "fincoach.v2.research-blockers.1",
       generatedAt: now.toISOString(),
       highestSeverity: blockers.some(item => item.severity === "critical") ? "critical" : blockers.some(item => item.severity === "warning") ? "warning" : "info",
+      pipeline: progress.pipeline,
+      readiness: progress.readiness,
       blockers,
     };
   }

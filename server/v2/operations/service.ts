@@ -231,7 +231,7 @@ export class V2OperationsService {
       return { status: 200, body: { schemaVersion: "fincoach.v2.research-blockers.1", generatedAt: new Date().toISOString(), highestSeverity: "warning", blockers: [{ code: "postgres_projection_not_configured", severity: "warning", phase: "operations", reason: "PostgreSQL research blocker projection is not configured.", currentValue: "not_configured", requiredValue: "configured", recommendedAction: "Initialize V2 runtime with PostgreSQL repositories.", firstObservedAt: new Date().toISOString(), lastObservedAt: new Date().toISOString() }], liveExecutionBlocked: true }, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
     }
     try {
-      return { status: 200, body: this.withWeeklyBlocker(await repository.researchBlockers()), events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
+      return { status: 200, body: this.withRuntimeBlockers(await repository.researchBlockers()), events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "research_blockers" })] };
     } catch (error) {
       const at = new Date().toISOString();
       const reason = projectionErrorCode(error);
@@ -239,23 +239,28 @@ export class V2OperationsService {
     }
   }
 
-  private withWeeklyBlocker(body: Record<string, unknown>) {
+  private withRuntimeBlockers(body: Record<string, unknown>) {
     const runtime = this.runtimeStatusProvider?.() ?? {};
     const aggregate = runtime.aggregateTradableWindow as { anyConfiguredInstrumentTradable?: boolean; calendarQuality?: string } | undefined;
-    if (aggregate?.anyConfiguredInstrumentTradable !== false) return { ...body, liveExecutionBlocked: true };
     const blockers = Array.isArray(body.blockers) ? [...body.blockers] : [];
-    blockers.push({
-      code: "weekly_market_window_closed",
-      severity: "info",
-      phase: "scheduler",
-      reason: "Weekly research market window is closed.",
-      currentValue: "closed",
-      requiredValue: "open",
-      recommendedAction: "No action required. Research resumes automatically at the next weekly opening.",
-      firstObservedAt: new Date().toISOString(),
-      lastObservedAt: new Date().toISOString(),
-    });
-    if (aggregate.calendarQuality === "unavailable") {
+    const config = runtime.runtimeConfiguration as Record<string, unknown> | undefined;
+    const pipeline = body.pipeline as Record<string, unknown> | undefined;
+    const rankedCandidates = Number(pipeline?.rankedCandidates ?? 0);
+    const at = new Date().toISOString();
+    if (aggregate?.anyConfiguredInstrumentTradable === false) {
+      blockers.push({
+        code: "weekly_market_window_closed",
+        severity: "info",
+        phase: "scheduler",
+        reason: "Weekly research market window is closed.",
+        currentValue: "closed",
+        requiredValue: "open",
+        recommendedAction: "No action required. Research resumes automatically at the next weekly opening.",
+        firstObservedAt: at,
+        lastObservedAt: at,
+      });
+    }
+    if (aggregate?.calendarQuality === "unavailable") {
       blockers.push({
         code: "market_session_calendar_unavailable",
         severity: "critical",
@@ -264,9 +269,18 @@ export class V2OperationsService {
         currentValue: "unavailable",
         requiredValue: "configured",
         recommendedAction: "Add explicit session metadata or remove the unsupported configured symbol.",
-        firstObservedAt: new Date().toISOString(),
-        lastObservedAt: new Date().toISOString(),
+        firstObservedAt: at,
+        lastObservedAt: at,
       });
+    }
+    if (rankedCandidates > 0 && config?.forwardTestingEnabled === false) {
+      blockers.push({ code: "forward_testing_disabled", severity: "warning", phase: "forward-testing", reason: "A ranked candidate cannot advance because forward testing is disabled.", currentValue: false, requiredValue: true, recommendedAction: "Keep disabled unless explicitly approving forward-test creation; do not enable as part of this audit.", firstObservedAt: at, lastObservedAt: at });
+    }
+    if (rankedCandidates > 0 && Number(config?.maxActiveForwardTests ?? 0) <= 0) {
+      blockers.push({ code: "forward_test_capacity_zero", severity: "warning", phase: "forward-testing", reason: "A ranked candidate cannot advance because forward-test capacity is zero.", currentValue: config?.maxActiveForwardTests ?? 0, requiredValue: "> 0", recommendedAction: "Keep capacity zero unless explicitly approving forward-test creation.", firstObservedAt: at, lastObservedAt: at });
+    }
+    if (Number(pipeline?.forwardTests ?? 0) > 0 && config?.researchSignalEnabled === false) {
+      blockers.push({ code: "research_signal_creation_disabled", severity: "warning", phase: "signals", reason: "Forward-tested candidates cannot emit research signals because signal creation is disabled.", currentValue: false, requiredValue: true, recommendedAction: "Keep research signal creation disabled unless explicitly approved.", firstObservedAt: at, lastObservedAt: at });
     }
     const severities = blockers.map((item) => typeof item === "object" && item && "severity" in item ? String((item as { severity?: unknown }).severity) : "info");
     const highestSeverity = severities.includes("critical") ? "critical" : severities.includes("warning") ? "warning" : "info";
@@ -375,15 +389,32 @@ export class V2OperationsService {
     return this.recordDailyReportDelivery(reportId, { sent: input.sent, error: input.error, correlationId });
   }
 
-  telegramSummary(command: string) {
+  async telegramSummary(command: string) {
+    if (command === "/research_today") return this.telegramResearchProgress();
     if (command === "/v2_status") {
       const status = this.status().body;
       return [`Version 2 Status`, `Health: ${(status.moduleHealth as Record<string, string>).orchestration}`, `Dead letters: ${status.deadLetterCount}`, `Kill switch: ${status.killSwitchState}`, `Live execution: blocked`].join("\n");
     }
+    if (command === "/strategy_leaderboard") {
+      const ranking = await this.rankingProjection();
+      return [
+        "Version 2 strategy leaderboard",
+        `Items: ${ranking.total}`,
+        `Availability: ${ranking.availability}`,
+        ranking.warning ? `Warning: ${ranking.warning}` : null,
+        `Live execution: blocked`,
+      ].filter(Boolean).join("\n");
+    }
     const collection = commandToCollection(command);
     if (!collection) return "Unsupported Version 2 operations command.";
-    const list = this.list(collection, { limit: 5 }).body;
-    return [`Version 2 ${collection}`, `Items: ${(list.pagination as { total: number }).total}`, `Availability: ${list.availability}`, `Live execution: blocked`].join("\n");
+    const list = (await this.listAsync(collection, { limit: 5 })).body;
+    return [
+      `Version 2 ${commandLabel(command, collection)}`,
+      `Items: ${(list.pagination as { total: number }).total}`,
+      `Availability: ${list.availability}`,
+      list.warning ? `Warning: ${list.warning}` : null,
+      `Live execution: blocked`,
+    ].filter(Boolean).join("\n");
   }
 
   async telegramResearchProgress() {
@@ -526,6 +557,16 @@ export class V2OperationsService {
     return Boolean(this.repositories.orchestration || this.repositories.pilot || this.asyncOperationsRepository());
   }
 
+  private async rankingProjection() {
+    if (!this.repositories.ranking) return { availability: "not_configured" as V2OperationsAvailability, total: 0, warning: "ranking_repository_not_injected" };
+    try {
+      const records = await this.repositories.ranking.listPage({ limit: 1, offset: 0 });
+      return { availability: records.total ? "available" as const : "available_empty" as const, total: records.total, warning: undefined };
+    } catch (error) {
+      return { availability: availabilityFromError(error), total: 0, warning: projectionErrorCode(error) };
+    }
+  }
+
   private event(eventType: string, correlationId: string, payload: Record<string, unknown>) {
     return createDomainEvent({ eventType, sourceModule: "telemetry", correlationId, causationId: null, payload });
   }
@@ -570,19 +611,23 @@ async function countEvidence(repository: EvidenceProjectionRepository | undefine
 
 function commandToCollection(command: string): V2OperationsCollection | null {
   return ({
-    "/research_today": "journal",
     "/observations": "observations",
     "/hypotheses": "hypotheses",
     "/experiments": "experiments",
     "/backtests": "backtests",
     "/court_cases": "court-cases",
-    "/strategy_leaderboard": "strategies",
     "/forward_tests": "forward-tests",
     "/signals": "signals",
     "/evaluator_results": "evaluations",
     "/lessons": "lessons",
     "/strategy_health": "lifecycle",
   } as Record<string, V2OperationsCollection | undefined>)[command] ?? null;
+}
+
+function commandLabel(command: string, collection: V2OperationsCollection) {
+  if (command === "/strategy_leaderboard") return "strategy leaderboard";
+  if (command === "/forward_tests") return "forward tests";
+  return collection;
 }
 
 function formatCoverage(value: unknown) {

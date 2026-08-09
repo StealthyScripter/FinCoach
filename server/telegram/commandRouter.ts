@@ -139,7 +139,7 @@ export class TelegramCommandRouter {
       case "/providers": {
         const { providerRegistryService } = await import("../providerRegistryService");
         const providers = providerRegistryService.getSnapshot().providers;
-        return providers.length ? providers.map((provider) => `${provider.id}: ${provider.status}`).join("\n") : "No providers registered.";
+        return providers.length ? providers.map((provider) => `${provider.id}: adapter=${provider.status}, mode=${provider.providerMode}, execution-grade-data=${provider.providerMode !== "demo" && provider.freshness.stale === false ? "available" : "unavailable"}`).join("\n") : "No providers registered.";
       }
       case "/open_trades":
         return this.reporting.openTradesMessage();
@@ -210,7 +210,7 @@ export class TelegramCommandRouter {
         const { marketSnapshotService } = await import("../marketSnapshotService");
         const events = marketSnapshotService.upcomingEvents();
         if (!events.length) return "No upcoming configured market events in the lookahead window.\nLive execution: blocked";
-        return ["Upcoming Market Events", ...events.map((item, index) => `${index + 1}. ${item.event.title}\n   Time: ${item.event.startsAt}\n   Impact: ${item.impactScore.finalScore}/10\n   Affected configured symbols: ${item.impactScore.affectedInstruments.join(", ") || "none mapped"}\n   Score basis: ${item.impactScore.explanation}`), "Live execution: blocked"].join("\n");
+        return ["Upcoming Market Events", ...events.map((item, index) => `${index + 1}. ${item.event.sourceType === "synthetic_demo" ? "[synthetic demo] " : ""}${item.event.title}\n   Time: ${item.event.startsAt}\n   Authoritative: ${item.event.authoritative}\n   Impact: ${item.impactScore.finalScore}/10\n   Affected configured symbols: ${item.impactScore.affectedInstruments.join(", ") || "none mapped"}\n   Score basis: ${item.impactScore.explanation}`), "Live execution: blocked"].join("\n");
       }
       case "/performance":
         return this.performanceMessage();
@@ -312,18 +312,21 @@ export class TelegramCommandRouter {
 
   private async researchThroughputMessage() {
     const { v2OperationsService } = await import("../v2/operations");
-    const status = (await v2OperationsService.statusAsync()).body;
+    const progress = (await v2OperationsService.researchProgress()).body as Record<string, unknown>;
+    if (progress.degraded) return `Research Throughput\nState: degraded\nReason: ${progress.reason}\nLive execution: blocked`;
+    const windows = progress.windows as Record<string, Record<string, unknown>>;
+    const pipeline = progress.pipeline as Record<string, unknown>;
     return [
       "Research Throughput",
-      "24h / 7d currently use persisted projection totals.",
-      `Observations: ${status.observationsCreated ?? 0}`,
-      `Hypotheses: ${status.hypothesesCreated ?? 0}`,
-      `Experiments: ${status.experimentsQueued ?? 0}`,
-      `Backtests: ${status.backtestsCompleted ?? 0}`,
-      `Court verdicts: ${status.courtroomVerdicts ?? 0}`,
-      `Ranked candidates: ${status.rankedCandidates ?? 0}`,
-      "Oldest/newest: see /api/v2 collection pages.",
-    ].join("\n");
+      `Window 24h observations: ${windows.running24Hours?.observations ?? 0}`,
+      `Window 7d observations: ${windows.running7Days?.observations ?? 0}`,
+      `Current-hour detector attempts: ${(pipeline.detectorEvaluations as Record<string, unknown> | undefined)?.attemptedCurrentHour ?? 0}`,
+      `Current-hour detector completions: ${(pipeline.detectorEvaluations as Record<string, unknown> | undefined)?.completedCurrentHour ?? 0}`,
+      `Current-hour duplicate suppressions: ${(pipeline.detectorEvaluations as Record<string, unknown> | undefined)?.duplicatesSuppressedCurrentHour ?? 0}`,
+      `Lifetime hypotheses: ${pipeline.hypotheses ?? 0}`,
+      `Lifetime ranked candidates: ${pipeline.rankedCandidates ?? 0}`,
+      `Latest generated: ${progress.generatedAt}`,
+      ].join("\n");
   }
 
   private async performanceMessage() {
