@@ -8,6 +8,8 @@ const now = new Date("2026-07-31T15:45:00.000Z");
 await testDurableProgressCountsAndReadiness();
 await testProgressProjectionFailureIsSanitized();
 await testStatusCountsUseCurrentProjectionSources();
+await testDataReconciliationDetectsMismatches();
+await testInvalidDailyReportDateCannotBecomeLatest();
 
 console.log("v2 reporting progress tests passed");
 
@@ -21,27 +23,28 @@ async function testDurableProgressCountsAndReadiness() {
         assert.match(sql, /FROM v2_research_journal_entries/);
         assert.match(sql, /FROM v2_learning_lessons/);
         assert.match(sql, /FROM v2_strategy_lifecycle_decisions/);
+        assert.match(sql, /v2_research_hypotheses WHERE created_at >= \$2::timestamp - INTERVAL '24 hours'/);
+        assert.match(sql, /v2_ranking_decisions WHERE created_at >= \$2::timestamp - INTERVAL '7 days'/);
         assert.match(sql, /status = 'attempted'/);
         return {
           rows: [{
-            observations_current_hour: 1,
-            observations_24h: 1,
-            observations_7d: 1,
-            observations_total: 1,
-            hypotheses: 1,
-            strategies: 1,
-            experiments: 1,
-            backtests: 1,
-            verdicts: 1,
-            ranked_candidates: 1,
-            forward_tests: 1,
-            signals: 1,
-            evaluations: 1,
-            journal_entries: 1,
-            lessons: 1,
-            lifecycle_decisions: 1,
-            pilot_scorecards: 0,
-            evaluations_records_hour: 2,
+            ...pipelineRow({
+              observations: [1, 2, 3, 4],
+              hypotheses: [0, 1, 1, 1],
+              strategies: [0, 1, 1, 1],
+              experiments: [0, 1, 1, 1],
+              backtests: [0, 1, 1, 1],
+              verdicts: [0, 1, 1, 1],
+              ranked_candidates: [0, 1, 1, 1],
+              forward_tests: [0, 1, 1, 1],
+              signals: [0, 1, 1, 1],
+              evaluations: [0, 1, 1, 1],
+              journal_entries: [0, 1, 1, 1],
+              lessons: [0, 1, 1, 1],
+              lifecycle_decisions: [0, 1, 1, 1],
+              pilot_scorecards: [0, 0, 0, 0],
+              detector_evaluations: [2, 2, 2, 2],
+            }),
             evaluations_attempted_hour: 1,
             evaluations_completed_hour: 1,
             duplicates_suppressed_hour: 0,
@@ -59,6 +62,14 @@ async function testDurableProgressCountsAndReadiness() {
 
   const progress = await repository.researchProgress(now);
   assert.equal(progress.status, "ok");
+  assert.equal(progress.source, "postgresql");
+  assert.equal(progress.databaseBacked, true);
+  assert.equal(progress.windows?.currentHour?.observations, 1);
+  assert.equal(progress.windows?.running24Hours?.observations, 2);
+  assert.equal(progress.windows?.running7Days?.observations, 3);
+  assert.equal(progress.windows?.lifetime?.observations, 4);
+  assert.equal(progress.windows?.running24Hours?.hypotheses, 1);
+  assert.equal(progress.pipeline.observations, 4);
   assert.equal(progress.pipeline.evaluations, 1);
   assert.equal(progress.pipeline.journalEntries, 1);
   assert.equal(progress.pipeline.lessons, 1);
@@ -104,6 +115,7 @@ async function testProgressProjectionFailureIsSanitized() {
 
 async function testStatusCountsUseCurrentProjectionSources() {
   const service = new V2OperationsService({
+    operations: progressRepository({ rankedCandidates: 11, evaluations: 12, journalEntries: 13, lessons: 14, lifecycleDecisions: 15 }),
     ranking: countRepository(7),
     evidence: {
       strategies: countRepository(3),
@@ -115,15 +127,163 @@ async function testStatusCountsUseCurrentProjectionSources() {
   } as never);
 
   const response = await service.statusAsync({ correlationId: "00000000-0000-4000-8000-000000000001" });
-  assert.equal(response.body.rankedCandidates, 7);
-  assert.equal(response.body.externalEvaluations, 4);
-  assert.equal(response.body.journalEntries, 5);
-  assert.equal(response.body.lessons, 6);
-  assert.equal(response.body.lifecycleStates, 2);
+  assert.equal(response.body.rankedCandidates, 11);
+  assert.equal(response.body.externalEvaluations, 12);
+  assert.equal(response.body.journalEntries, 13);
+  assert.equal(response.body.lessons, 14);
+  assert.equal(response.body.lifecycleStates, 15);
+  assert.equal((response.body.moduleAvailability as Record<string, unknown>).journal, "available");
+  assert.deepEqual(response.body.reportingSource, { source: "postgresql", databaseBacked: true, generatedAt: now.toISOString() });
+}
+
+async function testDataReconciliationDetectsMismatches() {
+  const service = new V2OperationsService({
+    operations: progressRepository({ observations: 10, hypotheses: 3, strategies: 2, experiments: 2, backtests: 1, verdicts: 1, rankedCandidates: 1, forwardTests: 0 }),
+    ranking: countRepository(2),
+    evidence: {
+      observations: countRepository(10),
+      hypotheses: countRepository(3),
+      strategies: countRepository(2),
+      experiments: countRepository(2),
+      backtests: countRepository(1),
+      "court-cases": countRepository(1),
+      "forward-tests": countRepository(0),
+      signals: countRepository(0),
+      evaluations: countRepository(0),
+      journal: countRepository(0),
+      lessons: countRepository(0),
+      lifecycle: countRepository(0),
+    },
+  } as never);
+
+  const response = await service.dataReconciliation();
+  assert.equal(response.body.overallStatus, "mismatch");
+  const comparisons = response.body.comparisons as Array<Record<string, unknown>>;
+  assert.deepEqual(comparisons.find(item => item.stage === "ranked candidates"), { stage: "ranked candidates", canonical: 1, repository: 2, status: "mismatch" });
+  assert.match(await service.telegramDataReconciliation(), /ranked candidates: mismatch API=1 repo=2/);
+}
+
+async function testInvalidDailyReportDateCannotBecomeLatest() {
+  const goodReport = reportRecord("2026-08-09", "2026-08-09T00:00:00.000Z");
+  const repository = new PgV2OperationsRepository({
+    query: async (sql: string) => {
+      if (sql.includes("ORDER BY created_at")) {
+        assert.match(sql, /to_char\(to_date\(report_date/);
+        return { rows: [pgReportRow(goodReport)], rowCount: 1 };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    },
+  } as never);
+  const latest = await repository.latestReport();
+  assert.equal(latest?.report.reportDate, "2026-08-09");
+
+  assert.rejects(
+    () => new PgV2OperationsRepository({ query: async () => ({ rows: [pgReportRow(reportRecord("2099-04-93", "2099-04-93T00:00:00.000Z"))], rowCount: 1 }) } as never).latestReport(),
+    /Daily report date is not a real YYYY-MM-DD/,
+  );
 }
 
 function countRepository(total: number) {
   return {
     listPage: async () => ({ items: [], total }),
+  };
+}
+
+function progressRepository(overrides: Record<string, number>) {
+  const pipeline = {
+    observations: 0,
+    hypotheses: 0,
+    strategies: 0,
+    experiments: 0,
+    backtests: 0,
+    verdicts: 0,
+    rankedCandidates: 0,
+    forwardTests: 0,
+    signals: 0,
+    evaluations: 0,
+    journalEntries: 0,
+    lessons: 0,
+    lifecycleDecisions: 0,
+    pilotScorecards: 0,
+    ...overrides,
+    detectorEvaluations: { recordsCurrentHour: 0, attemptedCurrentHour: 0, completedCurrentHour: 0, duplicatesSuppressedCurrentHour: 0, failuresCurrentHour: 0 },
+  };
+  return {
+    latestReport: async () => null,
+    getReportByDate: async () => null,
+    saveReport: async record => ({ inserted: true, record }),
+    saveDelivery: async record => ({ inserted: true, record }),
+    invalidDailyReportCount: async () => 0,
+    researchProgress: async () => ({
+      schemaVersion: "fincoach.v2.research-progress.1",
+      status: "ok",
+      generatedAt: now.toISOString(),
+      source: "postgresql",
+      databaseBacked: true,
+      windows: {
+        currentHour: pipeline,
+        running24Hours: pipeline,
+        running7Days: pipeline,
+        lifetime: pipeline,
+        total: pipeline,
+      },
+      pipeline,
+    }),
+  };
+}
+
+function pipelineRow(input: Record<string, [number, number, number, number]>) {
+  return Object.fromEntries(Object.entries(input).flatMap(([alias, [hour, day, week, total]]) => [
+    [`${alias}_current_hour`, hour],
+    [`${alias}_24h`, day],
+    [`${alias}_7d`, week],
+    [`${alias}_total`, total],
+  ]));
+}
+
+function reportRecord(reportDate: string, createdAt: string) {
+  return {
+    report: {
+      reportId: `report-${reportDate}`,
+      schemaVersion: "fincoach.v2.daily-research-report.1",
+      reportDate,
+      observations: 0,
+      hypotheses: 0,
+      experiments: 0,
+      backtests: 0,
+      courtVerdicts: 0,
+      rankingChanges: 0,
+      forwardTests: 0,
+      signals: 0,
+      externalEvaluations: 0,
+      lessons: 0,
+      lifecycleChanges: 0,
+      operationalFailures: 0,
+      deadLetterEvents: 0,
+      dataGaps: 0,
+      staleDataIncidents: 0,
+      moduleHealth: {},
+      liveExecutionBlocked: true,
+      createdAt,
+    },
+    status: "created",
+    correlationId: "00000000-0000-4000-8000-000000000001",
+    causationId: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function pgReportRow(record: ReturnType<typeof reportRecord>) {
+  return {
+    report_id: record.report.reportId,
+    schema_version: record.report.schemaVersion,
+    report_date: record.report.reportDate,
+    status: record.status,
+    payload: record.report,
+    correlation_id: record.correlationId,
+    causation_id: record.causationId,
+    created_at: record.createdAt,
+    updated_at: record.updatedAt,
   };
 }

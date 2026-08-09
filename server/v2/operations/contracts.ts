@@ -83,6 +83,8 @@ export type V2ResearchProgress = {
   schemaVersion: "fincoach.v2.research-progress.1";
   status: "ok" | "degraded";
   generatedAt: string;
+  source?: "postgresql" | "memory" | "not_configured";
+  databaseBacked?: boolean;
   runtime?: Record<string, unknown>;
   windows?: Record<string, Record<string, unknown>>;
   coverage?: Record<string, unknown>;

@@ -356,16 +356,7 @@ export class TelegramCommandRouter {
 
   private async dataReconciliationMessage() {
     const { v2OperationsService } = await import("../v2/operations");
-    const status = (await v2OperationsService.statusAsync()).body;
-    return [
-      "Data Reconciliation",
-      `Observations API/PostgreSQL: ${status.observationsCreated ?? 0}`,
-      `Hypotheses API/PostgreSQL: ${status.hypothesesCreated ?? 0}`,
-      `Experiments API/PostgreSQL: ${status.experimentsQueued ?? 0}`,
-      `Backtests API/PostgreSQL: ${status.backtestsCompleted ?? 0}`,
-      `Signals API/PostgreSQL: ${status.signals ?? 0}`,
-      "Mismatches: none detected by status projection",
-    ].join("\n");
+    return v2OperationsService.telegramDataReconciliation();
   }
 
   private async audit(input: { command: string; actorId: string; chatId: string }, command: string, authorized: boolean, outcome: "accepted" | "rejected" | "confirmation_required" | "blocked", reason: string | null) {

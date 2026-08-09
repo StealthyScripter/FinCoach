@@ -149,14 +149,16 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
   }));
   assert.match(await operations.telegramSummary("/strategy_leaderboard"), /Items: 1/);
   assert.match(await operations.telegramSummary("/strategy_leaderboard"), /Availability: available/);
+  assert.match(await operations.telegramSummary("/strategy_leaderboard"), /State: available/);
   assert.match(await operations.telegramSummary("/forward_tests"), /Availability: available_empty/);
+  assert.match(await operations.telegramSummary("/forward_tests"), /State: configured_empty/);
   const throughput = await operations.telegramResearchThroughput();
-  assert.match(throughput, /Window 24h observations: 0/);
-  assert.match(throughput, /Window 7d observations: 0/);
+  assert.match(throughput, /Observations: 0 \/ 0 \/ 0 \/ 0/);
   assert.doesNotMatch(throughput, /24h .*lifetime/i);
   const blockers = await operations.telegramResearchBlockers();
   assert.match(blockers, /forward_testing_disabled/);
   assert.match(blockers, /forward_test_capacity_zero/);
+  assert.match(blockers, /research_signal_creation_disabled/);
 }
 
 {

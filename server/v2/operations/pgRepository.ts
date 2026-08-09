@@ -9,6 +9,24 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 
 export type OperationsSaveResult<T> = { inserted: boolean; record: T; conflict?: "idempotent" | "conflicting" };
 
+const PIPELINE_TABLES = [
+  { key: "observations", alias: "observations", table: "v2_market_observations" },
+  { key: "hypotheses", alias: "hypotheses", table: "v2_research_hypotheses" },
+  { key: "strategies", alias: "strategies", table: "v2_strategy_definitions" },
+  { key: "experiments", alias: "experiments", table: "v2_research_experiments" },
+  { key: "backtests", alias: "backtests", table: "v2_backtest_results" },
+  { key: "verdicts", alias: "verdicts", table: "v2_court_verdicts" },
+  { key: "rankedCandidates", alias: "ranked_candidates", table: "v2_ranking_decisions" },
+  { key: "forwardTests", alias: "forward_tests", table: "v2_forward_tests" },
+  { key: "signals", alias: "signals", table: "v2_research_signals" },
+  { key: "evaluations", alias: "evaluations", table: "v2_external_evaluations" },
+  { key: "journalEntries", alias: "journal_entries", table: "v2_research_journal_entries" },
+  { key: "lessons", alias: "lessons", table: "v2_learning_lessons" },
+  { key: "lifecycleDecisions", alias: "lifecycle_decisions", table: "v2_strategy_lifecycle_decisions" },
+  { key: "pilotScorecards", alias: "pilot_scorecards", table: "v2_pilot_scorecards" },
+  { key: "detectorEvaluations", alias: "detector_evaluations", table: "v2_detector_evaluations" },
+] as const;
+
 export class PgV2OperationsRepository {
   constructor(private readonly db: Queryable) {}
 
@@ -41,26 +59,15 @@ export class PgV2OperationsRepository {
   async researchProgress(now = new Date()): Promise<V2ResearchProgress> {
     const generatedAt = now.toISOString();
     const currentHour = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours())).toISOString();
+    const countSql = PIPELINE_TABLES.flatMap(({ alias, table }) => [
+      `(SELECT count(*)::int FROM ${table} WHERE created_at >= $1::timestamp) AS ${alias}_current_hour`,
+      `(SELECT count(*)::int FROM ${table} WHERE created_at >= $2::timestamp - INTERVAL '24 hours') AS ${alias}_24h`,
+      `(SELECT count(*)::int FROM ${table} WHERE created_at >= $2::timestamp - INTERVAL '7 days') AS ${alias}_7d`,
+      `(SELECT count(*)::int FROM ${table}) AS ${alias}_total`,
+    ]).join(",\n        ");
     const counts = await this.db.query(
       `SELECT
-        (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $1) AS observations_current_hour,
-        (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $2::timestamp - INTERVAL '24 hours') AS observations_24h,
-        (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $2::timestamp - INTERVAL '7 days') AS observations_7d,
-        (SELECT count(*)::int FROM v2_market_observations) AS observations_total,
-        (SELECT count(*)::int FROM v2_research_hypotheses) AS hypotheses,
-        (SELECT count(*)::int FROM v2_strategy_definitions) AS strategies,
-        (SELECT count(*)::int FROM v2_research_experiments) AS experiments,
-        (SELECT count(*)::int FROM v2_backtest_results) AS backtests,
-        (SELECT count(*)::int FROM v2_court_verdicts) AS verdicts,
-        (SELECT count(*)::int FROM v2_ranking_decisions) AS ranked_candidates,
-        (SELECT count(*)::int FROM v2_forward_tests) AS forward_tests,
-        (SELECT count(*)::int FROM v2_research_signals) AS signals,
-        (SELECT count(*)::int FROM v2_external_evaluations) AS evaluations,
-        (SELECT count(*)::int FROM v2_research_journal_entries) AS journal_entries,
-        (SELECT count(*)::int FROM v2_learning_lessons) AS lessons,
-        (SELECT count(*)::int FROM v2_strategy_lifecycle_decisions) AS lifecycle_decisions,
-        (SELECT count(*)::int FROM v2_pilot_scorecards) AS pilot_scorecards,
-        (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1) AS evaluations_records_hour,
+        ${countSql},
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'attempted') AS evaluations_attempted_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'completed') AS evaluations_completed_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'duplicate_suppressed') AS duplicates_suppressed_hour,
@@ -69,6 +76,30 @@ export class PgV2OperationsRepository {
       [currentHour, generatedAt],
     );
     const row = counts.rows[0] ?? {};
+    const windows = buildPipelineWindows(row, currentHour, generatedAt);
+    const pipeline = {
+      observations: Number(windows.lifetime.observations ?? 0),
+      hypotheses: Number(windows.lifetime.hypotheses ?? 0),
+      strategies: Number(windows.lifetime.strategies ?? 0),
+      experiments: Number(windows.lifetime.experiments ?? 0),
+      backtests: Number(windows.lifetime.backtests ?? 0),
+      verdicts: Number(windows.lifetime.verdicts ?? 0),
+      rankedCandidates: Number(windows.lifetime.rankedCandidates ?? 0),
+      forwardTests: Number(windows.lifetime.forwardTests ?? 0),
+      signals: Number(windows.lifetime.signals ?? 0),
+      evaluations: Number(windows.lifetime.evaluations ?? 0),
+      journalEntries: Number(windows.lifetime.journalEntries ?? 0),
+      lessons: Number(windows.lifetime.lessons ?? 0),
+      lifecycleDecisions: Number(windows.lifetime.lifecycleDecisions ?? 0),
+      pilotScorecards: Number(windows.lifetime.pilotScorecards ?? 0),
+      detectorEvaluations: {
+        recordsCurrentHour: Number((windows.currentHour as Record<string, unknown>).detectorEvaluations ?? 0),
+        attemptedCurrentHour: Number(row.evaluations_attempted_hour ?? 0),
+        completedCurrentHour: Number(row.evaluations_completed_hour ?? 0),
+        duplicatesSuppressedCurrentHour: Number(row.duplicates_suppressed_hour ?? 0),
+        failuresCurrentHour: Number(row.failures_hour ?? 0),
+      },
+    };
     const grouped = await this.db.query(
       `SELECT 'symbol' AS kind, COALESCE(symbol, 'unknown') AS value, count(*)::int AS count FROM v2_market_observations GROUP BY symbol
        UNION ALL
@@ -84,32 +115,14 @@ export class PgV2OperationsRepository {
       schemaVersion: "fincoach.v2.research-progress.1",
       status: "ok",
       generatedAt,
+      source: "postgresql",
+      databaseBacked: true,
+      degraded: false,
       runtime: { latestCompletedCycle: latestCycle.rows[0] ?? null },
-      windows: {
-        currentHour: { observations: Number(row.observations_current_hour ?? 0), startsAt: currentHour },
-        running24Hours: { observations: Number(row.observations_24h ?? 0) },
-        running7Days: { observations: Number(row.observations_7d ?? 0) },
-        total: { observations: Number(row.observations_total ?? 0) },
-      },
+      windows,
       coverage: { symbols: byKind("symbol"), timeframes: byKind("timeframe"), detectors: byKind("detector"), strategyFamilies: byKind("strategyFamily"), mostRecentMarketDataTimestamp: toIsoOrNull(row.most_recent_market_data_timestamp) },
-      pipeline: {
-        observations: Number(row.observations_total ?? 0),
-        hypotheses: Number(row.hypotheses ?? 0),
-        strategies: Number(row.strategies ?? 0),
-        experiments: Number(row.experiments ?? 0),
-        backtests: Number(row.backtests ?? 0),
-        verdicts: Number(row.verdicts ?? 0),
-        rankedCandidates: Number(row.ranked_candidates ?? 0),
-        forwardTests: Number(row.forward_tests ?? 0),
-        signals: Number(row.signals ?? 0),
-        evaluations: Number(row.evaluations ?? 0),
-        journalEntries: Number(row.journal_entries ?? 0),
-        lessons: Number(row.lessons ?? 0),
-        lifecycleDecisions: Number(row.lifecycle_decisions ?? 0),
-        pilotScorecards: Number(row.pilot_scorecards ?? 0),
-        detectorEvaluations: { recordsCurrentHour: Number(row.evaluations_records_hour ?? 0), attemptedCurrentHour: Number(row.evaluations_attempted_hour ?? 0), completedCurrentHour: Number(row.evaluations_completed_hour ?? 0), duplicatesSuppressedCurrentHour: Number(row.duplicates_suppressed_hour ?? 0), failuresCurrentHour: Number(row.failures_hour ?? 0) },
-      },
-      readiness: readinessFromCounts(row),
+      pipeline,
+      readiness: readinessFromPipeline(pipeline),
     };
   }
 
@@ -128,6 +141,7 @@ export class PgV2OperationsRepository {
 
   async saveReport(record: DailyReportRecord): Promise<OperationsSaveResult<DailyReportRecord>> {
     try {
+      assertValidReportDate(record.report.reportDate);
       const existing = await this.db.query("SELECT * FROM v2_operations_daily_reports WHERE report_date = $1 OR idempotency_key = $2", [
         record.report.reportDate,
         record.report.reportDate,
@@ -152,6 +166,7 @@ export class PgV2OperationsRepository {
 
   async getReportByDate(reportDate: string): Promise<DailyReportRecord | null> {
     try {
+      assertValidReportDate(reportDate);
       const result = await this.db.query("SELECT * FROM v2_operations_daily_reports WHERE report_date = $1", [reportDate]);
       return result.rowCount ? mapReport(result.rows[0]) : null;
     } catch (error) {
@@ -161,8 +176,28 @@ export class PgV2OperationsRepository {
 
   async latestReport(): Promise<DailyReportRecord | null> {
     try {
-      const result = await this.db.query("SELECT * FROM v2_operations_daily_reports ORDER BY created_at DESC, report_id DESC LIMIT 1");
+      const result = await this.db.query(`SELECT * FROM v2_operations_daily_reports
+        WHERE CASE
+          WHEN report_date ~ '^\\d{4}-\\d{2}-\\d{2}$'
+          THEN to_char(to_date(report_date, 'YYYY-MM-DD'), 'YYYY-MM-DD') = report_date
+          ELSE false
+        END
+        ORDER BY created_at DESC, report_id DESC LIMIT 1`);
       return result.rowCount ? mapReport(result.rows[0]) : null;
+    } catch (error) {
+      throw classifyPostgresError(error);
+    }
+  }
+
+  async invalidDailyReportCount(): Promise<number> {
+    try {
+      const result = await this.db.query(`SELECT count(*)::int AS total FROM v2_operations_daily_reports
+        WHERE CASE
+          WHEN report_date ~ '^\\d{4}-\\d{2}-\\d{2}$'
+          THEN to_char(to_date(report_date, 'YYYY-MM-DD'), 'YYYY-MM-DD') <> report_date
+          ELSE true
+        END`);
+      return Number(result.rows[0]?.total ?? 0);
     } catch (error) {
       throw classifyPostgresError(error);
     }
@@ -227,6 +262,7 @@ function mapReport(row: QueryResultRow): DailyReportRecord {
   if (report.schemaVersion !== DAILY_REPORT_SCHEMA_VERSION || report.reportId !== row.report_id || report.reportDate !== row.report_date) {
     throw new V2PersistenceError("malformed_persisted_record", "Daily report payload does not match row identity");
   }
+  assertValidReportDate(report.reportDate);
   return {
     report,
     status: row.status,
@@ -264,26 +300,72 @@ function toIsoOrNull(value: unknown): string | null {
   return toIso(value);
 }
 
-function readinessFromCounts(row: Record<string, unknown>) {
+function readinessFromPipeline(pipeline: {
+  observations: number;
+  hypotheses: number;
+  strategies: number;
+  experiments: number;
+  backtests: number;
+  verdicts: number;
+  rankedCandidates: number;
+  forwardTests: number;
+  signals: number;
+  evaluations: number;
+  journalEntries: number;
+  lessons: number;
+  lifecycleDecisions: number;
+}) {
   const stages = [
-    ["lifecycle decision", Number(row.lifecycle_decisions ?? 0) > 0, "research lifecycle complete"],
-    ["lesson", Number(row.lessons ?? 0) > 0, "lifecycle decision"],
-    ["journal entry", Number(row.journal_entries ?? 0) > 0, "lesson"],
-    ["evaluation", Number(row.evaluations ?? 0) > 0, "journal entry"],
-    ["signal", Number(row.signals ?? 0) > 0, "evaluation"],
-    ["forward test", Number(row.forward_tests ?? 0) > 0, "signal"],
-    ["ranked candidate", Number(row.ranked_candidates ?? 0) > 0, "forward-test eligible"],
-    ["verdict", Number(row.verdicts ?? 0) > 0, "ranked candidate"],
-    ["backtest", Number(row.backtests ?? 0) > 0, "verdict"],
-    ["experiment", Number(row.experiments ?? 0) > 0, "backtest"],
-    ["strategy", Number(row.strategies ?? 0) > 0, "experiment"],
-    ["hypothesis", Number(row.hypotheses ?? 0) > 0, "strategy"],
-    ["observation", Number(row.observations_total ?? 0) > 0, "hypothesis"],
+    ["lifecycle decision", pipeline.lifecycleDecisions > 0, "research lifecycle complete"],
+    ["lesson", pipeline.lessons > 0, "lifecycle decision"],
+    ["journal entry", pipeline.journalEntries > 0, "lesson"],
+    ["evaluation", pipeline.evaluations > 0, "journal entry"],
+    ["signal", pipeline.signals > 0, "evaluation"],
+    ["forward test", pipeline.forwardTests > 0, "signal"],
+    ["ranked candidate", pipeline.rankedCandidates > 0, "forward-test eligible"],
+    ["verdict", pipeline.verdicts > 0, "ranked candidate"],
+    ["backtest", pipeline.backtests > 0, "verdict"],
+    ["experiment", pipeline.experiments > 0, "backtest"],
+    ["strategy", pipeline.strategies > 0, "experiment"],
+    ["hypothesis", pipeline.hypotheses > 0, "strategy"],
+    ["observation", pipeline.observations > 0, "hypothesis"],
   ] as const;
   const currentStage = stages.find(([, present]) => present);
   const current = currentStage?.[0] ?? "no durable research artifacts";
   const next = currentStage?.[2] ?? "observation";
   return { currentStage: current, nextStage: next, liveExecutionBlocked: true as const, paperExecutionState: "disabled_or_gated", demoExecutionState: "demo_only_gated" };
+}
+
+function buildPipelineWindows(row: QueryResultRow, currentHour: string, generatedAt: string) {
+  const currentHourCounts = Object.fromEntries(PIPELINE_TABLES.map(({ key, alias }) => [key, Number(row[`${alias}_current_hour`] ?? 0)]));
+  const running24Hours = Object.fromEntries(PIPELINE_TABLES.map(({ key, alias }) => [key, Number(row[`${alias}_24h`] ?? 0)]));
+  const running7Days = Object.fromEntries(PIPELINE_TABLES.map(({ key, alias }) => [key, Number(row[`${alias}_7d`] ?? 0)]));
+  const lifetime = Object.fromEntries(PIPELINE_TABLES.map(({ key, alias }) => [key, Number(row[`${alias}_total`] ?? 0)]));
+  return {
+    currentHour: { ...currentHourCounts, startsAt: currentHour, timezone: "UTC" },
+    running24Hours: { ...running24Hours, endsAt: generatedAt, duration: "PT24H" },
+    running7Days: { ...running7Days, endsAt: generatedAt, duration: "P7D" },
+    lifetime,
+    total: lifetime,
+    definitions: {
+      currentHour: "UTC hour containing generatedAt",
+      running24Hours: "Rolling 24 hours ending at generatedAt",
+      running7Days: "Rolling 7 days ending at generatedAt",
+      lifetime: "All durable records in PostgreSQL",
+    },
+  };
+}
+
+function isValidReportDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function assertValidReportDate(value: string) {
+  if (!isValidReportDate(value)) {
+    throw new V2PersistenceError("malformed_persisted_record", "Daily report date is not a real YYYY-MM-DD calendar date");
+  }
 }
 
 function deriveBlockers(progress: Awaited<ReturnType<PgV2OperationsRepository["researchProgress"]>>, now: Date) {

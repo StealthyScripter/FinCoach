@@ -38,6 +38,7 @@ type DurableOperationsProjectionRepository = {
   saveDelivery(record: DailyReportDeliveryRecord): Promise<{ inserted: boolean; record: DailyReportDeliveryRecord }>;
   researchProgress?(now?: Date): Promise<Record<string, unknown>>;
   researchBlockers?(now?: Date): Promise<Record<string, unknown>>;
+  invalidDailyReportCount?(): Promise<number>;
 };
 
 type EvidenceProjectionRepository = {
@@ -68,6 +69,22 @@ const collectionAvailability: Record<V2OperationsCollection, V2OperationsAvailab
   lifecycle: "not_configured",
   orchestration: "available_empty",
 };
+
+const RECONCILIATION_STAGES = [
+  { label: "observations", pipelineKey: "observations", collection: "observations" },
+  { label: "hypotheses", pipelineKey: "hypotheses", collection: "hypotheses" },
+  { label: "strategies", pipelineKey: "strategies", collection: "strategies" },
+  { label: "experiments", pipelineKey: "experiments", collection: "experiments" },
+  { label: "backtests", pipelineKey: "backtests", collection: "backtests" },
+  { label: "verdicts", pipelineKey: "verdicts", collection: "court-cases" },
+  { label: "ranked candidates", pipelineKey: "rankedCandidates" },
+  { label: "forward tests", pipelineKey: "forwardTests", collection: "forward-tests" },
+  { label: "signals", pipelineKey: "signals", collection: "signals" },
+  { label: "evaluations", pipelineKey: "evaluations", collection: "evaluations" },
+  { label: "journal entries", pipelineKey: "journalEntries", collection: "journal" },
+  { label: "lessons", pipelineKey: "lessons", collection: "lessons" },
+  { label: "lifecycle decisions", pipelineKey: "lifecycleDecisions", collection: "lifecycle" },
+] as const satisfies ReadonlyArray<{ label: string; pipelineKey: string; collection?: V2OperationsCollection }>;
 
 export class V2OperationsService {
   constructor(
@@ -168,31 +185,50 @@ export class V2OperationsService {
         moduleHealth.pilot = "healthy";
       }
       if (this.asyncOperationsRepository()) {
-        const latestReport = await this.asyncOperationsRepository()?.latestReport();
+        const repository = this.asyncOperationsRepository();
+        const latestReport = await repository?.latestReport();
         body.latestDailyReport = latestReport?.report ?? null;
         body.deliveryState = latestReport ? "available" : "available_empty";
         moduleAvailability.operations = latestReport ? "available" : "available_empty";
         moduleHealth.operations = "healthy";
         body.postgresqlHealth = "healthy";
         body.databaseHealth = "healthy";
+        if (repository?.invalidDailyReportCount) {
+          const invalidDailyReports = await repository.invalidDailyReportCount();
+          if (invalidDailyReports > 0) {
+            body.reportingDataInvalid = { dailyReports: invalidDailyReports, code: "reporting_data_invalid" };
+          }
+        }
+        if (repository?.researchProgress) {
+          const progress = await repository.researchProgress();
+          const pipeline = progress.pipeline as Record<string, unknown> | undefined;
+          if (pipeline) {
+            applyPipelineCounts(body, pipeline);
+            applyPipelineAvailability(moduleAvailability, pipeline);
+          }
+          body.pipeline = pipeline ?? body.pipeline;
+          body.reportingSource = { source: progress.source ?? "postgresql", databaseBacked: progress.databaseBacked ?? true, generatedAt: progress.generatedAt };
+        }
       }
       const evidence = this.repositories.evidence ?? {};
       for (const collection of Object.keys(evidence) as V2OperationsCollection[]) {
         const count = await countEvidence(evidence[collection]);
         moduleAvailability[collection] = count > 0 ? "available" : "available_empty";
       }
-      body.observationsCreated = await countEvidence(evidence.observations);
-      body.hypothesesCreated = await countEvidence(evidence.hypotheses);
-      body.experimentsQueued = await countEvidence(evidence.experiments);
-      body.backtestsCompleted = await countEvidence(evidence.backtests);
-      body.forwardTests = await countEvidence(evidence["forward-tests"]);
-      body.signals = await countEvidence(evidence.signals);
-      body.externalEvaluations = await countEvidence(evidence.evaluations);
-      body.journalEntries = await countEvidence(evidence.journal);
-      body.lessons = await countEvidence(evidence.lessons);
-      body.lifecycleStates = await countEvidence(evidence.lifecycle);
-      body.courtroomVerdicts = await countEvidence(evidence["court-cases"]);
-      body.rankedCandidates = await countEvidence(this.repositories.ranking);
+      if (!body.pipeline) {
+        body.observationsCreated = await countEvidence(evidence.observations);
+        body.hypothesesCreated = await countEvidence(evidence.hypotheses);
+        body.experimentsQueued = await countEvidence(evidence.experiments);
+        body.backtestsCompleted = await countEvidence(evidence.backtests);
+        body.forwardTests = await countEvidence(evidence["forward-tests"]);
+        body.signals = await countEvidence(evidence.signals);
+        body.externalEvaluations = await countEvidence(evidence.evaluations);
+        body.journalEntries = await countEvidence(evidence.journal);
+        body.lessons = await countEvidence(evidence.lessons);
+        body.lifecycleStates = await countEvidence(evidence.lifecycle);
+        body.courtroomVerdicts = await countEvidence(evidence["court-cases"]);
+        body.rankedCandidates = await countEvidence(this.repositories.ranking);
+      }
     } catch (error) {
       const availability = availabilityFromError(error);
       body.postgresqlHealth = availability;
@@ -239,6 +275,72 @@ export class V2OperationsService {
     }
   }
 
+  async dataReconciliation(): Promise<V2OperationsResponse<Record<string, unknown>>> {
+    const correlationId = randomUUID();
+    const generatedAt = new Date().toISOString();
+    const repository = this.asyncOperationsRepository();
+    if (!repository?.researchProgress) {
+      return {
+        status: 200,
+        body: {
+          schemaVersion: "fincoach.v2.data-reconciliation.1",
+          generatedAt,
+          source: "not_configured",
+          databaseBacked: false,
+          overallStatus: "query_failed",
+          projectionError: "postgres_projection_not_configured",
+          comparisons: [],
+          liveExecutionBlocked: true,
+        },
+        events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "data_reconciliation" })],
+      };
+    }
+    try {
+      const progress = await repository.researchProgress();
+      const pipeline = progress.pipeline as Record<string, unknown>;
+      const comparisons = await Promise.all(RECONCILIATION_STAGES.map(async stage => {
+        try {
+          const repositoryTotal = await this.reconciliationRepositoryCount(stage);
+          if (repositoryTotal === null) return { stage: stage.label, canonical: Number(pipeline[stage.pipelineKey] ?? 0), repository: null, status: "not_configured" };
+          const canonical = Number(pipeline[stage.pipelineKey] ?? 0);
+          return { stage: stage.label, canonical, repository: repositoryTotal, status: canonical === repositoryTotal ? "match" : "mismatch" };
+        } catch {
+          return { stage: stage.label, canonical: Number(pipeline[stage.pipelineKey] ?? 0), repository: null, status: "query_failed" };
+        }
+      }));
+      const statuses = comparisons.map(item => item.status);
+      const overallStatus = statuses.includes("query_failed") ? "query_failed" : statuses.includes("mismatch") ? "mismatch" : statuses.includes("not_configured") ? "degraded" : "match";
+      return {
+        status: 200,
+        body: {
+          schemaVersion: "fincoach.v2.data-reconciliation.1",
+          generatedAt,
+          source: progress.source ?? "postgresql",
+          databaseBacked: progress.databaseBacked ?? true,
+          overallStatus,
+          comparisons,
+          liveExecutionBlocked: true,
+        },
+        events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "data_reconciliation" })],
+      };
+    } catch (error) {
+      return {
+        status: 200,
+        body: {
+          schemaVersion: "fincoach.v2.data-reconciliation.1",
+          generatedAt,
+          source: "postgresql",
+          databaseBacked: true,
+          overallStatus: "query_failed",
+          projectionError: projectionErrorCode(error),
+          comparisons: [],
+          liveExecutionBlocked: true,
+        },
+        events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "data_reconciliation_degraded" })],
+      };
+    }
+  }
+
   private withRuntimeBlockers(body: Record<string, unknown>) {
     const runtime = this.runtimeStatusProvider?.() ?? {};
     const aggregate = runtime.aggregateTradableWindow as { anyConfiguredInstrumentTradable?: boolean; calendarQuality?: string } | undefined;
@@ -274,13 +376,16 @@ export class V2OperationsService {
       });
     }
     if (rankedCandidates > 0 && config?.forwardTestingEnabled === false) {
-      blockers.push({ code: "forward_testing_disabled", severity: "warning", phase: "forward-testing", reason: "A ranked candidate cannot advance because forward testing is disabled.", currentValue: false, requiredValue: true, recommendedAction: "Keep disabled unless explicitly approving forward-test creation; do not enable as part of this audit.", firstObservedAt: at, lastObservedAt: at });
+      blockers.push({ code: "forward_testing_disabled", severity: "warning", phase: "forward_testing", reason: "A ranked candidate cannot advance because forward testing is disabled.", currentValue: false, requiredValue: true, recommendedAction: "Keep disabled unless explicitly approving forward-test creation; do not enable as part of this audit.", firstObservedAt: at, lastObservedAt: at });
     }
     if (rankedCandidates > 0 && Number(config?.maxActiveForwardTests ?? 0) <= 0) {
-      blockers.push({ code: "forward_test_capacity_zero", severity: "warning", phase: "forward-testing", reason: "A ranked candidate cannot advance because forward-test capacity is zero.", currentValue: config?.maxActiveForwardTests ?? 0, requiredValue: "> 0", recommendedAction: "Keep capacity zero unless explicitly approving forward-test creation.", firstObservedAt: at, lastObservedAt: at });
+      blockers.push({ code: "forward_test_capacity_zero", severity: "warning", phase: "forward_testing", reason: "A ranked candidate cannot advance because forward-test capacity is zero.", currentValue: config?.maxActiveForwardTests ?? 0, requiredValue: "> 0", recommendedAction: "Keep capacity zero unless explicitly approving forward-test creation.", firstObservedAt: at, lastObservedAt: at });
     }
-    if (Number(pipeline?.forwardTests ?? 0) > 0 && config?.researchSignalEnabled === false) {
+    if ((Number(pipeline?.forwardTests ?? 0) > 0 || rankedCandidates > 0) && config?.researchSignalEnabled === false) {
       blockers.push({ code: "research_signal_creation_disabled", severity: "warning", phase: "signals", reason: "Forward-tested candidates cannot emit research signals because signal creation is disabled.", currentValue: false, requiredValue: true, recommendedAction: "Keep research signal creation disabled unless explicitly approved.", firstObservedAt: at, lastObservedAt: at });
+    }
+    if ((Number(pipeline?.forwardTests ?? 0) > 0 || rankedCandidates > 0) && Number(config?.maxActiveResearchSignals ?? 0) <= 0) {
+      blockers.push({ code: "research_signal_capacity_zero", severity: "warning", phase: "signals", reason: "Forward-tested or ranked candidates cannot emit research signals because signal capacity is zero.", currentValue: config?.maxActiveResearchSignals ?? 0, requiredValue: "> 0", recommendedAction: "Keep research signal capacity zero unless explicitly approved.", firstObservedAt: at, lastObservedAt: at });
     }
     const severities = blockers.map((item) => typeof item === "object" && item && "severity" in item ? String((item as { severity?: unknown }).severity) : "info");
     const highestSeverity = severities.includes("critical") ? "critical" : severities.includes("warning") ? "warning" : "info";
@@ -400,6 +505,7 @@ export class V2OperationsService {
       return [
         "Version 2 strategy leaderboard",
         `Items: ${ranking.total}`,
+        `State: ${operatorAvailabilityState(ranking.availability)}`,
         `Availability: ${ranking.availability}`,
         ranking.warning ? `Warning: ${ranking.warning}` : null,
         `Live execution: blocked`,
@@ -411,6 +517,7 @@ export class V2OperationsService {
     return [
       `Version 2 ${commandLabel(command, collection)}`,
       `Items: ${(list.pagination as { total: number }).total}`,
+      `State: ${operatorAvailabilityState(String(list.availability))}`,
       `Availability: ${list.availability}`,
       list.warning ? `Warning: ${list.warning}` : null,
       `Live execution: blocked`,
@@ -427,14 +534,12 @@ export class V2OperationsService {
     const evals = pipeline.detectorEvaluations as Record<string, unknown>;
     return [
       "FinCoach Research Progress",
-      `Current UTC time: ${progress.generatedAt}`,
+      `Generated: ${progress.generatedAt}`,
+      `Source: ${progress.source ?? "unknown"}`,
       `Latest completed cycle: ${JSON.stringify((progress.runtime as Record<string, unknown>)?.latestCompletedCycle ?? null).slice(0, 120)}`,
       "",
-      "Observations",
-      `- Current hour: ${windows.currentHour?.observations ?? 0}`,
-      `- Running 24 hours: ${windows.running24Hours?.observations ?? 0}`,
-      `- Running 7 days: ${windows.running7Days?.observations ?? 0}`,
-      `- Total: ${windows.total?.observations ?? 0}`,
+      "Last 1h / 24h / 7d / Total",
+      ...formatWindowRows(windows),
       `- Evaluations attempted this hour: ${evals.attemptedCurrentHour ?? 0}`,
       `- Evaluations completed this hour: ${evals.completedCurrentHour ?? 0}`,
       `- Duplicates suppressed this hour: ${evals.duplicatesSuppressedCurrentHour ?? 0}`,
@@ -479,15 +584,30 @@ export class V2OperationsService {
     const evals = pipeline.detectorEvaluations as Record<string, unknown> | undefined;
     return [
       "Research Throughput",
-      `Window 24h observations: ${windows.running24Hours?.observations ?? 0}`,
-      `Window 7d observations: ${windows.running7Days?.observations ?? 0}`,
+      `Generated: ${progress.generatedAt}`,
+      `Source: ${progress.source ?? "unknown"}`,
+      "Last 1h / 24h / 7d / Total",
+      ...formatWindowRows(windows),
       `Current-hour detector attempts: ${evals?.attemptedCurrentHour ?? 0}`,
       `Current-hour detector completions: ${evals?.completedCurrentHour ?? 0}`,
       `Current-hour duplicate suppressions: ${evals?.duplicatesSuppressedCurrentHour ?? 0}`,
-      `Lifetime hypotheses: ${pipeline.hypotheses ?? 0}`,
-      `Lifetime ranked candidates: ${pipeline.rankedCandidates ?? 0}`,
-      `Latest generated: ${progress.generatedAt}`,
     ].join("\n");
+  }
+
+  async telegramDataReconciliation() {
+    const body = (await this.dataReconciliation()).body as Record<string, unknown>;
+    const comparisons = Array.isArray(body.comparisons) ? body.comparisons as Array<Record<string, unknown>> : [];
+    const failures = comparisons.filter(item => item.status !== "match");
+    return [
+      "Data Reconciliation",
+      `Generated: ${body.generatedAt}`,
+      `Source: ${body.source ?? "unknown"}`,
+      `State: ${body.overallStatus}`,
+      body.projectionError ? `Projection error: ${body.projectionError}` : null,
+      "",
+      ...(failures.length ? failures.slice(0, 12).map(item => `${item.stage}: ${item.status} API=${item.canonical ?? "n/a"} repo=${item.repository ?? "n/a"}`) : comparisons.map(item => `${item.stage}: match ${item.canonical}`)),
+      `Live execution: blocked`,
+    ].filter(Boolean).join("\n").slice(0, 3900);
   }
 
   async telegramResearchBlockers() {
@@ -539,6 +659,7 @@ export class V2OperationsService {
   }
 
   private createReport(reportDate: string, statusBody: Record<string, unknown> = this.status().body): V2DailyResearchReport {
+    if (!isValidReportDate(reportDate)) throw new V2PersistenceError("malformed_persisted_record", "Daily report date is not a real YYYY-MM-DD calendar date");
     return {
       reportId: createHash("sha256").update(reportDate).digest("hex").slice(0, 32),
       schemaVersion: "fincoach.v2.daily-research-report.1",
@@ -574,6 +695,16 @@ export class V2OperationsService {
 
   private hasDurableRepositories(): boolean {
     return Boolean(this.repositories.orchestration || this.repositories.pilot || this.asyncOperationsRepository());
+  }
+
+  private async reconciliationRepositoryCount(stage: typeof RECONCILIATION_STAGES[number]) {
+    const collection = "collection" in stage ? stage.collection : undefined;
+    if (collection) {
+      const repository = this.repositories.evidence?.[collection];
+      return repository ? countEvidence(repository) : null;
+    }
+    if (stage.pipelineKey === "rankedCandidates") return this.repositories.ranking ? countEvidence(this.repositories.ranking) : null;
+    return null;
   }
 
   private async rankingProjection() {
@@ -619,6 +750,51 @@ function projectionErrorCode(error: unknown) {
   return "projection_failed";
 }
 
+function applyPipelineCounts(body: Record<string, unknown>, pipeline: Record<string, unknown>) {
+  body.observationsCreated = Number(pipeline.observations ?? 0);
+  body.hypothesesCreated = Number(pipeline.hypotheses ?? 0);
+  body.experimentsQueued = Number(pipeline.experiments ?? 0);
+  body.backtestsCompleted = Number(pipeline.backtests ?? 0);
+  body.courtroomVerdicts = Number(pipeline.verdicts ?? 0);
+  body.rankedCandidates = Number(pipeline.rankedCandidates ?? 0);
+  body.forwardTests = Number(pipeline.forwardTests ?? 0);
+  body.signals = Number(pipeline.signals ?? 0);
+  body.externalEvaluations = Number(pipeline.evaluations ?? 0);
+  body.journalEntries = Number(pipeline.journalEntries ?? 0);
+  body.lessons = Number(pipeline.lessons ?? 0);
+  body.lifecycleStates = Number(pipeline.lifecycleDecisions ?? 0);
+}
+
+function applyPipelineAvailability(moduleAvailability: Record<string, V2OperationsAvailability>, pipeline: Record<string, unknown>) {
+  const mappings: Array<[V2OperationsCollection, string]> = [
+    ["observations", "observations"],
+    ["hypotheses", "hypotheses"],
+    ["strategies", "strategies"],
+    ["experiments", "experiments"],
+    ["backtests", "backtests"],
+    ["court-cases", "verdicts"],
+    ["forward-tests", "forwardTests"],
+    ["signals", "signals"],
+    ["evaluations", "evaluations"],
+    ["journal", "journalEntries"],
+    ["lessons", "lessons"],
+    ["lifecycle", "lifecycleDecisions"],
+  ];
+  for (const [collection, key] of mappings) {
+    moduleAvailability[collection] = Number(pipeline[key] ?? 0) > 0 ? "available" : "available_empty";
+  }
+}
+
+function operatorAvailabilityState(state: string) {
+  return state === "available_empty" ? "configured_empty" : state;
+}
+
+function isValidReportDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 function redactDestination(destination: string) {
   return createHash("sha256").update(destination).digest("hex").slice(0, 16);
 }
@@ -652,6 +828,25 @@ function commandLabel(command: string, collection: V2OperationsCollection) {
 function formatCoverage(value: unknown) {
   if (!Array.isArray(value) || value.length === 0) return "none";
   return value.map(item => typeof item === "object" && item !== null ? `${(item as { value?: unknown }).value}:${(item as { count?: unknown }).count}` : String(item)).join(", ");
+}
+
+function formatWindowRows(windows: Record<string, Record<string, unknown>>) {
+  const row = (label: string, key: string) => `${label}: ${windows.currentHour?.[key] ?? 0} / ${windows.running24Hours?.[key] ?? 0} / ${windows.running7Days?.[key] ?? 0} / ${windows.lifetime?.[key] ?? windows.total?.[key] ?? 0}`;
+  return [
+    row("Observations", "observations"),
+    row("Hypotheses", "hypotheses"),
+    row("Strategies", "strategies"),
+    row("Experiments", "experiments"),
+    row("Backtests", "backtests"),
+    row("Verdicts", "verdicts"),
+    row("Ranked", "rankedCandidates"),
+    row("Forward tests", "forwardTests"),
+    row("Signals", "signals"),
+    row("Evaluations", "evaluations"),
+    row("Journal", "journalEntries"),
+    row("Lessons", "lessons"),
+    row("Lifecycle", "lifecycleDecisions"),
+  ];
 }
 
 function reasonForAvailability(state: V2OperationsAvailability) {
