@@ -7,6 +7,9 @@ const now = new Date("2026-06-15T12:00:00.000Z");
 const events = service.getUpcomingEvents(now);
 assert.equal(events.length, 3);
 assert.ok(events.some((event) => event.id === "event-cpi"));
+assert.ok(events.every((event) => event.sourceType === "synthetic_demo"));
+assert.ok(events.every((event) => event.authoritative === false));
+assert.equal(service.getUpcomingEvents(new Date("2026-06-15T13:00:00.000Z"))[0].startsAt, "2026-06-16T13:00:00.000Z");
 
 const relevant = service.getRelevantEvents("VTI", now);
 assert.ok(relevant.length >= 2);

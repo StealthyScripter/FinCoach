@@ -12,5 +12,8 @@ assert.ok(snapshot.providers.some((provider) => provider.kind === "filings"));
 assert.ok(snapshot.providers.some((provider) => provider.kind === "options_data"));
 assert.ok(snapshot.providers.some((provider) => provider.kind === "broker_data"));
 assert.ok(snapshot.providers.every((provider) => provider.providerMode === "demo"));
+assert.ok(snapshot.providers.every((provider) => provider.freshness.stale));
+assert.ok(snapshot.providers.every((provider) => provider.freshness.newestTimestamp === null));
+assert.ok(snapshot.providers.every((provider) => provider.requiredActions.some((action) => action.includes("not evidence of fresh execution-grade data"))));
 
 console.log("providerRegistryService smoke tests passed");

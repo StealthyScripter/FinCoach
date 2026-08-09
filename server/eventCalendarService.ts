@@ -6,6 +6,8 @@ export type MarketEvent = {
   startsAt: string;
   relatedAssets: string[];
   riskNote: string;
+  sourceType: "synthetic_demo" | "configured" | "authoritative";
+  authoritative: boolean;
 };
 
 export class EventCalendarService {
@@ -19,7 +21,9 @@ export class EventCalendarService {
         impact: "high",
         startsAt: new Date(base + 24 * 60 * 60 * 1000).toISOString(),
         relatedAssets: ["SPY", "QQQ", "VTI", "BND", "TLT", "EURUSD", "DXY"],
-        riskNote: "Inflation surprises can move yields, equities, bonds, the dollar, and implied volatility.",
+        riskNote: "Synthetic demo calendar item generated relative to current time; not an authoritative scheduled CPI release.",
+        sourceType: "synthetic_demo",
+        authoritative: false,
       },
       {
         id: "event-fomc-minutes",
@@ -28,7 +32,9 @@ export class EventCalendarService {
         impact: "medium",
         startsAt: new Date(base + 72 * 60 * 60 * 1000).toISOString(),
         relatedAssets: ["SPY", "QQQ", "VTI", "BND", "SGOV", "DXY"],
-        riskNote: "Policy language can change rate-cut expectations and duration risk.",
+        riskNote: "Synthetic demo calendar item generated relative to current time; not authoritative FOMC scheduling data.",
+        sourceType: "synthetic_demo",
+        authoritative: false,
       },
       {
         id: "event-quad-witching",
@@ -37,7 +43,9 @@ export class EventCalendarService {
         impact: "medium",
         startsAt: new Date(base + 5 * 24 * 60 * 60 * 1000).toISOString(),
         relatedAssets: ["SPY", "QQQ", "VTI"],
-        riskNote: "Index options expiration can raise intraday volatility and liquidity noise.",
+        riskNote: "Synthetic demo calendar item generated relative to current time; not authoritative expiration calendar data.",
+        sourceType: "synthetic_demo",
+        authoritative: false,
       },
     ];
   }

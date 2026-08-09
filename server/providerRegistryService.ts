@@ -61,12 +61,13 @@ function provider(input: Pick<ProviderHealth, "id" | "name" | "kind" | "capabili
     status: "healthy",
     providerMode: "demo",
     freshness: {
-      newestTimestamp: input.checkedAt,
-      oldestTimestamp: input.checkedAt,
-      stale: false,
+      newestTimestamp: null,
+      oldestTimestamp: null,
+      stale: true,
     },
-    confidence: 72,
+    confidence: 25,
     requiredActions: [
+      "Demo adapter health only means the local adapter is reachable; it is not evidence of fresh execution-grade data.",
       "Replace demo provider with configured external adapter before production market decisions.",
     ],
   };

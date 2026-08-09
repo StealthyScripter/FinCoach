@@ -101,7 +101,7 @@ export class MarketSnapshotService {
     const cutoff = now.getTime() + lookaheadHours * 3_600_000;
     return eventCalendarService.getUpcomingEvents(now)
       .filter((event) => Date.parse(event.startsAt) <= cutoff)
-      .map((event) => ({ event, impactScore: marketEventImpactScoringService.score(event, runtimeConfig.symbols, now), source: "eventCalendarService.demo_or_configured" }))
+      .map((event) => ({ event, impactScore: marketEventImpactScoringService.score(event, runtimeConfig.symbols, now), source: event.sourceType }))
       .filter((item) => item.impactScore.finalScore >= minimumImpact)
       .sort((a, b) => b.impactScore.finalScore - a.impactScore.finalScore || a.event.startsAt.localeCompare(b.event.startsAt))
       .slice(0, limit);
@@ -125,7 +125,7 @@ export class MarketSnapshotService {
       events,
       freshness,
       blockers,
-      providerHealth: providerRegistryService.getSnapshot().providers.map((provider) => ({ id: provider.id, status: provider.status })),
+      providerHealth: providerRegistryService.getSnapshot().providers.map((provider) => ({ id: provider.id, adapterStatus: provider.status, providerMode: provider.providerMode, executionGradeDataAvailable: provider.providerMode !== "demo" && provider.freshness.stale === false })),
       liveExecutionBlocked: true,
     };
     const message = this.formatMessage(period, now, marketSessions, events, freshness, blockers, config);
@@ -166,10 +166,11 @@ export class MarketSnapshotService {
   private formatMessage(period: MarketSnapshotPeriod, now: Date, marketSessions: Record<string, unknown>, events: ReturnType<MarketSnapshotService["upcomingEvents"]>, freshness: SnapshotDataFreshness, blockers: string[], config: MarketSnapshotConfig) {
     const aggregate = marketSessions.aggregateTradableWindow as { openExchanges?: unknown[]; openInstrumentSessions?: unknown[]; nextTradableOpenAt?: string | null; finalWeeklyCloseAt?: string | null; anyConfiguredInstrumentTradable?: boolean };
     const eventLines = events.length ? events.map((item, index) => [
-      `${index + 1}. ${item.event.title}`,
+      `${index + 1}. ${item.event.sourceType === "synthetic_demo" ? "[synthetic demo] " : ""}${item.event.title}`,
       `   Time: ${formatInTimezone(item.event.startsAt, config.timezone)} ${config.timezone}`,
       `   Region/instruments: ${item.impactScore.affectedInstruments.join(", ") || item.event.relatedAssets.join(", ") || "unavailable"}`,
       `   Impact: ${item.impactScore.finalScore}/10`,
+      `   Calendar source: ${item.event.sourceType}; authoritative: ${item.event.authoritative}`,
       `   Why it matters: ${item.event.riskNote}`,
       "   Consensus/previous: unavailable",
       "   Main execution risk: volatility, spread, liquidity, or gap risk depending on instrument.",
