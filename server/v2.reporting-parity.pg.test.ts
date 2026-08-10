@@ -24,6 +24,11 @@ if (!process.env.DATABASE_URL) {
     assert.equal(progress.pipeline.verdicts - baseline.verdicts, 1);
     assert.equal(progress.pipeline.rankedCandidates - baseline.rankedCandidates, 1);
     assert.equal(progress.pipeline.forwardTests - baseline.forwardTests, 0);
+    assert.equal(progress.pipeline.signals - baseline.signals, 0);
+    assert.equal(progress.pipeline.evaluations - baseline.evaluations, 0);
+    assert.equal(progress.pipeline.journalEntries - baseline.journalEntries, 0);
+    assert.equal(progress.pipeline.lessons - baseline.lessons, 0);
+    assert.equal(progress.pipeline.lifecycleDecisions - baseline.lifecycleDecisions, 0);
     assert.equal(Number(progress.windows?.currentHour?.observations ?? 0) - baseline.currentHourObservations, 1);
     assert.equal(Number(progress.windows?.running24Hours?.observations ?? 0) - baseline.running24HoursObservations, 4);
     assert.equal(Number(progress.windows?.running7Days?.observations ?? 0) - baseline.running7DaysObservations, 7);
@@ -48,11 +53,26 @@ if (!process.env.DATABASE_URL) {
       },
     } as never);
     const status = await service.statusAsync();
-    assert.equal(Number(status.body.observationsCreated) - baseline.observations, 10);
-    assert.equal(Number(status.body.hypothesesCreated) - baseline.hypotheses, 3);
-    assert.equal(Number(status.body.rankedCandidates) - baseline.rankedCandidates, 1);
+    assert.equal(status.body.postgresqlHealth, "healthy");
+    assert.equal((status.body.reportingProjection as Record<string, unknown>).state, "available");
+    assert.equal((status.body.reportingProjection as Record<string, unknown>).source, "postgresql");
+    assert.equal(status.body.observationsCreated, progress.pipeline.observations);
+    assert.equal(status.body.hypothesesCreated, progress.pipeline.hypotheses);
+    assert.equal(status.body.experimentsQueued, progress.pipeline.experiments);
+    assert.equal(status.body.backtestsCompleted, progress.pipeline.backtests);
+    assert.equal(status.body.courtroomVerdicts, progress.pipeline.verdicts);
+    assert.equal(status.body.rankedCandidates, progress.pipeline.rankedCandidates);
+    assert.equal(status.body.forwardTests, progress.pipeline.forwardTests);
+    assert.equal(status.body.signals, progress.pipeline.signals);
+    assert.equal(status.body.externalEvaluations, progress.pipeline.evaluations);
+    assert.equal(status.body.journalEntries, progress.pipeline.journalEntries);
+    assert.equal(status.body.lessons, progress.pipeline.lessons);
+    assert.equal(status.body.lifecycleStates, progress.pipeline.lifecycleDecisions);
     const reconciliation = await service.dataReconciliation();
     assert.equal(reconciliation.body.overallStatus, "match");
+    for (const item of reconciliation.body.comparisons as Array<Record<string, unknown>>) {
+      assert.equal(item.status, "match", `${item.stage} should reconcile`);
+    }
   } finally {
     await cleanup(client, suffix);
     assert.equal(await seededRowCount(client, suffix), 0);
@@ -115,6 +135,11 @@ async function durableCounts(client: Client) {
       (SELECT count(*)::int FROM v2_court_verdicts) AS verdicts,
       (SELECT count(*)::int FROM v2_ranking_decisions) AS ranked_candidates,
       (SELECT count(*)::int FROM v2_forward_tests) AS forward_tests,
+      (SELECT count(*)::int FROM v2_research_signals) AS signals,
+      (SELECT count(*)::int FROM v2_external_evaluations) AS evaluations,
+      (SELECT count(*)::int FROM v2_research_journal_entries) AS journal_entries,
+      (SELECT count(*)::int FROM v2_learning_lessons) AS lessons,
+      (SELECT count(*)::int FROM v2_strategy_lifecycle_decisions) AS lifecycle_decisions,
       (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $1::timestamp) AS current_hour_observations,
       (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $2::timestamp - INTERVAL '24 hours') AS running_24h_observations,
       (SELECT count(*)::int FROM v2_market_observations WHERE created_at >= $2::timestamp - INTERVAL '7 days') AS running_7d_observations`,
@@ -130,6 +155,11 @@ async function durableCounts(client: Client) {
     verdicts: Number(row.verdicts ?? 0),
     rankedCandidates: Number(row.ranked_candidates ?? 0),
     forwardTests: Number(row.forward_tests ?? 0),
+    signals: Number(row.signals ?? 0),
+    evaluations: Number(row.evaluations ?? 0),
+    journalEntries: Number(row.journal_entries ?? 0),
+    lessons: Number(row.lessons ?? 0),
+    lifecycleDecisions: Number(row.lifecycle_decisions ?? 0),
     currentHourObservations: Number(row.current_hour_observations ?? 0),
     running24HoursObservations: Number(row.running_24h_observations ?? 0),
     running7DaysObservations: Number(row.running_7d_observations ?? 0),

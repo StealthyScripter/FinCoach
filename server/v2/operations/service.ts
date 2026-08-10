@@ -188,18 +188,40 @@ export class V2OperationsService {
       }
       if (this.asyncOperationsRepository()) {
         const repository = this.asyncOperationsRepository();
-        const latestReport = await repository?.latestReport();
-        body.latestDailyReport = latestReport?.report ?? null;
-        body.deliveryState = latestReport ? "available" : "available_empty";
-        moduleAvailability.operations = latestReport ? "available" : "available_empty";
-        moduleHealth.operations = "healthy";
         body.postgresqlHealth = "healthy";
         body.databaseHealth = "healthy";
-        if (repository?.invalidDailyReportCount) {
-          const invalidDailyReports = await repository.invalidDailyReportCount();
-          if (invalidDailyReports > 0) {
-            body.reportingDataInvalid = { dailyReports: invalidDailyReports, code: "reporting_data_invalid" };
+        try {
+          const latestReport = await repository?.latestReport();
+          body.latestDailyReport = latestReport?.report ?? null;
+          body.deliveryState = latestReport ? "available" : "available_empty";
+          moduleAvailability.operations = latestReport ? "available" : "available_empty";
+          moduleHealth.operations = "healthy";
+        } catch (error) {
+          const availability = availabilityFromError(error);
+          if (isDatabaseHealthFailure(error)) {
+            body.postgresqlHealth = availability;
+            body.databaseHealth = availability;
           }
+          body.latestDailyReport = null;
+          body.deliveryState = availability;
+          moduleAvailability.operations = availability;
+          moduleHealth.operations = "degraded";
+          body.reportingDataInvalid = { ...(typeof body.reportingDataInvalid === "object" && body.reportingDataInvalid ? body.reportingDataInvalid : {}), dailyReports: "unknown", code: projectionErrorCode(error) };
+        }
+        try {
+          if (repository?.invalidDailyReportCount) {
+            const invalidDailyReports = await repository.invalidDailyReportCount();
+            if (invalidDailyReports > 0) {
+              body.reportingDataInvalid = { ...(typeof body.reportingDataInvalid === "object" && body.reportingDataInvalid ? body.reportingDataInvalid : {}), dailyReports: invalidDailyReports, code: "reporting_data_invalid" };
+            }
+          }
+        } catch (error) {
+          if (isDatabaseHealthFailure(error)) {
+            const availability = availabilityFromError(error);
+            body.postgresqlHealth = availability;
+            body.databaseHealth = availability;
+          }
+          body.reportingDataInvalid = { ...(typeof body.reportingDataInvalid === "object" && body.reportingDataInvalid ? body.reportingDataInvalid : {}), dailyReports: "unknown", code: projectionErrorCode(error) };
         }
         if (repository?.researchProgress) {
           canonicalProgressAttempted = true;
@@ -213,13 +235,18 @@ export class V2OperationsService {
             }
             body.pipeline = pipeline ?? body.pipeline;
             body.reportingSource = canonical.reportingSource;
-            body.reportingProjection = { state: canonical.degraded ? "degraded" : "available", projectionError: canonical.projectionError ?? null };
+            body.reportingProjection = { ...(canonical.reportingSource as Record<string, unknown>), state: canonical.degraded ? "degraded" : "available" };
           } catch (error) {
             const reason = projectionErrorCode(error);
             canonicalProgressFailed = true;
+            if (isDatabaseHealthFailure(error)) {
+              const availability = availabilityFromError(error);
+              body.postgresqlHealth = availability;
+              body.databaseHealth = availability;
+            }
             markDurableCountsUnavailable(body, reason);
             body.reportingSource = { source: "postgresql", databaseBacked: true, degraded: true, projectionError: reason, generatedAt: new Date().toISOString() };
-            body.reportingProjection = { state: "degraded", projectionError: reason };
+            body.reportingProjection = { ...(body.reportingSource as Record<string, unknown>), state: "degraded" };
             body.degradedReason = reason;
           }
         }
@@ -760,6 +787,10 @@ function availabilityFromError(error: unknown): V2OperationsAvailability {
     if (error.code === "malformed_persisted_record") return "degraded";
   }
   return "degraded";
+}
+
+function isDatabaseHealthFailure(error: unknown) {
+  return error instanceof V2PersistenceError && error.code === "database_unavailable";
 }
 
 function projectionErrorCode(error: unknown) {

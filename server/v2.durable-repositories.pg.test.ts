@@ -186,7 +186,7 @@ async function testPilotDurability() {
 }
 
 async function testOperationsDurability() {
-  const report = dailyReport(`report-${suffix}`, `2099-01-${String(Date.now()).slice(-2)}`);
+  const report = dailyReport(`report-${suffix}`, uniqueFutureReportDate());
   const saved = await operations.saveReport({
     report,
     status: "created",
@@ -270,6 +270,11 @@ async function cleanup() {
 
 function hash(value: string) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function uniqueFutureReportDate() {
+  const date = new Date(Date.UTC(2099, 0, 1 + (Date.now() % 20_000)));
+  return date.toISOString().slice(0, 10);
 }
 
 function pilotConfig(pilotId: string): DemoResearchPilotConfig {

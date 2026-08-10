@@ -38,7 +38,7 @@ try {
 }
 
 async function seedProjectionEvidence() {
-  const now = new Date().toISOString();
+  const now = uniqueFutureTimestamp();
   await orchestration.saveCycle({
     cycleId: `cycle-completed-${suffix}`,
     status: "completed",
@@ -115,7 +115,7 @@ async function seedProjectionEvidence() {
     updatedAt: now,
   }, { correlationId });
 
-  const report = dailyReport(`report-${suffix}`, `2099-03-${String(Date.now()).slice(-2)}`);
+  const report = dailyReport(`report-${suffix}`, uniqueFutureReportDate());
   await operations.saveReport({ report, status: "created", correlationId, causationId: null, createdAt: report.createdAt, updatedAt: report.createdAt });
   await operations.saveDelivery({
     deliveryId: `delivery-${suffix}`,
@@ -165,7 +165,7 @@ async function testListProjection() {
 }
 
 async function testDailyReportProjection() {
-  const created = await service.dailyReportAsync({ reportDate: `2099-04-${String(Date.now()).slice(-2)}`, correlationId });
+  const created = await service.dailyReportAsync({ reportDate: uniqueFutureReportDate(100), correlationId });
   const duplicate = await service.dailyReportAsync({ reportDate: created.body.report.reportDate, correlationId });
   assert.equal(created.body.status, "created");
   assert.equal(duplicate.body.status, "existing");
@@ -202,7 +202,10 @@ async function testUnavailableAndMalformedProjection() {
     [malformedReportId, `malformed-projection-${suffix}`, JSON.stringify({ schemaVersion: "fincoach.v2.daily-research-report.1", reportId: "wrong", reportDate: "wrong" }), correlationId, new Date().toISOString()],
   );
   const malformed = await service.statusAsync({ correlationId });
-  assert.equal((malformed.body.moduleAvailability as Record<string, string>).operations, "degraded");
+  assert.equal(malformed.body.postgresqlHealth, "healthy");
+  assert.equal((malformed.body.moduleAvailability as Record<string, string>).operations, "available");
+  assert.equal((malformed.body.reportingDataInvalid as Record<string, unknown>).code, "reporting_data_invalid");
+  assert.ok(Number((malformed.body.reportingDataInvalid as Record<string, unknown>).dailyReports) >= 1);
 }
 
 async function cleanup() {
@@ -298,4 +301,14 @@ function dailyReport(reportId: string, reportDate: string): V2DailyResearchRepor
     liveExecutionBlocked: true,
     createdAt: new Date().toISOString(),
   };
+}
+
+function uniqueFutureReportDate(additionalOffset = 0) {
+  const dayOffset = (Date.now() + additionalOffset) % 3650;
+  return new Date(Date.UTC(2090, 0, 1 + dayOffset)).toISOString().slice(0, 10);
+}
+
+function uniqueFutureTimestamp() {
+  const secondOffset = Date.now() % 86_400;
+  return new Date(Date.UTC(2095, 0, 1, 0, 0, secondOffset)).toISOString();
 }

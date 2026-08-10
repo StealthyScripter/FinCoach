@@ -22,16 +22,20 @@ const TEST_MIGRATIONS = [
   "migrations/0018_weekly_research_session_notifications.sql",
 ] as const;
 
+const TEST_MIGRATION_LOCK_ID = 71420260809;
+
 export async function bootstrapTestDatabase(databaseUrl = process.env.DATABASE_URL) {
   if (!databaseUrl) return;
 
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
   try {
+    await client.query("SELECT pg_advisory_lock($1)", [TEST_MIGRATION_LOCK_ID]);
     for (const migrationPath of TEST_MIGRATIONS) {
       await client.query(readFileSync(migrationPath, "utf-8"));
     }
   } finally {
+    await client.query("SELECT pg_advisory_unlock($1)", [TEST_MIGRATION_LOCK_ID]).catch(() => undefined);
     await client.end();
   }
 }

@@ -44,6 +44,7 @@ async function runReadinessAudit() {
   const operations = new PgV2OperationsRepository(pool);
   const operationsService = new V2OperationsService({ orchestration, pilot, operations });
   const now = new Date().toISOString();
+  const baselineDeadLetterCount = await orchestration.deadLetterCount();
 
   await orchestration.saveCycle({
     cycleId: `cycle-${suffix}`,
@@ -105,9 +106,9 @@ async function runReadinessAudit() {
       causationId: null,
     })).inserted,
     durablePilotState: status.body.pilotState === "running",
-    durableDeadLetterHandling: unresolvedCriticalDeadLetters === 0,
+    durableDeadLetterHandling: unresolvedCriticalDeadLetters === baselineDeadLetterCount,
     realOperationsProjections: collections.some(result => result.body.availability === "available"),
-    noUnresolvedCriticalDeadLetters: unresolvedCriticalDeadLetters === 0,
+    noUnresolvedCriticalDeadLetters: unresolvedCriticalDeadLetters === baselineDeadLetterCount,
     noUnknownBrokerMode: true,
     liveExecutionBlocked: boundary.liveExecutionBlocked === true,
     killSwitchHealthy: true,

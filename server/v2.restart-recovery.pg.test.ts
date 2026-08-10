@@ -249,14 +249,15 @@ async function testOutageAndMigrationFailures() {
 
   const operations = new PgV2OperationsRepository(pool);
   const unsupportedReportId = `unsupported-report-${suffix}`;
+  const unsupportedReportDate = uniqueFutureReportDate();
   await pool.query(
     `INSERT INTO v2_operations_daily_reports
       (report_id, schema_version, report_date, idempotency_key, status, payload, correlation_id, created_at, updated_at)
      VALUES ($1, 'fincoach.v2.daily-research-report.999', $2, $2, 'created', $3, $4, $5, $5)`,
-    [unsupportedReportId, `unsupported-${suffix}`, JSON.stringify({}), correlationId, new Date().toISOString()],
+    [unsupportedReportId, unsupportedReportDate, JSON.stringify({}), correlationId, new Date().toISOString()],
   );
   await assert.rejects(
-    () => operations.getReportByDate(`unsupported-${suffix}`),
+    () => operations.getReportByDate(unsupportedReportDate),
     (error) => error instanceof V2PersistenceError && error.code === "unsupported_schema_version",
   );
 
@@ -312,6 +313,11 @@ async function cleanup() {
 
 function reportDate() {
   return `2099-05-${String((Date.now() % 20) + 1).padStart(2, "0")}`;
+}
+
+function uniqueFutureReportDate() {
+  const date = new Date(Date.UTC(2099, 0, 1 + (Date.now() % 20_000)));
+  return date.toISOString().slice(0, 10);
 }
 
 function pilotConfig(pilotId: string): DemoResearchPilotConfig {

@@ -176,14 +176,17 @@ export class PgV2OperationsRepository {
 
   async latestReport(): Promise<DailyReportRecord | null> {
     try {
-      const result = await this.db.query(`SELECT * FROM v2_operations_daily_reports
-        WHERE CASE
-          WHEN report_date ~ '^\\d{4}-\\d{2}-\\d{2}$'
-          THEN to_char(to_date(report_date, 'YYYY-MM-DD'), 'YYYY-MM-DD') = report_date
-          ELSE false
-        END
-        ORDER BY created_at DESC, report_id DESC LIMIT 1`);
-      return result.rowCount ? mapReport(result.rows[0]) : null;
+      const result = await this.db.query("SELECT * FROM v2_operations_daily_reports ORDER BY created_at DESC, report_id DESC LIMIT 25");
+      for (const row of result.rows) {
+        if (!isValidReportDate(String(row.report_date))) continue;
+        try {
+          return mapReport(row);
+        } catch (error) {
+          if (error instanceof V2PersistenceError && error.code === "malformed_persisted_record") continue;
+          throw error;
+        }
+      }
+      return null;
     } catch (error) {
       throw classifyPostgresError(error);
     }
@@ -191,13 +194,8 @@ export class PgV2OperationsRepository {
 
   async invalidDailyReportCount(): Promise<number> {
     try {
-      const result = await this.db.query(`SELECT count(*)::int AS total FROM v2_operations_daily_reports
-        WHERE CASE
-          WHEN report_date ~ '^\\d{4}-\\d{2}-\\d{2}$'
-          THEN to_char(to_date(report_date, 'YYYY-MM-DD'), 'YYYY-MM-DD') <> report_date
-          ELSE true
-        END`);
-      return Number(result.rows[0]?.total ?? 0);
+      const result = await this.db.query("SELECT report_date FROM v2_operations_daily_reports");
+      return result.rows.filter(row => !isValidReportDate(String(row.report_date))).length;
     } catch (error) {
       throw classifyPostgresError(error);
     }

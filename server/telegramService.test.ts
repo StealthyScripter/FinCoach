@@ -7,7 +7,10 @@ import { paperExecutionProvider } from "./execution/providers";
 import { sandboxBrokerAdapters } from "./execution/sandboxAdapters";
 import { sandboxBrokerRuntime } from "./execution/sandboxBrokerRuntime";
 import { executionAuditLog } from "./execution/riskControls";
+import { governanceRepository } from "./execution/governanceRepository";
+import { transactionalReliabilityRepository } from "./execution/transactionalReliabilityRepository";
 import { registerTelegramLifecycleListener } from "./telegramNotificationBus";
+import { telegramRepository } from "./telegram/repository";
 import { EmergencyControlService } from "./execution/emergencyControls";
 import { PaperStrategyRuntime } from "./execution/paperStrategyRuntime";
 import { postTradeReviewService } from "./execution/postTradeReviewService";
@@ -509,6 +512,12 @@ try {
   for (const [key, adapter] of Object.entries(sandboxBrokerAdapters)) {
     restoreSandboxAdapter(adapter as any, restoreSandbox[key as keyof typeof restoreSandbox]);
   }
+  await executionAuditLog.flushPersistence().catch(() => {});
+  await Promise.allSettled([
+    governanceRepository.close(),
+    transactionalReliabilityRepository.close(),
+    telegramRepository.close(),
+  ]);
 }
 
 console.log("telegramService tests passed");

@@ -236,7 +236,14 @@ console.log("v2 oanda dataset pipeline tests passed", JSON.stringify({ candles: 
 }
 
 function safeEnv() {
-  return { OANDA_ENV: "practice", OANDA_API_TOKEN: "test-token", OANDA_ACCOUNT_ID: "test-account", MARKETPILOT_DEMO_ONLY: "true", FINCOACH_LIVE_EXECUTION: "blocked" };
+  return {
+    OANDA_ENV: "practice",
+    OANDA_API_TOKEN: "test-token",
+    OANDA_ACCOUNT_ID: "test-account",
+    OANDA_BASE_URL: "https://api-fxpractice.oanda.com/v3",
+    MARKETPILOT_DEMO_ONLY: "true",
+    FINCOACH_LIVE_EXECUTION: "blocked",
+  };
 }
 
 class MockOandaClient implements OandaHistoricalClient {

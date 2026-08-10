@@ -40,6 +40,7 @@ export interface TelegramRepository {
   latestMarketSnapshot(period?: "morning" | "evening"): Promise<MarketSnapshotRecord | null>;
   markMarketSnapshotDelivered(snapshotId: string, input: { deliveryId: string | null; deliveryStatus: "delivered" | "failed" }): Promise<MarketSnapshotRecord | null>;
   health(): { provider: "memory" | "postgres"; status: "healthy" | "disabled"; records: number };
+  close(): Promise<void>;
 }
 
 export class InMemoryTelegramRepository implements TelegramRepository {
@@ -198,6 +199,8 @@ export class InMemoryTelegramRepository implements TelegramRepository {
   health() {
     return { provider: "memory" as const, status: "healthy" as const, records: this.deliveries.length + this.signals.size + this.summaries.length };
   }
+
+  async close() {}
 }
 
 export class PgTelegramRepository implements TelegramRepository {
@@ -411,28 +414,25 @@ export class PgTelegramRepository implements TelegramRepository {
 
   async claimWeeklySessionNotification(record: WeeklySessionNotificationRecord) {
     if (!this.pool) throw new Error("DATABASE_URL is not configured");
-    const rows = await this.pool.query(
+    const inserted = await this.pool.query(
       `INSERT INTO telegram_weekly_session_notifications
        (idempotency_key, transition_type, boundary_at, status, delivery_id, attempt_count, last_error, metadata, created_at, updated_at)
        VALUES ($1,$2,$3,'claimed',$4,1,$5,$6::jsonb,$7,$8)
-       ON CONFLICT (idempotency_key) DO UPDATE SET
-         status = CASE
-           WHEN telegram_weekly_session_notifications.status = 'failed' AND telegram_weekly_session_notifications.attempt_count < 3 THEN 'claimed'
-           ELSE telegram_weekly_session_notifications.status
-         END,
-         attempt_count = CASE
-           WHEN telegram_weekly_session_notifications.status = 'failed' AND telegram_weekly_session_notifications.attempt_count < 3 THEN telegram_weekly_session_notifications.attempt_count + 1
-           ELSE telegram_weekly_session_notifications.attempt_count
-         END,
-         updated_at = CASE
-           WHEN telegram_weekly_session_notifications.status = 'failed' AND telegram_weekly_session_notifications.attempt_count < 3 THEN EXCLUDED.updated_at
-           ELSE telegram_weekly_session_notifications.updated_at
-         END
+       ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING *`,
       [record.idempotencyKey, record.transitionType, record.boundaryAt, record.deliveryId, record.lastError, JSON.stringify(record.metadata), record.createdAt, record.updatedAt],
     );
-    const claimed = rowToWeeklySessionNotification(rows.rows[0]);
-    return { claimed: claimed.status === "claimed" && claimed.updatedAt === record.updatedAt, record: claimed };
+    if (inserted.rows[0]) return { claimed: true, record: rowToWeeklySessionNotification(inserted.rows[0]) };
+    const retried = await this.pool.query(
+      `UPDATE telegram_weekly_session_notifications
+       SET status = 'claimed', attempt_count = attempt_count + 1, updated_at = $2
+       WHERE idempotency_key = $1 AND status = 'failed' AND attempt_count < 3
+       RETURNING *`,
+      [record.idempotencyKey, record.updatedAt],
+    );
+    if (retried.rows[0]) return { claimed: true, record: rowToWeeklySessionNotification(retried.rows[0]) };
+    const existing = await this.pool.query("SELECT * FROM telegram_weekly_session_notifications WHERE idempotency_key = $1", [record.idempotencyKey]);
+    return { claimed: false, record: rowToWeeklySessionNotification(existing.rows[0]) };
   }
 
   async completeWeeklySessionNotification(idempotencyKey: string, input: { status: "delivered" | "failed"; deliveryId?: string | null; lastError?: string | null; metadata?: Record<string, unknown> }) {
@@ -498,6 +498,10 @@ export class PgTelegramRepository implements TelegramRepository {
 
   health() {
     return { provider: "postgres" as const, status: this.pool ? "healthy" as const : "disabled" as const, records: this.records };
+  }
+
+  async close() {
+    await this.pool?.end();
   }
 }
 

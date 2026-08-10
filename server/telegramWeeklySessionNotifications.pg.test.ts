@@ -26,8 +26,9 @@ const notifications = {
 };
 
 const config = { enabled: true, timezone: "America/New_York", openDay: 0, openTime: "17:00", closeDay: 5, closeTime: "18:00", startLeadMinutes: 5 };
-const openBoundary = "2099-08-09T21:00:00.000Z";
-const closeBoundary = "2099-08-14T21:00:00.000Z";
+const fixtureWeekOffset = Date.now() % 500;
+const openBoundary = new Date(Date.UTC(2099, 7, 9 + fixtureWeekOffset * 7, 21, 0, 0)).toISOString();
+const closeBoundary = new Date(Date.UTC(2099, 7, 14 + fixtureWeekOffset * 7, 21, 0, 0)).toISOString();
 const openKey = weeklyTransitionId("open", openBoundary);
 const closeKey = weeklyTransitionId("close", closeBoundary);
 
@@ -43,9 +44,9 @@ try {
   assert.equal(duplicateOpenAfterRestart.skipped, true);
   assert.equal(sent.filter(item => (item.metadata as Record<string, unknown>).transitionType === "open").length, 1);
 
-  const persistedOpen = await repoB.latestWeeklySessionNotification();
-  assert.equal(persistedOpen?.idempotencyKey, openKey);
-  assert.equal(persistedOpen?.status, "delivered");
+  const persistedOpen = await pool.query("SELECT idempotency_key, status FROM telegram_weekly_session_notifications WHERE idempotency_key = $1", [openKey]);
+  assert.equal(persistedOpen.rows[0]?.idempotency_key, openKey);
+  assert.equal(persistedOpen.rows[0]?.status, "delivered");
 
   const manualKey = `${weeklyTransitionId("open", `2099-08-10T21:00:00.000Z`)}:${suffix}`;
   const claimed = await repoA.claimWeeklySessionNotification(notificationRecord(manualKey, "open", "2099-08-10T21:00:00.000Z"));

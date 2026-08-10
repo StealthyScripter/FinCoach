@@ -12,6 +12,7 @@ await testDataReconciliationDetectsMismatches();
 await testInvalidDailyReportDateCannotBecomeLatest();
 await testResearchProgressContractHasNonNullProvenance();
 await testReportingProjectionFailureDoesNotFailDatabaseHealth();
+await testMalformedDailyReportDoesNotMaskCanonicalProgress();
 
 console.log("v2 reporting progress tests passed");
 
@@ -177,7 +178,7 @@ async function testInvalidDailyReportDateCannotBecomeLatest() {
   const repository = new PgV2OperationsRepository({
     query: async (sql: string) => {
       if (sql.includes("ORDER BY created_at")) {
-        assert.match(sql, /to_char\(to_date\(report_date/);
+        assert.match(sql, /v2_operations_daily_reports/);
         return { rows: [pgReportRow(goodReport)], rowCount: 1 };
       }
       throw new Error(`unexpected query: ${sql}`);
@@ -186,10 +187,8 @@ async function testInvalidDailyReportDateCannotBecomeLatest() {
   const latest = await repository.latestReport();
   assert.equal(latest?.report.reportDate, "2026-08-09");
 
-  assert.rejects(
-    () => new PgV2OperationsRepository({ query: async () => ({ rows: [pgReportRow(reportRecord("2099-04-93", "2099-04-93T00:00:00.000Z"))], rowCount: 1 }) } as never).latestReport(),
-    /Daily report date is not a real YYYY-MM-DD/,
-  );
+  const invalidOnly = await new PgV2OperationsRepository({ query: async () => ({ rows: [pgReportRow(reportRecord("2099-04-93", "2099-04-93T00:00:00.000Z"))], rowCount: 1 }) } as never).latestReport();
+  assert.equal(invalidOnly, null);
 }
 
 async function testResearchProgressContractHasNonNullProvenance() {
@@ -226,11 +225,35 @@ async function testReportingProjectionFailureDoesNotFailDatabaseHealth() {
   const response = await service.statusAsync();
   assert.equal(response.body.postgresqlHealth, "healthy");
   assert.equal(response.body.databaseHealth, "healthy");
-  assert.deepEqual(response.body.reportingProjection, { state: "degraded", projectionError: "migration_mismatch" });
+  assert.equal((response.body.reportingProjection as Record<string, unknown>).state, "degraded");
+  assert.equal((response.body.reportingProjection as Record<string, unknown>).projectionError, "migration_mismatch");
+  assert.equal((response.body.reportingProjection as Record<string, unknown>).databaseBacked, true);
   assert.equal((response.body.reportingSource as Record<string, unknown>).degraded, true);
   assert.equal(response.body.observationsCreated, null);
   assert.deepEqual(response.body.durableCounts, { state: "unavailable", projectionError: "migration_mismatch" });
   assert.equal(response.body.degradedReason, "migration_mismatch");
+}
+
+async function testMalformedDailyReportDoesNotMaskCanonicalProgress() {
+  const service = new V2OperationsService({
+    operations: {
+      ...progressRepository({ observations: 9, hypotheses: 2, rankedCandidates: 1 }),
+      latestReport: async () => {
+        throw new V2PersistenceError("malformed_persisted_record", "invalid daily report fixture");
+      },
+      invalidDailyReportCount: async () => 1,
+    },
+  } as never);
+
+  const response = await service.statusAsync();
+  assert.equal(response.body.postgresqlHealth, "healthy");
+  assert.equal(response.body.databaseHealth, "healthy");
+  assert.equal(response.body.observationsCreated, 9);
+  assert.equal(response.body.hypothesesCreated, 2);
+  assert.equal(response.body.rankedCandidates, 1);
+  assert.deepEqual(response.body.reportingDataInvalid, { dailyReports: 1, code: "reporting_data_invalid" });
+  assert.equal((response.body.reportingProjection as Record<string, unknown>).state, "available");
+  assert.equal((response.body.reportingProjection as Record<string, unknown>).source, "postgresql");
 }
 
 function countRepository(total: number) {
