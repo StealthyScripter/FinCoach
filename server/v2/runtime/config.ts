@@ -1,3 +1,5 @@
+import { DEFAULT_RESEARCH_SYMBOLS, parseResearchSymbols, validateResearchUniverse } from "../researchUniverse";
+
 export type FinCoachTelegramTransport = "long_polling" | "webhook" | "disabled";
 
 export type V2RuntimeConfig = {
@@ -90,7 +92,7 @@ export type MarketSnapshotConfig = {
   lookaheadHours: number;
 };
 
-const DEFAULT_SYMBOLS = ["EUR_USD", "GBP_USD"];
+const DEFAULT_SYMBOLS = DEFAULT_RESEARCH_SYMBOLS;
 const DEFAULT_TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "3h", "6h", "1d", "1w"];
 
 export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2RuntimeConfigValidation {
@@ -107,7 +109,7 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
     liveExecutionEnabled: bool(env.FINCOACH_LIVE_EXECUTION_ENABLED, false),
     telegramTransport: transport(env.FINCOACH_TELEGRAM_TRANSPORT),
     pilotId: clean(env.FINCOACH_V2_PILOT_ID) ?? "v2-bounded-paper-research",
-    symbols: list(env.FINCOACH_V2_OBSERVATION_SYMBOLS ?? env.FINCOACH_V2_SYMBOLS, DEFAULT_SYMBOLS),
+    symbols: parseResearchSymbols(env.FINCOACH_V2_OBSERVATION_SYMBOLS ?? env.FINCOACH_V2_SYMBOLS, DEFAULT_SYMBOLS),
     timeframes: list(env.FINCOACH_V2_OBSERVATION_TIMEFRAMES ?? env.FINCOACH_V2_TIMEFRAMES, DEFAULT_TIMEFRAMES).map(normalizeTimeframeAlias),
     cadenceMs: Math.max(60_000, int(env.FINCOACH_V2_CADENCE_MS, 60 * 60 * 1000)),
     maxCyclesPerDay: int(env.FINCOACH_V2_MAX_CYCLES_PER_DAY, 8),
@@ -181,6 +183,10 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.pilotEnabled && !config.researchEnabled) errors.push("Pilot cannot be enabled when V2 research is disabled.");
   if (config.autostart && (!config.runtimeEnabled || !config.pilotEnabled || !config.researchEnabled)) errors.push("Autostart requires runtime, pilot, and research enabled.");
   if (config.symbols.length === 0) errors.push("At least one V2 symbol is required.");
+  const universe = validateResearchUniverse(config.symbols);
+  if (config.researchEnabled && universe.unsupported.length) {
+    errors.push(`Unsupported V2 research symbols: ${universe.unsupported.map(item => item.symbol).join(", ")}.`);
+  }
   if (config.timeframes.length === 0) errors.push("At least one V2 timeframe is required.");
   if (config.targetEvaluationsPerHour < config.minEvaluationsPerHour) warnings.push("V2 target evaluations per hour is below the minimum target.");
   if (config.cadenceMs < 60_000) errors.push("V2 cadence must be at least 60000ms.");

@@ -20,7 +20,7 @@ import { PgExperimentRepository } from "../experiments/pgRepository";
 import { PgBacktestRepository } from "../backtesting/pgRepository";
 import { PgStrategyDefinitionRepository } from "../rules/pgRepository";
 import type { CycleAdmissionResult, DurableWorkerLease, OrchestrationErrorCode, ResearchCycleRecord } from "../orchestration/contracts";
-import { ObservationsV2Service, breakoutDetector, compressionDetector, evidence as observationEvidence, stableHash } from "../observations";
+import { ObservationsV2Service, breakoutDetector, compressionDetector, liquiditySweepDetector, evidence as observationEvidence, stableHash } from "../observations";
 import type { MarketObservation, ObservationSemanticGroup } from "../observations";
 import { semanticGroupFromObservation, semanticGroupKey } from "../observations";
 import { HypothesisV2Service } from "../hypothesis";
@@ -50,6 +50,7 @@ import { structuredLogger } from "../../structuredLogger";
 import { createDomainEvent, type DomainEvent } from "../contracts";
 import { OrchestrationV2EventTypes } from "../orchestration/events";
 import { marketSnapshotService } from "../../marketSnapshotService";
+import { resolveResearchInstrument, validateResearchUniverse } from "../researchUniverse";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
 type WeeklyTransitionNotifier = (input: { kind: "open" | "close"; boundaryAt: string; window: WeeklyResearchWindowState; aggregate: AggregateTradableWindow }) => Promise<unknown>;
@@ -285,6 +286,7 @@ export class FinCoachV2Runtime {
       startLeadMinutes: 0,
     }, new Date());
     const aggregateTradableWindow = marketSessionsService.aggregateTradableWindow(new Date());
+    const researchUniverse = validateResearchUniverse(this.config.symbols);
     const activeTimers = (this.timer ? 1 : 0) + (this.weeklyTimer ? 1 : 0);
     const memory = memorySnapshot({ eventLogItems: eventLogService.snapshot().eventCount, activeCycles: this.activeCycle ? 1 : 0, activeTimers });
     return {
@@ -327,6 +329,7 @@ export class FinCoachV2Runtime {
         instrumentsRemainingOpen: aggregateTradableWindow.instrumentsRemainingOpen,
         calendarQuality: aggregateTradableWindow.calendarQuality,
       },
+      researchUniverse,
       researchSchedulerActive: this.schedulerStarted,
       researchCadenceActive: Boolean(this.timer),
       researchCadence: {
@@ -450,7 +453,10 @@ export class FinCoachV2Runtime {
     const semanticCandidates = new Map<string, ObservationSemanticGroup>();
     const candidateCausationIds = new Map<string, string>();
 
-    const plans = buildObservationPlan(this.config);
+    const tradableResearchSymbols = marketSessionsService.instrumentSessions(this.config.symbols, input.now)
+      .filter(session => session.status === "open" && resolveResearchInstrument(session.symbol))
+      .map(session => session.symbol);
+    const plans = buildObservationPlan(this.config, tradableResearchSymbols);
     for (const plan of plans) {
       if (observationsCount >= this.config.maxObservationsPerCycle) break;
       const { symbol, timeframe, detector } = plan;
@@ -559,9 +565,15 @@ export class FinCoachV2Runtime {
       }
       const sourceObservationIds = [...new Set(support.map(obs => obs.observationId))];
       const evidenceEventIds = [...new Set(support.flatMap(obs => obs.evidence.map(ev => ev.evidenceId)))];
+      const instrument = resolveResearchInstrument(candidate.symbol);
+      if (!instrument) {
+        hypothesesBlocked += 1;
+        blockers.push(blocker("critical", "hypothesis_symbol_unsupported", "hypothesis", "Candidate symbol is not in the canonical V2 research universe.", candidate.symbol, "validated research symbol", "Configure only supported research instruments.", input.now));
+        continue;
+      }
       const hypothesis = hypotheses.generate({
           statement: `${candidate.symbol} ${candidate.timeframe} ${candidate.observationType} may have positive expectancy after costs.`,
-          targetPopulation: { symbols: [candidate.symbol], assetClasses: ["forex"], timeframes: [candidate.timeframe], sessions: ["all"], regimes: ["demo"] },
+          targetPopulation: { symbols: [candidate.symbol], assetClasses: [instrument.assetClass], timeframes: [candidate.timeframe], sessions: [instrument.sessionGroup], regimes: ["demo"] },
           conditions: [{ field: "observationType", operator: "in", value: [candidate.observationType] }],
           expectedOutcome: { metric: "expectancy", operator: ">", value: 0, horizon: "next_bar" },
           baseline: { baselineId: "zero-edge", description: "No edge after costs", metric: "expectancy", value: 0 },
@@ -591,11 +603,11 @@ export class FinCoachV2Runtime {
         if (hypothesesCount > this.config.maxHypothesesPerCycle) break;
         const compiled = rulesV2Compiler.compile({
           hypothesisId: persistedHypothesis.hypothesisId,
-          name: `V2 demo ${candidate.symbol} compression breakout`,
-          assetClasses: ["forex"],
+          name: `V2 demo ${candidate.symbol} ${candidate.observationType.replaceAll("_", " ")}`,
+          assetClasses: [instrument.assetClass],
           symbols: [candidate.symbol],
           timeframes: [candidate.timeframe],
-          entryConditions: [{ field: "observationType", operator: "in", value: ["breakout"] }],
+          entryConditions: [{ field: "observationType", operator: "in", value: [candidate.observationType] }],
           filters: [],
           sidePolicy: { candidateSide: "buy" },
           stopLoss: { type: "atr_multiple", value: 1.5 },
@@ -604,10 +616,10 @@ export class FinCoachV2Runtime {
           invalidationRules: [{ field: "spread", operator: "<", value: 0.01 }],
           positionSizing: { type: "fixed_fractional", riskFraction: 0.001 },
           costModel: { costModelId: "deterministic-demo-costs", version: "v1" },
-          sessionRestrictions: [],
+          sessionRestrictions: [{ field: "sessionGroup", operator: "in", value: [instrument.sessionGroup] }],
           eventRestrictions: [],
           supportedRegimes: ["demo"],
-          requiredFeatureDefinitions: [],
+          requiredFeatureDefinitions: [{ featureId: candidate.detectorId, version: "observation-detector.v1" }],
           correlationId: input.correlationId,
           causationId: hypothesisEventId,
           createdAt: input.now.toISOString(),
@@ -998,10 +1010,15 @@ function demoCandles(symbol: string, timeframe: V2Timeframe, now: Date, count: n
   });
 }
 
-function buildObservationPlan(config: V2RuntimeConfig) {
-  const detectors = [compressionDetector, breakoutDetector].filter(detector => detector.capability?.enabled !== false);
+export function configuredObservationDetectors() {
+  return [compressionDetector, breakoutDetector, liquiditySweepDetector].filter(detector => detector.capability?.enabled !== false);
+}
+
+export function buildObservationPlan(config: V2RuntimeConfig, symbols = config.symbols) {
+  const detectors = configuredObservationDetectors();
   const plans = [];
-  for (const symbol of config.symbols) {
+  for (const symbol of symbols) {
+    if (!resolveResearchInstrument(symbol)) continue;
     for (const timeframe of config.timeframes.map(normalizeTimeframe)) {
       for (const detector of detectors) {
         if (!detector.capability?.supportedTimeframes.includes(timeframe)) continue;

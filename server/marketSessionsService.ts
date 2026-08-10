@@ -1,5 +1,5 @@
-import { INSTRUMENTS, normalizeSymbol } from "./execution/domain";
 import { marketSessionRulesService } from "./execution/marketSessionRules";
+import { resolveResearchInstrument, validateResearchUniverse } from "./v2/researchUniverse";
 import { loadV2RuntimeConfig, type ContinuousMarketWeeklyPauseConfig } from "./v2/runtime/config";
 import { formatInTimezone, weeklyResearchWindowState } from "./v2/runtime/weeklyResearchWindow";
 
@@ -69,6 +69,7 @@ export class MarketSessionsService {
         active: aggregate.anyConfiguredInstrumentTradable,
       },
       aggregateTradableWindow: aggregate,
+      researchUniverse: validateResearchUniverse(runtimeConfig.symbols),
       anyConfiguredInstrumentTradable: aggregate.anyConfiguredInstrumentTradable,
       finalWeeklyCloseAt: aggregate.finalWeeklyCloseAt,
       nextTradableOpenAt: aggregate.nextTradableOpenAt,
@@ -81,11 +82,12 @@ export class MarketSessionsService {
     };
   }
 
-  aggregateTradableWindow(now = new Date()): AggregateTradableWindow {
+  aggregateTradableWindow(now = new Date(), configuredSymbols?: string[]): AggregateTradableWindow {
     const runtimeConfig = loadV2RuntimeConfig().config;
-    const sessions = this.instrumentSessions(runtimeConfig.symbols, now);
+    const symbols = configuredSymbols ?? runtimeConfig.symbols;
+    const sessions = this.instrumentSessions(symbols, now);
     const openInstrumentSessions = sessions.filter((session) => session.status === "open");
-    const openExchanges = this.exchangeSessions(runtimeConfig.symbols, now).filter((exchange) => exchange.status === "open");
+    const openExchanges = this.exchangeSessions(symbols, now).filter((exchange) => exchange.status === "open");
     const nextTradableOpenAt = minIso(sessions.map((session) => session.status === "open" ? null : session.nextOpensAt));
     const finalWeeklyCloseAt = maxIso(openInstrumentSessions.map((session) => session.closesAt));
     return {
@@ -172,9 +174,9 @@ export class MarketSessionsService {
   }
 
   private instrumentSession(symbol: string, now: Date, continuousPolicy: ContinuousMarketWeeklyPauseConfig): InstrumentSessionStatus {
-    const known = normalizeSymbol(symbol);
     const normalized = symbol.trim().toUpperCase();
     if (isCryptoSymbol(normalized)) return cryptoSession(normalized, now, continuousPolicy);
+    const known = resolveResearchInstrument(symbol);
     if (!known) {
       return {
         symbol: normalized,
@@ -202,12 +204,11 @@ export class MarketSessionsService {
     });
     const weekly = weeklyTemplate(assetClass);
     const state = weeklyResearchWindowState(weekly, now);
-    const providerSymbol = known.providerMappings.oanda ?? known.symbol.replace("/", "_");
     return {
-      symbol: providerSymbol,
-      displaySymbol: known.symbol,
+      symbol: known.symbol,
+      displaySymbol: known.displaySymbol,
       group: assetClass === "forex" ? "fx" : "commodities",
-      venue: assetClass === "forex" ? "FX Global" : "Provider Metals and Energy",
+      venue: known.venue,
       status: evaluated.marketHoursOpen ? "open" : "closed",
       openedAt: evaluated.marketHoursOpen ? state.currentWindowOpenedAt : null,
       closesAt: evaluated.marketHoursOpen ? state.currentWindowClosesAt : null,
