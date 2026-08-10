@@ -7,6 +7,8 @@ import { V2OperationsEventTypes } from "./events";
 import { InMemoryV2OperationsRepository, type DailyReportDeliveryRecord, type DailyReportRecord } from "./repository";
 import type { DurableWorkerLease, ResearchCycleRecord } from "../orchestration/contracts";
 import type { DemoResearchPilotRecord } from "../pilot/contracts";
+import { loadV2RuntimeConfig } from "../runtime/config";
+import { validateResearchUniverse } from "../researchUniverse";
 
 type ProjectionRepositories = {
   operations?: DurableOperationsProjectionRepository | InMemoryV2OperationsRepository;
@@ -820,6 +822,7 @@ function canonicalResearchProgressBody(progress: Record<string, unknown>) {
     databaseBacked,
     degraded,
     windows: ensureWindowContract(progress.windows as Record<string, Record<string, unknown>> | undefined),
+    instrumentUniverse: progress.instrumentUniverse ?? validateResearchUniverse(loadV2RuntimeConfig().config.symbols),
     liveExecutionBlocked: true,
   };
 }

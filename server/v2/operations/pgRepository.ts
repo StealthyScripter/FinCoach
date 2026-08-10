@@ -109,6 +109,8 @@ export class PgV2OperationsRepository {
        UNION ALL
        SELECT 'strategyFamily', COALESCE(strategy_family, 'unknown'), count(*)::int FROM v2_market_observations GROUP BY strategy_family`,
     );
+    const detectorCoverage = await this.detectorCoverage();
+    const strategyInventory = await this.strategyInventory(pipeline);
     const byKind = (kind: string) => grouped.rows.filter(item => item.kind === kind).map(item => ({ value: String(item.value), count: Number(item.count) }));
     const latestCycle = await this.db.query("SELECT * FROM v2_orchestration_cycles WHERE status = 'completed' ORDER BY updated_at DESC LIMIT 1");
     return {
@@ -120,9 +122,97 @@ export class PgV2OperationsRepository {
       degraded: false,
       runtime: { latestCompletedCycle: latestCycle.rows[0] ?? null },
       windows,
-      coverage: { symbols: byKind("symbol"), timeframes: byKind("timeframe"), detectors: byKind("detector"), strategyFamilies: byKind("strategyFamily"), mostRecentMarketDataTimestamp: toIsoOrNull(row.most_recent_market_data_timestamp) },
+      coverage: { symbols: byKind("symbol"), timeframes: byKind("timeframe"), detectors: byKind("detector"), strategyFamilies: byKind("strategyFamily"), detectorCoverage, mostRecentMarketDataTimestamp: toIsoOrNull(row.most_recent_market_data_timestamp) },
+      strategyUniverse: strategyInventory,
       pipeline,
       readiness: readinessFromPipeline(pipeline),
+    };
+  }
+
+  async detectorCoverage() {
+    const result = await this.db.query(
+      `WITH evaluations AS (
+         SELECT
+           COALESCE(symbol, 'unknown') AS symbol,
+           COALESCE(timeframe, 'unknown') AS timeframe,
+           COALESCE(detector_id, 'unknown') AS detector_id,
+           COALESCE(strategy_family, 'unknown') AS strategy_family,
+           count(*) FILTER (WHERE status = 'attempted')::int AS attempted,
+           count(*) FILTER (WHERE status = 'completed')::int AS completed,
+           count(*) FILTER (WHERE status = 'duplicate_suppressed')::int AS duplicate_suppressed,
+           count(*) FILTER (WHERE status = 'skipped')::int AS skipped,
+           count(*) FILTER (WHERE status = 'failed')::int AS failed,
+           count(*)::int AS total
+         FROM v2_detector_evaluations
+         GROUP BY symbol, timeframe, detector_id, strategy_family
+       ),
+       observations AS (
+         SELECT
+           COALESCE(symbol, 'unknown') AS symbol,
+           COALESCE(timeframe, 'unknown') AS timeframe,
+           COALESCE(detector_id, 'unknown') AS detector_id,
+           COALESCE(strategy_family, 'unknown') AS strategy_family,
+           count(*)::int AS observation_created
+         FROM v2_market_observations
+         GROUP BY symbol, timeframe, detector_id, strategy_family
+       )
+       SELECT
+         COALESCE(e.symbol, o.symbol) AS symbol,
+         COALESCE(e.timeframe, o.timeframe) AS timeframe,
+         COALESCE(e.detector_id, o.detector_id) AS detector_id,
+         COALESCE(e.strategy_family, o.strategy_family) AS strategy_family,
+         COALESCE(e.attempted, 0)::int AS attempted,
+         COALESCE(e.completed, 0)::int AS completed,
+         COALESCE(e.duplicate_suppressed, 0)::int AS duplicate_suppressed,
+         COALESCE(e.skipped, 0)::int AS skipped,
+         COALESCE(e.failed, 0)::int AS failed,
+         COALESCE(e.total, 0)::int AS total,
+         COALESCE(o.observation_created, 0)::int AS observation_created
+       FROM evaluations e
+       FULL OUTER JOIN observations o
+         ON e.symbol = o.symbol AND e.timeframe = o.timeframe AND e.detector_id = o.detector_id AND e.strategy_family = o.strategy_family
+       ORDER BY symbol, timeframe, detector_id`,
+    );
+    return result.rows.map(row => ({
+      symbol: String(row.symbol),
+      timeframe: String(row.timeframe),
+      detector: String(row.detector_id),
+      strategyFamily: String(row.strategy_family),
+      attempted: Number(row.attempted ?? 0),
+      completed: Number(row.completed ?? 0),
+      observationCreated: Number(row.observation_created ?? 0),
+      duplicateSuppressed: Number(row.duplicate_suppressed ?? 0),
+      skipped: Number(row.skipped ?? 0),
+      failed: Number(row.failed ?? 0),
+      total: Number(row.total ?? 0),
+    }));
+  }
+
+  private async strategyInventory(pipeline: Record<string, unknown>) {
+    const table = await this.db.query("SELECT to_regclass('strategy_evidence_records') AS table_name");
+    if (!table.rows[0]?.table_name) {
+      return {
+        source: "postgresql",
+        v2StrategyDefinitions: Number(pipeline.strategies ?? 0),
+        rankedCandidates: Number(pipeline.rankedCandidates ?? 0),
+        legacyEvidenceRows: null,
+        legacyEvidenceDistinctStrategyIds: null,
+        legacyEvidenceClassification: "unavailable",
+        note: "strategy_evidence_records table is not present; V2 strategy definitions remain authoritative.",
+      };
+    }
+    const result = await this.db.query(
+      `SELECT count(*)::int AS rows, count(DISTINCT strategy_id)::int AS distinct_strategy_ids
+       FROM strategy_evidence_records`,
+    );
+    return {
+      source: "postgresql",
+      v2StrategyDefinitions: Number(pipeline.strategies ?? 0),
+      rankedCandidates: Number(pipeline.rankedCandidates ?? 0),
+      legacyEvidenceRows: Number(result.rows[0]?.rows ?? 0),
+      legacyEvidenceDistinctStrategyIds: Number(result.rows[0]?.distinct_strategy_ids ?? 0),
+      legacyEvidenceClassification: "evidence_record",
+      note: "Legacy strategy evidence rows and distinct strategy_id values are not counted as V2 strategy definitions.",
     };
   }
 

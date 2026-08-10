@@ -21,7 +21,7 @@ async function testDurableProgressCountsAndReadiness() {
   const repository = new PgV2OperationsRepository({
     query: async (sql: string) => {
       sqlSeen.push(sql);
-      if (sql.includes("v2_detector_evaluations")) {
+      if (sql.includes("FROM v2_external_evaluations")) {
         assert.match(sql, /FROM v2_external_evaluations/);
         assert.match(sql, /FROM v2_research_journal_entries/);
         assert.match(sql, /FROM v2_learning_lessons/);
@@ -57,6 +57,26 @@ async function testDurableProgressCountsAndReadiness() {
           rowCount: 1,
         };
       }
+      if (sql.includes("WITH evaluations AS")) {
+        return {
+          rows: [{
+            symbol: "EUR_USD",
+            timeframe: "15m",
+            detector_id: "liquidity-sweep",
+            strategy_family: "liquidity_reversal",
+            attempted: 1,
+            completed: 1,
+            duplicate_suppressed: 0,
+            skipped: 0,
+            failed: 0,
+            total: 2,
+            observation_created: 0,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("to_regclass('strategy_evidence_records')")) return { rows: [{ table_name: "strategy_evidence_records" }], rowCount: 1 };
+      if (sql.includes("FROM strategy_evidence_records")) return { rows: [{ rows: 1339, distinct_strategy_ids: 87 }], rowCount: 1 };
       if (sql.includes("UNION ALL")) return { rows: [], rowCount: 0 };
       if (sql.includes("v2_orchestration_cycles")) return { rows: [], rowCount: 0 };
       throw new Error(`unexpected query: ${sql}`);
@@ -84,6 +104,28 @@ async function testDurableProgressCountsAndReadiness() {
     duplicatesSuppressedCurrentHour: 0,
     failuresCurrentHour: 0,
   });
+  assert.deepEqual((progress.coverage as Record<string, unknown>).detectorCoverage, [{
+    symbol: "EUR_USD",
+    timeframe: "15m",
+    detector: "liquidity-sweep",
+    strategyFamily: "liquidity_reversal",
+    attempted: 1,
+    completed: 1,
+    observationCreated: 0,
+    duplicateSuppressed: 0,
+    skipped: 0,
+    failed: 0,
+    total: 2,
+  }]);
+  assert.deepEqual(progress.strategyUniverse, {
+    source: "postgresql",
+    v2StrategyDefinitions: 1,
+    rankedCandidates: 1,
+    legacyEvidenceRows: 1339,
+    legacyEvidenceDistinctStrategyIds: 87,
+    legacyEvidenceClassification: "evidence_record",
+    note: "Legacy strategy evidence rows and distinct strategy_id values are not counted as V2 strategy definitions.",
+  });
   assert.deepEqual(progress.readiness, {
     currentStage: "lifecycle decision",
     nextStage: "research lifecycle complete",
@@ -91,7 +133,7 @@ async function testDurableProgressCountsAndReadiness() {
     paperExecutionState: "disabled_or_gated",
     demoExecutionState: "demo_only_gated",
   });
-  assert.equal(sqlSeen.length, 3);
+  assert.equal(sqlSeen.length, 6);
 }
 
 async function testProgressProjectionFailureIsSanitized() {
@@ -206,6 +248,7 @@ async function testResearchProgressContractHasNonNullProvenance() {
   });
   assert.equal((response.body.windows as Record<string, Record<string, unknown>>).lifetime.observations, 2);
   assert.equal((response.body.windows as Record<string, Record<string, unknown>>).total.observations, 2);
+  assert.equal((response.body.instrumentUniverse as Record<string, Record<string, number>>).counts.validated, 7);
 }
 
 async function testReportingProjectionFailureDoesNotFailDatabaseHealth() {
