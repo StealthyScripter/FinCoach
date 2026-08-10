@@ -234,21 +234,23 @@ async function testInvalidDailyReportDateCannotBecomeLatest() {
 }
 
 async function testResearchProgressContractHasNonNullProvenance() {
-  const service = new V2OperationsService({ operations: progressRepository({ observations: 2, hypotheses: 1 }) } as never);
-  const response = await service.researchProgress();
-  assert.equal(response.body.source, "postgresql");
-  assert.equal(response.body.databaseBacked, true);
-  assert.equal(response.body.degraded, false);
-  assert.deepEqual(response.body.reportingSource, {
-    source: "postgresql",
-    databaseBacked: true,
-    degraded: false,
-    generatedAt: now.toISOString(),
-    projectionError: null,
+  await withEnv({ FINCOACH_V2_OBSERVATION_SYMBOLS: undefined, FINCOACH_V2_SYMBOLS: undefined }, async () => {
+    const service = new V2OperationsService({ operations: progressRepository({ observations: 2, hypotheses: 1 }) } as never);
+    const response = await service.researchProgress();
+    assert.equal(response.body.source, "postgresql");
+    assert.equal(response.body.databaseBacked, true);
+    assert.equal(response.body.degraded, false);
+    assert.deepEqual(response.body.reportingSource, {
+      source: "postgresql",
+      databaseBacked: true,
+      degraded: false,
+      generatedAt: now.toISOString(),
+      projectionError: null,
+    });
+    assert.equal((response.body.windows as Record<string, Record<string, unknown>>).lifetime.observations, 2);
+    assert.equal((response.body.windows as Record<string, Record<string, unknown>>).total.observations, 2);
+    assert.equal((response.body.instrumentUniverse as Record<string, Record<string, number>>).counts.validated, 7);
   });
-  assert.equal((response.body.windows as Record<string, Record<string, unknown>>).lifetime.observations, 2);
-  assert.equal((response.body.windows as Record<string, Record<string, unknown>>).total.observations, 2);
-  assert.equal((response.body.instrumentUniverse as Record<string, Record<string, number>>).counts.validated, 7);
 }
 
 async function testReportingProjectionFailureDoesNotFailDatabaseHealth() {
@@ -402,4 +404,22 @@ function pgReportRow(record: ReturnType<typeof reportRecord>) {
     created_at: record.createdAt,
     updated_at: record.updatedAt,
   };
+}
+
+async function withEnv<T>(patch: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(patch)) {
+    previous.set(key, process.env[key]);
+    const value = patch[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
