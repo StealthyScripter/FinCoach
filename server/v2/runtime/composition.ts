@@ -51,6 +51,7 @@ import { createDomainEvent, type DomainEvent } from "../contracts";
 import { OrchestrationV2EventTypes } from "../orchestration/events";
 import { marketSnapshotService } from "../../marketSnapshotService";
 import { resolveResearchInstrument, validateResearchUniverse } from "../researchUniverse";
+import { activeFxResearchSession } from "../fxResearchSessions";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
 type WeeklyTransitionNotifier = (input: { kind: "open" | "close"; boundaryAt: string; window: WeeklyResearchWindowState; aggregate: AggregateTradableWindow }) => Promise<unknown>;
@@ -456,7 +457,12 @@ export class FinCoachV2Runtime {
     const tradableResearchSymbols = marketSessionsService.instrumentSessions(this.config.symbols, input.now)
       .filter(session => session.status === "open" && resolveResearchInstrument(session.symbol))
       .map(session => session.symbol);
-    const plans = buildObservationPlan(this.config, tradableResearchSymbols);
+    const activeFxSession = activeFxResearchSession(input.now, tradableResearchSymbols);
+    const prioritySymbols = activeFxSession?.prioritySymbols.length ? activeFxSession.prioritySymbols : activeFxSession?.compatibleConfiguredSymbols ?? [];
+    const orderedResearchSymbols = prioritySymbols.length
+      ? [...prioritySymbols, ...tradableResearchSymbols.filter((symbol) => !prioritySymbols.includes(symbol))]
+      : tradableResearchSymbols;
+    const plans = buildObservationPlan(this.config, orderedResearchSymbols);
     for (const plan of plans) {
       if (observationsCount >= this.config.maxObservationsPerCycle) break;
       const { symbol, timeframe, detector } = plan;
@@ -573,7 +579,7 @@ export class FinCoachV2Runtime {
       }
       const hypothesis = hypotheses.generate({
           statement: `${candidate.symbol} ${candidate.timeframe} ${candidate.observationType} may have positive expectancy after costs.`,
-          targetPopulation: { symbols: [candidate.symbol], assetClasses: [instrument.assetClass], timeframes: [candidate.timeframe], sessions: [instrument.sessionGroup], regimes: ["demo"] },
+          targetPopulation: { symbols: [candidate.symbol], assetClasses: [instrument.assetClass], timeframes: [candidate.timeframe], sessions: [researchSessionForCandidate(instrument, activeFxSession?.sessionId)], regimes: [classifyResearchRegime(candidate.observationType)] },
           conditions: [{ field: "observationType", operator: "in", value: [candidate.observationType] }],
           expectedOutcome: { metric: "expectancy", operator: ">", value: 0, horizon: "next_bar" },
           baseline: { baselineId: "zero-edge", description: "No edge after costs", metric: "expectancy", value: 0 },
@@ -616,9 +622,9 @@ export class FinCoachV2Runtime {
           invalidationRules: [{ field: "spread", operator: "<", value: 0.01 }],
           positionSizing: { type: "fixed_fractional", riskFraction: 0.001 },
           costModel: { costModelId: "deterministic-demo-costs", version: "v1" },
-          sessionRestrictions: [{ field: "sessionGroup", operator: "in", value: [instrument.sessionGroup] }],
+          sessionRestrictions: [{ field: "sessionGroup", operator: "in", value: [researchSessionForCandidate(instrument, activeFxSession?.sessionId)] }],
           eventRestrictions: [],
-          supportedRegimes: ["demo"],
+          supportedRegimes: [classifyResearchRegime(candidate.observationType)],
           requiredFeatureDefinitions: [{ featureId: candidate.detectorId, version: "observation-detector.v1" }],
           correlationId: input.correlationId,
           causationId: hypothesisEventId,
@@ -1036,6 +1042,17 @@ function addSemanticCandidate(candidates: Map<string, ObservationSemanticGroup>,
 
 function hypothesisCandidateScanLimit(config: V2RuntimeConfig) {
   return Math.max(config.maxHypothesesPerCycle * 4, config.minIndependentHypothesisOccurrences * 4, 20);
+}
+
+function classifyResearchRegime(observationType: string) {
+  if (/compression/i.test(observationType)) return "volatility_compression";
+  if (/breakout/i.test(observationType)) return "volatility_expansion";
+  if (/liquidity|sweep/i.test(observationType)) return "high_volatility";
+  return "unknown";
+}
+
+function researchSessionForCandidate(instrument: { assetClass: string; sessionGroup: string }, activeFxSessionId?: string) {
+  return instrument.assetClass === "forex" && activeFxSessionId ? activeFxSessionId : instrument.sessionGroup;
 }
 
 async function historicalSupport(repository: V2Repositories["observations"], candidate: ObservationSemanticGroup, config: V2RuntimeConfig, now: Date) {

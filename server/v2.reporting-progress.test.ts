@@ -249,7 +249,7 @@ async function testResearchProgressContractHasNonNullProvenance() {
     });
     assert.equal((response.body.windows as Record<string, Record<string, unknown>>).lifetime.observations, 2);
     assert.equal((response.body.windows as Record<string, Record<string, unknown>>).total.observations, 2);
-    assert.equal((response.body.instrumentUniverse as Record<string, Record<string, number>>).counts.validated, 7);
+    assert.equal((response.body.instrumentUniverse as Record<string, Record<string, number>>).counts.validated, 26);
   });
 }
 

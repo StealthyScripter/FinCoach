@@ -22,7 +22,7 @@ export function getSymbolMapping(symbol: string, provider: SandboxProviderId): S
   const providerKey = provider === "oanda_practice" ? "oanda" : "metatrader5";
   const providerSymbol = instrument.providerMappings[providerKey];
   if (!providerSymbol) throw new SandboxBrokerError("invalid_instrument");
-  const limits = SIZE_LIMITS[instrument.symbol];
+  const limits = SIZE_LIMITS[instrument.symbol] ?? { min: 1, max: instrument.assetClass === "forex" ? 10_000_000 : 100_000 };
   return {
     internalSymbol: instrument.symbol,
     providerSymbol,

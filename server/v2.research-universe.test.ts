@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { marketSessionsService } from "./marketSessionsService";
 import { loadV2RuntimeConfig } from "./v2/runtime/config";
 import { buildObservationPlan, configuredObservationDetectors } from "./v2/runtime/composition";
-import { DEFAULT_RESEARCH_SYMBOLS, parseResearchSymbols, resolveResearchInstrument, validateResearchUniverse } from "./v2/researchUniverse";
+import { activeFxResearchSession, fxResearchSessions } from "./v2/fxResearchSessions";
+import { DEFAULT_RESEARCH_SYMBOLS, RESEARCH_INSTRUMENT_CANDIDATE_AUDIT, parseResearchSymbols, resolveResearchInstrument, validateResearchUniverse } from "./v2/researchUniverse";
 
 const baseEnv = {
   FINCOACH_V2_RUNTIME_ENABLED: "false",
@@ -11,21 +12,25 @@ const baseEnv = {
   FINCOACH_TELEGRAM_TRANSPORT: "disabled",
 } as NodeJS.ProcessEnv;
 
-assert.deepEqual(DEFAULT_RESEARCH_SYMBOLS, ["EUR_USD", "GBP_USD", "USD_JPY", "XAU_USD", "XAG_USD", "WTICO_USD", "BCO_USD"]);
+assert.equal(DEFAULT_RESEARCH_SYMBOLS.length, 26);
+assert.deepEqual(DEFAULT_RESEARCH_SYMBOLS.slice(0, 7), ["EUR_USD", "GBP_USD", "AUD_USD", "NZD_USD", "USD_JPY", "USD_CHF", "USD_CAD"]);
+assert.equal(RESEARCH_INSTRUMENT_CANDIDATE_AUDIT.filter(item => item.accepted).length, 26);
+assert.equal(RESEARCH_INSTRUMENT_CANDIDATE_AUDIT.find(item => item.symbol === "USD_CNH")?.accepted, false);
 assert.equal(parseResearchSymbols("EUR/USD, eur_usd, XAU-USD").join(","), "EUR_USD,XAU_USD");
 assert.equal(resolveResearchInstrument("EUR/USD")?.providerSymbol, "EUR_USD");
+assert.equal(resolveResearchInstrument("AUD/CAD")?.providerSymbol, "AUD_CAD");
 assert.equal(resolveResearchInstrument("WTI")?.providerSymbol, "WTICO_USD");
 assert.equal(resolveResearchInstrument("BTC_USD"), null);
 
 {
   const config = loadV2RuntimeConfig(baseEnv).config;
-  assert.equal(config.symbols.length, 7);
+  assert.equal(config.symbols.length, 26);
   const universe = validateResearchUniverse(config.symbols);
-  assert.equal(universe.counts.configured, 7);
-  assert.equal(universe.counts.validated, 7);
+  assert.equal(universe.counts.configured, 26);
+  assert.equal(universe.counts.validated, 26);
   assert.equal(universe.counts.unsupported, 0);
-  assert.deepEqual(universe.counts.byAssetClass, { forex: 3, commodity: 4 });
-  assert.deepEqual(universe.counts.bySession, { "FX Global": 3, "Provider Metals and Energy": 4 });
+  assert.deepEqual(universe.counts.byAssetClass, { forex: 26 });
+  assert.deepEqual(universe.counts.bySession, { "FX Global": 26 });
 }
 
 {
@@ -62,6 +67,19 @@ assert.equal(resolveResearchInstrument("BTC_USD"), null);
   assert.ok(plans.every(plan => plan.symbol === "XAU_USD"));
   assert.ok(plans.some(plan => plan.detector.detectorId === "liquidity-sweep" && plan.timeframe === "15m"));
   assert.ok(!plans.some(plan => plan.detector.detectorId === "liquidity-sweep" && plan.timeframe === "1m"));
+}
+
+{
+  const tokyo = activeFxResearchSession(new Date("2026-08-11T01:30:00.000Z"), DEFAULT_RESEARCH_SYMBOLS);
+  assert.equal(tokyo?.sessionId, "tokyo");
+  assert.ok(tokyo?.prioritySymbols.includes("USD_JPY"));
+  assert.ok(tokyo?.compatibleConfiguredSymbols.includes("AUD_JPY"));
+  const overlap = activeFxResearchSession(new Date("2026-08-11T13:00:00.000Z"), DEFAULT_RESEARCH_SYMBOLS);
+  assert.equal(overlap?.sessionId, "london_new_york_overlap");
+  assert.ok(overlap?.prioritySymbols.includes("USD_CAD"));
+  const dst = fxResearchSessions(new Date("2026-03-29T13:00:00.000Z"), DEFAULT_RESEARCH_SYMBOLS);
+  assert.equal(dst.filter(session => session.active).length, 1);
+  assert.equal(dst.find(session => session.active)?.sessionQuality, "partial");
 }
 
 console.log("v2 research universe tests passed");

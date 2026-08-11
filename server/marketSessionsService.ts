@@ -1,5 +1,6 @@
 import { marketSessionRulesService } from "./execution/marketSessionRules";
 import { resolveResearchInstrument, validateResearchUniverse } from "./v2/researchUniverse";
+import { fxResearchSessions } from "./v2/fxResearchSessions";
 import { loadV2RuntimeConfig, type ContinuousMarketWeeklyPauseConfig } from "./v2/runtime/config";
 import { formatInTimezone, weeklyResearchWindowState } from "./v2/runtime/weeklyResearchWindow";
 
@@ -78,6 +79,7 @@ export class MarketSessionsService {
       exchanges: this.exchangeSessions(runtimeConfig.symbols, now),
       instrumentSessions: this.instrumentSessions(runtimeConfig.symbols, now),
       groupedInstrumentSessions: grouped,
+      fxResearchSessions: fxResearchSessions(now, runtimeConfig.symbols),
       liveExecutionBlocked: true,
     };
   }

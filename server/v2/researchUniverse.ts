@@ -10,6 +10,8 @@ export type ResearchInstrumentRecord = {
   provider: "oanda";
   providerSymbol: string;
   assetClass: ResearchInstrumentAssetClass;
+  baseCurrency: string;
+  quoteCurrency: string;
   venue: ResearchInstrumentSessionGroup;
   sessionGroup: "fx" | "commodities";
   providerSupport: "configured_mapping";
@@ -18,6 +20,14 @@ export type ResearchInstrumentRecord = {
   detectorSupport: "ohlc_detectors";
   historicalDataSupport: "oanda_historical_candles";
   safeForResearch: true;
+};
+
+export type ResearchInstrumentCandidateAudit = {
+  symbol: string;
+  accepted: boolean;
+  providerSymbol: string | null;
+  assetClass: ResearchInstrumentAssetClass | "forex_optional";
+  reason: string;
 };
 
 export type ResearchInstrumentValidation = {
@@ -52,6 +62,8 @@ export const RESEARCH_INSTRUMENT_UNIVERSE: ResearchInstrumentRecord[] = INSTRUME
     provider: "oanda" as const,
     providerSymbol: instrument.providerMappings.oanda,
     assetClass: instrument.assetClass,
+    baseCurrency: instrument.baseCurrency,
+    quoteCurrency: instrument.quoteCurrency,
     venue: instrument.assetClass === "forex" ? "FX Global" as const : "Provider Metals and Energy" as const,
     sessionGroup: instrument.assetClass === "forex" ? "fx" as const : "commodities" as const,
     providerSupport: "configured_mapping" as const,
@@ -62,7 +74,37 @@ export const RESEARCH_INSTRUMENT_UNIVERSE: ResearchInstrumentRecord[] = INSTRUME
     safeForResearch: true as const,
   }));
 
-export const DEFAULT_RESEARCH_SYMBOLS = RESEARCH_INSTRUMENT_UNIVERSE.map((instrument) => instrument.symbol);
+export const DEFAULT_RESEARCH_SYMBOLS = RESEARCH_INSTRUMENT_UNIVERSE.filter((instrument) => instrument.assetClass === "forex").map((instrument) => instrument.symbol);
+
+const CANDIDATE_FX_SYMBOLS = [
+  "EUR_USD", "GBP_USD", "AUD_USD", "NZD_USD", "USD_JPY", "USD_CHF", "USD_CAD",
+  "EUR_JPY", "GBP_JPY", "AUD_JPY", "NZD_JPY", "CAD_JPY", "CHF_JPY",
+  "EUR_GBP", "EUR_CHF", "EUR_AUD", "EUR_NZD", "EUR_CAD", "GBP_CHF",
+  "GBP_AUD", "GBP_NZD", "GBP_CAD",
+  "AUD_NZD", "AUD_CAD", "AUD_CHF", "NZD_CAD",
+] as const;
+
+export const RESEARCH_INSTRUMENT_CANDIDATE_AUDIT: ResearchInstrumentCandidateAudit[] = [
+  ...CANDIDATE_FX_SYMBOLS.map((symbol) => {
+    const instrument = resolveResearchInstrument(symbol);
+    return {
+      symbol,
+      accepted: Boolean(instrument),
+      providerSymbol: instrument?.providerSymbol ?? null,
+      assetClass: "forex" as const,
+      reason: instrument
+        ? "Accepted: checked-in OANDA mapping, symbol normalization, OHLC candle detectors, OANDA historical candles, and FX 24/5 calendar support are available."
+        : "Rejected: no checked-in provider/session metadata.",
+    };
+  }),
+  {
+    symbol: "USD_CNH",
+    accepted: false,
+    providerSymbol: null,
+    assetClass: "forex_optional",
+    reason: "Rejected for default V2 research: optional pair lacks checked-in spread/data-quality validation in this repository.",
+  },
+];
 
 export function normalizeResearchSymbol(value: string) {
   const known = normalizeSymbol(value);
