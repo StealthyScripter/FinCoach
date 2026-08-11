@@ -192,8 +192,8 @@ assert.equal(redacted.token, "[REDACTED]");
 assert.deepEqual(redacted.nested, { Authorization: "[REDACTED]", safe: "visible" });
 assert.equal(JSON.stringify(redacted).includes("secret"), false);
 
-assert.equal(listSymbolMappings("oanda_practice").length, 7);
-for (const symbol of ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "XAG/USD", "WTI", "Brent"]) {
+assert.equal(listSymbolMappings("oanda_practice").length, 30);
+for (const symbol of ["EUR/USD", "GBP/USD", "AUD/CAD", "EUR/JPY", "USD/CHF", "XAU/USD", "XAG/USD", "WTI", "Brent"]) {
   const mapping = getSymbolMapping(symbol, "oanda_practice");
   assert.ok(mapping.pipSize > 0);
   assert.ok(mapping.tickSize > 0);
