@@ -77,6 +77,19 @@ async function testDurableProgressCountsAndReadiness() {
       }
       if (sql.includes("to_regclass('strategy_evidence_records')")) return { rows: [{ table_name: "strategy_evidence_records" }], rowCount: 1 };
       if (sql.includes("FROM strategy_evidence_records")) return { rows: [{ rows: 1339, distinct_strategy_ids: 87 }], rowCount: 1 };
+      if (sql.includes("SELECT payload FROM v2_strategy_definitions")) return {
+        rows: [{
+          payload: {
+            symbols: ["EUR_USD"],
+            timeframes: ["15m"],
+            filters: [{ field: "primaryFamily", operator: "==", value: "breakout" }],
+            sessionRestrictions: [{ field: "sessionId", operator: "in", value: ["london_morning"] }],
+            supportedRegimes: ["volatility_expansion"],
+            entryConditions: [{ field: "templateId", operator: "==", value: "breakout.session_high_low_breakout" }],
+          },
+        }],
+        rowCount: 1,
+      };
       if (sql.includes("UNION ALL")) return { rows: [], rowCount: 0 };
       if (sql.includes("v2_orchestration_cycles")) return { rows: [], rowCount: 0 };
       throw new Error(`unexpected query: ${sql}`);
@@ -117,15 +130,13 @@ async function testDurableProgressCountsAndReadiness() {
     failed: 0,
     total: 2,
   }]);
-  assert.deepEqual(progress.strategyUniverse, {
-    source: "postgresql",
-    v2StrategyDefinitions: 1,
-    rankedCandidates: 1,
-    legacyEvidenceRows: 1339,
-    legacyEvidenceDistinctStrategyIds: 87,
-    legacyEvidenceClassification: "evidence_record",
-    note: "Legacy strategy evidence rows and distinct strategy_id values are not counted as V2 strategy definitions.",
-  });
+  assert.equal(progress.strategyUniverse?.source, "postgresql");
+  assert.equal(progress.strategyUniverse?.v2StrategyDefinitions, 1);
+  assert.equal(progress.strategyUniverse?.rankedCandidates, 1);
+  assert.equal(progress.strategyUniverse?.legacyEvidenceRows, 1339);
+  assert.equal(progress.strategyUniverse?.legacyEvidenceDistinctStrategyIds, 87);
+  assert.equal(progress.strategyUniverse?.legacyEvidenceClassification, "evidence_record");
+  assert.equal((progress.strategyUniverse?.diversification as Record<string, Record<string, Record<string, unknown>>>).concentration.family.key, "breakout");
   assert.deepEqual(progress.readiness, {
     currentStage: "lifecycle decision",
     nextStage: "research lifecycle complete",
@@ -133,7 +144,7 @@ async function testDurableProgressCountsAndReadiness() {
     paperExecutionState: "disabled_or_gated",
     demoExecutionState: "demo_only_gated",
   });
-  assert.equal(sqlSeen.length, 6);
+  assert.equal(sqlSeen.length, 7);
 }
 
 async function testProgressProjectionFailureIsSanitized() {
@@ -250,6 +261,7 @@ async function testResearchProgressContractHasNonNullProvenance() {
     assert.equal((response.body.windows as Record<string, Record<string, unknown>>).lifetime.observations, 2);
     assert.equal((response.body.windows as Record<string, Record<string, unknown>>).total.observations, 2);
     assert.equal((response.body.instrumentUniverse as Record<string, Record<string, number>>).counts.validated, 26);
+    assert.ok(Number((response.body.strategyTemplates as Record<string, unknown>).totalTemplates) >= 10);
   });
 }
 

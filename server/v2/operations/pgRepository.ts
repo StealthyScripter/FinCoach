@@ -213,6 +213,38 @@ export class PgV2OperationsRepository {
       legacyEvidenceDistinctStrategyIds: Number(result.rows[0]?.distinct_strategy_ids ?? 0),
       legacyEvidenceClassification: "evidence_record",
       note: "Legacy strategy evidence rows and distinct strategy_id values are not counted as V2 strategy definitions.",
+      diversification: await this.strategyDiversification(),
+    };
+  }
+
+  private async strategyDiversification() {
+    const result = await this.db.query("SELECT payload FROM v2_strategy_definitions");
+    const strategies = result.rows.map(row => row.payload as Record<string, unknown>);
+    const total = strategies.length;
+    const byFamily = countStrategyValues(strategies, strategy => String(ruleValue(strategy, "filters", "primaryFamily") ?? "unknown"));
+    const bySession = countStrategyValues(strategies, strategy => String(firstRuleArrayValue(strategy, "sessionRestrictions", "sessionId") ?? firstRuleArrayValue(strategy, "sessionRestrictions", "sessionGroup") ?? "unknown"));
+    const byRegime = countStrategyValues(strategies.flatMap(strategy => arrayOfStrings(strategy.supportedRegimes).map(regime => ({ regime }))), item => item.regime);
+    const bySymbol = countStrategyValues(strategies.flatMap(strategy => arrayOfStrings(strategy.symbols).map(symbol => ({ symbol }))), item => item.symbol);
+    const byTimeframe = countStrategyValues(strategies.flatMap(strategy => arrayOfStrings(strategy.timeframes).map(timeframe => ({ timeframe }))), item => item.timeframe);
+    const byCurrency = countStrategyValues(strategies.flatMap(strategy => arrayOfStrings(strategy.symbols).flatMap(symbol => symbol.split("_").filter(part => part.length === 3).map(currency => ({ currency })))), item => item.currency);
+    const byTemplate = countStrategyValues(strategies, strategy => String(ruleValue(strategy, "entryConditions", "templateId") ?? "legacy_or_unknown"));
+    return {
+      total,
+      byFamily,
+      bySession,
+      byRegime,
+      bySymbol,
+      byTimeframe,
+      byCurrency,
+      byTemplate,
+      concentration: {
+        family: topConcentration(byFamily, total),
+        session: topConcentration(bySession, total),
+        symbol: topConcentration(bySymbol, total),
+        regime: topConcentration(byRegime, total),
+        template: topConcentration(byTemplate, total),
+      },
+      concentrationWarnings: concentrationWarnings({ byFamily, bySession, bySymbol, byRegime, byTemplate }, total),
     };
   }
 
@@ -454,6 +486,39 @@ function assertValidReportDate(value: string) {
   if (!isValidReportDate(value)) {
     throw new V2PersistenceError("malformed_persisted_record", "Daily report date is not a real YYYY-MM-DD calendar date");
   }
+}
+
+function countStrategyValues<T>(items: T[], keyOf: (item: T) => string) {
+  const counts: Record<string, number> = {};
+  for (const item of items) counts[keyOf(item)] = (counts[keyOf(item)] ?? 0) + 1;
+  return counts;
+}
+
+function ruleValue(strategy: Record<string, unknown>, collectionKey: string, field: string) {
+  const rules = Array.isArray(strategy[collectionKey]) ? strategy[collectionKey] as Array<Record<string, unknown>> : [];
+  return rules.find(rule => rule.field === field)?.value;
+}
+
+function firstRuleArrayValue(strategy: Record<string, unknown>, collectionKey: string, field: string) {
+  const value = ruleValue(strategy, collectionKey, field);
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function arrayOfStrings(value: unknown) {
+  return Array.isArray(value) ? value.map(item => String(item)) : [];
+}
+
+function topConcentration(counts: Record<string, number>, total: number) {
+  const [key, count] = Object.entries(counts).sort((left, right) => right[1] - left[1])[0] ?? ["none", 0];
+  return { key, count, percentage: total > 0 ? Number(((count / total) * 100).toFixed(2)) : 0 };
+}
+
+function concentrationWarnings(groups: Record<string, Record<string, number>>, total: number) {
+  if (total === 0) return [];
+  return Object.entries(groups)
+    .map(([dimension, counts]) => ({ dimension, ...topConcentration(counts, total) }))
+    .filter(item => item.percentage >= 50)
+    .map(item => `${item.dimension}:${item.key} concentration ${item.percentage}%`);
 }
 
 function deriveBlockers(progress: Awaited<ReturnType<PgV2OperationsRepository["researchProgress"]>>, now: Date) {

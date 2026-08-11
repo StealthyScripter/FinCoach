@@ -96,7 +96,9 @@ export type V2ResearchProgress = {
   windows?: Record<string, Record<string, unknown>>;
   coverage?: Record<string, unknown>;
   instrumentUniverse?: Record<string, unknown>;
+  strategyTemplates?: Record<string, unknown>;
   strategyUniverse?: Record<string, unknown>;
+  diversification?: Record<string, unknown>;
   pipeline?: V2ResearchPipelineCounts;
   readiness?: V2ResearchReadiness;
   degraded?: boolean;

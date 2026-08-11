@@ -51,7 +51,8 @@ import { createDomainEvent, type DomainEvent } from "../contracts";
 import { OrchestrationV2EventTypes } from "../orchestration/events";
 import { marketSnapshotService } from "../../marketSnapshotService";
 import { resolveResearchInstrument, validateResearchUniverse } from "../researchUniverse";
-import { activeFxResearchSession } from "../fxResearchSessions";
+import { activeFxResearchSession, type FxResearchSessionId } from "../fxResearchSessions";
+import { classifyRegimeFromObservation, instantiateStrategyTemplates } from "../strategyTemplates";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
 type WeeklyTransitionNotifier = (input: { kind: "open" | "close"; boundaryAt: string; window: WeeklyResearchWindowState; aggregate: AggregateTradableWindow }) => Promise<unknown>;
@@ -453,6 +454,8 @@ export class FinCoachV2Runtime {
     const forwardTestSources = new Map<string, ForwardTestSource>();
     const semanticCandidates = new Map<string, ObservationSemanticGroup>();
     const candidateCausationIds = new Map<string, string>();
+    const strategyCandidatesByFamily = new Map<string, number>();
+    const strategyCandidatesBySymbol = new Map<string, number>();
 
     const tradableResearchSymbols = marketSessionsService.instrumentSessions(this.config.symbols, input.now)
       .filter(session => session.status === "open" && resolveResearchInstrument(session.symbol))
@@ -577,9 +580,11 @@ export class FinCoachV2Runtime {
         blockers.push(blocker("critical", "hypothesis_symbol_unsupported", "hypothesis", "Candidate symbol is not in the canonical V2 research universe.", candidate.symbol, "validated research symbol", "Configure only supported research instruments.", input.now));
         continue;
       }
+      const sessionId = researchSessionForCandidate(instrument, activeFxSession?.sessionId);
+      const regime = classifyRegimeFromObservation(candidate.observationType);
       const hypothesis = hypotheses.generate({
           statement: `${candidate.symbol} ${candidate.timeframe} ${candidate.observationType} may have positive expectancy after costs.`,
-          targetPopulation: { symbols: [candidate.symbol], assetClasses: [instrument.assetClass], timeframes: [candidate.timeframe], sessions: [researchSessionForCandidate(instrument, activeFxSession?.sessionId)], regimes: [classifyResearchRegime(candidate.observationType)] },
+          targetPopulation: { symbols: [candidate.symbol], assetClasses: [instrument.assetClass], timeframes: [candidate.timeframe], sessions: [sessionId], regimes: [regime] },
           conditions: [{ field: "observationType", operator: "in", value: [candidate.observationType] }],
           expectedOutcome: { metric: "expectancy", operator: ">", value: 0, horizon: "next_bar" },
           baseline: { baselineId: "zero-edge", description: "No edge after costs", metric: "expectancy", value: 0 },
@@ -607,78 +612,93 @@ export class FinCoachV2Runtime {
         hypothesesCount += 1;
         structuredLogger.v2({ level: "info", event: "hypothesis_created", message: "V2 hypothesis persisted", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, hypothesisId: persistedHypothesis.hypothesisId, hypothesisFingerprint: persistedHypothesis.fingerprint, inserted: true, conflict: null });
         if (hypothesesCount > this.config.maxHypothesesPerCycle) break;
-        const compiled = rulesV2Compiler.compile({
+        const strategyInputs = instantiateStrategyTemplates({
           hypothesisId: persistedHypothesis.hypothesisId,
-          name: `V2 demo ${candidate.symbol} ${candidate.observationType.replaceAll("_", " ")}`,
-          assetClasses: [instrument.assetClass],
-          symbols: [candidate.symbol],
-          timeframes: [candidate.timeframe],
-          entryConditions: [{ field: "observationType", operator: "in", value: [candidate.observationType] }],
-          filters: [],
-          sidePolicy: { candidateSide: "buy" },
-          stopLoss: { type: "atr_multiple", value: 1.5 },
-          takeProfit: { type: "atr_multiple", value: 2 },
-          timeExit: { type: "time", value: "1h" },
-          invalidationRules: [{ field: "spread", operator: "<", value: 0.01 }],
-          positionSizing: { type: "fixed_fractional", riskFraction: 0.001 },
-          costModel: { costModelId: "deterministic-demo-costs", version: "v1" },
-          sessionRestrictions: [{ field: "sessionGroup", operator: "in", value: [researchSessionForCandidate(instrument, activeFxSession?.sessionId)] }],
-          eventRestrictions: [],
-          supportedRegimes: [classifyResearchRegime(candidate.observationType)],
-          requiredFeatureDefinitions: [{ featureId: candidate.detectorId, version: "observation-detector.v1" }],
+          symbol: candidate.symbol,
+          timeframe: candidate.timeframe,
+          observationType: candidate.observationType,
+          detectorId: candidate.detectorId,
+          detectorVersion: "observation-detector.v1",
+          instrument,
+          sessionId,
+          regime,
           correlationId: input.correlationId,
           causationId: hypothesisEventId,
           createdAt: input.now.toISOString(),
+          limits: {
+            maxTemplatesPerSymbolSession: this.config.maxTemplatesPerSymbolSession,
+            maxVariantsPerTemplate: this.config.maxVariantsPerTemplate,
+          },
         });
-        if (!compiled.strategy) continue;
-        const compiledStrategy = compiled.strategy;
-        const strategyEventId = firstEventId(compiled.events, "rules", compiledStrategy.strategyId);
-        await guarded(input.guard, "strategy_save", () => repositories.strategies.save(compiledStrategy));
-        strategiesCount += 1;
-        const experiment = experiments.create({
-          hypothesisId: persistedHypothesis.hypothesisId,
-          strategyId: compiled.strategy.strategyId,
-          strategyVersion: compiled.strategy.strategyVersion,
-          experimentType: "baseline_backtest",
-          datasetSpecification: { symbols: [candidate.symbol], timeframes: [candidate.timeframe], start: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[0].timestamp, end: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80).at(-1)!.timestamp },
-          parameterSpecification: {},
-          holdoutPolicy: { trainEnd: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[40].timestamp, validationEnd: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[60].timestamp, testStart: new Date(Date.parse(demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80).at(-1)!.timestamp) + 60_000).toISOString(), finalHoldoutLocked: true },
-          randomSeed: "deterministic-demo-seed",
-          resourceBudget: { maxCandles: 80, maxRuntimeMs: this.config.cycleTimeoutMs },
-          priority: 1,
-          maxAttempts: this.config.retryBudget,
-          correlationId: input.correlationId,
-          causationId: strategyEventId,
-          createdAt: input.now.toISOString(),
-        });
-        const experimentEventId = firstEventId(experiment.events, "experiments", experiment.experiment.experimentId);
-        await guarded(input.guard, "experiment_save", () => repositories.experiments.save(experiment.experiment));
-        experimentsCount += 1;
-        const backtestCandles = demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80);
-        const observationLineageEventId = candidateCausationIds.get(candidateKey) ?? input.cycleEventId;
-        const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles: backtestCandles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [observationLineageEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
-        const backtestEventId = firstEventId(backtest.events, "backtesting", backtest.result.backtestId);
-        await guarded(input.guard, "backtest_save", () => repositories.backtests.save(backtest.result));
-        backtestsCount += 1;
-        const court = courtroom.open({
-          strategyId: compiled.strategy.strategyId,
-          strategyVersion: compiled.strategy.strategyVersion,
-          hypothesisId: persistedHypothesis.hypothesisId,
-          experimentIds: [experiment.experiment.experimentId],
-          backtests: [backtest.result],
-          defenseExhibits: [{ exhibitId: `${backtest.result.backtestId}:defense`, sourceEventId: backtestEventId, kind: "defense", summary: "Deterministic bounded backtest result." }],
-          prosecutionExhibits: backtest.result.aggregateMetrics.tradeCount < 30 ? [{ exhibitId: `${backtest.result.backtestId}:sample`, sourceEventId: backtestEventId, kind: "prosecution", summary: "Insufficient sample depth." }] : [],
-          riskExhibits: [{ exhibitId: `${backtest.result.backtestId}:cost`, sourceEventId: backtestEventId, kind: "risk", summary: "Transaction costs applied." }],
-          correlationId: input.correlationId,
-          causationId: backtestEventId,
-        });
-        const courtEventId = firstEventId(court.events, "courtroom", court.courtCase.caseId);
-        await guarded(input.guard, "courtroom_save", () => repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtestEventId, experimentEventId, hypothesisEventId] }));
-        verdictsCount += 1;
-        const rankingCandidate = candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, persistedHypothesis.hypothesisId, backtest.result, candidate.timeframe, courtEventId);
-        rankingCandidates.push(rankingCandidate);
-        forwardTestSources.set(rankingCandidateKey(rankingCandidate), { strategy: compiled.strategy, backtest: backtest.result, courtEventId });
-        if (experimentsCount >= this.config.maxExperimentsPerCycle || backtestsCount >= this.config.maxBacktestsPerCycle) break;
+        if (!strategyInputs.length) {
+          blockers.push(blocker("warning", "no_compatible_strategy_template", "rules", "No enabled strategy template is compatible with the hypothesis symbol/session/regime/detector.", candidate.detectorId, "compatible template", "Add a deterministic template only when required evidence is available.", input.now));
+          continue;
+        }
+        for (const strategyInput of strategyInputs) {
+          const family = String(strategyInput.filters.find(rule => rule.field === "primaryFamily")?.value ?? "unknown");
+          if ((strategyCandidatesByFamily.get(family) ?? 0) >= this.config.maxCandidatesPerFamilyPerCycle) continue;
+          if ((strategyCandidatesBySymbol.get(candidate.symbol) ?? 0) >= this.config.maxCandidatesPerSymbolPerCycle) continue;
+          const compiled = rulesV2Compiler.compile(strategyInput);
+          if (!compiled.strategy) continue;
+          const compiledStrategy = compiled.strategy;
+          const strategyEventId = firstEventId(compiled.events, "rules", compiledStrategy.strategyId);
+          await guarded(input.guard, "strategy_save", () => repositories.strategies.save(compiledStrategy));
+          strategyCandidatesByFamily.set(family, (strategyCandidatesByFamily.get(family) ?? 0) + 1);
+          strategyCandidatesBySymbol.set(candidate.symbol, (strategyCandidatesBySymbol.get(candidate.symbol) ?? 0) + 1);
+          strategiesCount += 1;
+          const experiment = experiments.create({
+            hypothesisId: persistedHypothesis.hypothesisId,
+            strategyId: compiled.strategy.strategyId,
+            strategyVersion: compiled.strategy.strategyVersion,
+            experimentType: "baseline_backtest",
+            datasetSpecification: { symbols: [candidate.symbol], timeframes: [candidate.timeframe], start: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[0].timestamp, end: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80).at(-1)!.timestamp },
+            parameterSpecification: {
+              grid: {
+                templateId: [String(strategyInput.entryConditions.find(rule => rule.field === "templateId")?.value ?? "unknown")],
+                parameterVariant: [String(strategyInput.entryConditions.find(rule => rule.field === "parameterVariant")?.value ?? "default")],
+                family: [family],
+                sessionId: [sessionId],
+                regime: [regime],
+              },
+            },
+            holdoutPolicy: { trainEnd: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[40].timestamp, validationEnd: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[60].timestamp, testStart: new Date(Date.parse(demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80).at(-1)!.timestamp) + 60_000).toISOString(), finalHoldoutLocked: true },
+            randomSeed: "deterministic-demo-seed",
+            resourceBudget: { maxCandles: 80, maxRuntimeMs: this.config.cycleTimeoutMs },
+            priority: 1,
+            maxAttempts: this.config.retryBudget,
+            correlationId: input.correlationId,
+            causationId: strategyEventId,
+            createdAt: input.now.toISOString(),
+          });
+          const experimentEventId = firstEventId(experiment.events, "experiments", experiment.experiment.experimentId);
+          await guarded(input.guard, "experiment_save", () => repositories.experiments.save(experiment.experiment));
+          experimentsCount += 1;
+          const backtestCandles = demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80);
+          const observationLineageEventId = candidateCausationIds.get(candidateKey) ?? input.cycleEventId;
+          const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles: backtestCandles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [observationLineageEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
+          const backtestEventId = firstEventId(backtest.events, "backtesting", backtest.result.backtestId);
+          await guarded(input.guard, "backtest_save", () => repositories.backtests.save(backtest.result));
+          backtestsCount += 1;
+          const court = courtroom.open({
+            strategyId: compiled.strategy.strategyId,
+            strategyVersion: compiled.strategy.strategyVersion,
+            hypothesisId: persistedHypothesis.hypothesisId,
+            experimentIds: [experiment.experiment.experimentId],
+            backtests: [backtest.result],
+            defenseExhibits: [{ exhibitId: `${backtest.result.backtestId}:defense`, sourceEventId: backtestEventId, kind: "defense", summary: "Deterministic bounded backtest result." }],
+            prosecutionExhibits: backtest.result.aggregateMetrics.tradeCount < 30 ? [{ exhibitId: `${backtest.result.backtestId}:sample`, sourceEventId: backtestEventId, kind: "prosecution", summary: "Insufficient sample depth." }] : [],
+            riskExhibits: [{ exhibitId: `${backtest.result.backtestId}:cost`, sourceEventId: backtestEventId, kind: "risk", summary: "Transaction costs applied." }],
+            correlationId: input.correlationId,
+            causationId: backtestEventId,
+          });
+          const courtEventId = firstEventId(court.events, "courtroom", court.courtCase.caseId);
+          await guarded(input.guard, "courtroom_save", () => repositories.courtroom.save({ ...court.courtCase, lineageEventIds: [backtestEventId, experimentEventId, hypothesisEventId] }));
+          verdictsCount += 1;
+          const rankingCandidate = candidateFromBacktest(court.courtCase.caseId, court.courtCase.verdict, compiled.strategy.strategyId, compiled.strategy.strategyVersion, persistedHypothesis.hypothesisId, backtest.result, candidate.timeframe, courtEventId);
+          rankingCandidates.push(rankingCandidate);
+          forwardTestSources.set(rankingCandidateKey(rankingCandidate), { strategy: compiled.strategy, backtest: backtest.result, courtEventId });
+          if (experimentsCount >= this.config.maxExperimentsPerCycle || backtestsCount >= this.config.maxBacktestsPerCycle) break;
+        }
     }
     if (rankingCandidates.length) {
       const ranked = ranking.rank({ candidates: rankingCandidates, maxFocusedCount: 1, correlationId: input.correlationId, causationId: rankingCandidates[0].lineageEventIds.at(-1) ?? input.cycleEventId, generatedAt: new Date().toISOString() });
@@ -1044,14 +1064,7 @@ function hypothesisCandidateScanLimit(config: V2RuntimeConfig) {
   return Math.max(config.maxHypothesesPerCycle * 4, config.minIndependentHypothesisOccurrences * 4, 20);
 }
 
-function classifyResearchRegime(observationType: string) {
-  if (/compression/i.test(observationType)) return "volatility_compression";
-  if (/breakout/i.test(observationType)) return "volatility_expansion";
-  if (/liquidity|sweep/i.test(observationType)) return "high_volatility";
-  return "unknown";
-}
-
-function researchSessionForCandidate(instrument: { assetClass: string; sessionGroup: string }, activeFxSessionId?: string) {
+function researchSessionForCandidate(instrument: { assetClass: string; sessionGroup: "fx" | "commodities" }, activeFxSessionId?: FxResearchSessionId): FxResearchSessionId | "fx" | "commodities" {
   return instrument.assetClass === "forex" && activeFxSessionId ? activeFxSessionId : instrument.sessionGroup;
 }
 

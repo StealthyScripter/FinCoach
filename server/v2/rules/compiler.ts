@@ -17,7 +17,26 @@ export class RulesV2Compiler {
     ] };
   }
 }
-export function strategyFingerprint(input: CompileStrategyInput) { return createHash("sha256").update(JSON.stringify({ ...input, entryConditions: canon(input.entryConditions), filters: canon(input.filters), invalidationRules: canon(input.invalidationRules) })).digest("hex"); }
+export function strategyFingerprint(input: CompileStrategyInput) {
+  return createHash("sha256").update(JSON.stringify({
+    assetClasses: [...input.assetClasses].sort(),
+    symbols: [...input.symbols].sort(),
+    timeframes: [...input.timeframes].sort(),
+    entryConditions: canon(input.entryConditions),
+    filters: canon(input.filters),
+    sidePolicy: input.sidePolicy,
+    stopLoss: input.stopLoss,
+    takeProfit: input.takeProfit,
+    timeExit: input.timeExit,
+    invalidationRules: canon(input.invalidationRules),
+    positionSizing: input.positionSizing,
+    costModel: input.costModel,
+    sessionRestrictions: canon(input.sessionRestrictions),
+    eventRestrictions: canon(input.eventRestrictions),
+    supportedRegimes: [...input.supportedRegimes].sort(),
+    requiredFeatureDefinitions: [...input.requiredFeatureDefinitions].sort((a, b) => `${a.featureId}:${a.version}`.localeCompare(`${b.featureId}:${b.version}`)),
+  })).digest("hex");
+}
 function canon(rules: RuleExpression[]) { return [...rules].sort((a,b)=>`${a.field}${a.operator}${JSON.stringify(a.value)}`.localeCompare(`${b.field}${b.operator}${JSON.stringify(b.value)}`)); }
 function complexity(input: CompileStrategyInput) { return input.entryConditions.length + input.filters.length + input.invalidationRules.length + input.requiredFeatureDefinitions.length; }
 export const rulesV2Compiler = new RulesV2Compiler();

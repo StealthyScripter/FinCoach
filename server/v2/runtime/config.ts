@@ -29,6 +29,10 @@ export type V2RuntimeConfig = {
   hypothesisLookbackHours: number;
   targetEvaluationsPerHour: number;
   minEvaluationsPerHour: number;
+  maxTemplatesPerSymbolSession: number;
+  maxVariantsPerTemplate: number;
+  maxCandidatesPerFamilyPerCycle: number;
+  maxCandidatesPerSymbolPerCycle: number;
   observationMaxConcurrency: number;
   observationBatchSize: number;
   providerRequestsPerMinute: number;
@@ -123,6 +127,10 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
     hypothesisLookbackHours: Math.max(1, int(env.FINCOACH_V2_HYPOTHESIS_LOOKBACK_HOURS, 720)),
     targetEvaluationsPerHour: int(env.FINCOACH_V2_TARGET_EVALUATIONS_PER_HOUR, 200),
     minEvaluationsPerHour: int(env.FINCOACH_V2_MIN_EVALUATIONS_PER_HOUR, 100),
+    maxTemplatesPerSymbolSession: Math.max(1, int(env.FINCOACH_V2_MAX_TEMPLATES_PER_SYMBOL_SESSION, 3)),
+    maxVariantsPerTemplate: Math.max(1, int(env.FINCOACH_V2_MAX_VARIANTS_PER_TEMPLATE, 1)),
+    maxCandidatesPerFamilyPerCycle: Math.max(1, int(env.FINCOACH_V2_MAX_CANDIDATES_PER_FAMILY_PER_CYCLE, 4)),
+    maxCandidatesPerSymbolPerCycle: Math.max(1, int(env.FINCOACH_V2_MAX_CANDIDATES_PER_SYMBOL_PER_CYCLE, 4)),
     observationMaxConcurrency: Math.max(1, int(env.FINCOACH_V2_OBSERVATION_MAX_CONCURRENCY, 4)),
     observationBatchSize: Math.max(1, int(env.FINCOACH_V2_OBSERVATION_BATCH_SIZE, 25)),
     providerRequestsPerMinute: Math.max(1, int(env.FINCOACH_V2_PROVIDER_REQUESTS_PER_MINUTE, 60)),

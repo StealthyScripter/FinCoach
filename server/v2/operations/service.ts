@@ -9,6 +9,7 @@ import type { DurableWorkerLease, ResearchCycleRecord } from "../orchestration/c
 import type { DemoResearchPilotRecord } from "../pilot/contracts";
 import { loadV2RuntimeConfig } from "../runtime/config";
 import { validateResearchUniverse } from "../researchUniverse";
+import { strategyTemplateInventory } from "../strategyTemplates";
 
 type ProjectionRepositories = {
   operations?: DurableOperationsProjectionRepository | InMemoryV2OperationsRepository;
@@ -823,6 +824,7 @@ function canonicalResearchProgressBody(progress: Record<string, unknown>) {
     degraded,
     windows: ensureWindowContract(progress.windows as Record<string, Record<string, unknown>> | undefined),
     instrumentUniverse: progress.instrumentUniverse ?? validateResearchUniverse(loadV2RuntimeConfig().config.symbols),
+    strategyTemplates: progress.strategyTemplates ?? strategyTemplateInventory(),
     liveExecutionBlocked: true,
   };
 }
