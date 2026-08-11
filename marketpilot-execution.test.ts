@@ -16,8 +16,9 @@ import { evaluateLiveReadiness } from "./server/execution/liveReadiness";
 async function main() {
 const now = Date.parse("2026-06-18T14:00:00.000Z");
 
-assert.equal(INSTRUMENTS.length, 7);
+assert.equal(INSTRUMENTS.length, 30);
 assert.equal(normalizeSymbol("EUR_USD")?.symbol, "EUR/USD");
+assert.equal(normalizeSymbol("AUD_CAD")?.symbol, "AUD/CAD");
 assert.equal(normalizeSymbol("TVC:USOIL")?.symbol, "WTI");
 
 for (const provider of [
