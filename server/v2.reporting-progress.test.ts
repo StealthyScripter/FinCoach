@@ -262,6 +262,10 @@ async function testResearchProgressContractHasNonNullProvenance() {
     assert.equal((response.body.windows as Record<string, Record<string, unknown>>).total.observations, 2);
     assert.equal((response.body.instrumentUniverse as Record<string, Record<string, number>>).counts.validated, 26);
     assert.ok(Number((response.body.strategyTemplates as Record<string, unknown>).totalTemplates) >= 10);
+    const portfolio = await service.telegramStrategyPortfolio();
+    assert.match(portfolio, /Strategy Portfolio/);
+    assert.match(portfolio, /Templates:/);
+    assert.match(portfolio, /Live execution: blocked/);
   });
 }
 

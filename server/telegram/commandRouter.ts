@@ -47,6 +47,7 @@ const READ_ONLY_COMMANDS = new Set([
   "/backtests",
   "/court_cases",
   "/strategy_leaderboard",
+  "/strategy_portfolio",
   "/forward_tests",
   "/signals",
   "/evaluator_results",
@@ -111,7 +112,7 @@ export class TelegramCommandRouter {
       "/open_exchanges /markets_open /market_status",
       "/market_snapshot /morning_snapshot /evening_snapshot /upcoming_events",
       "/observations /hypotheses /experiments /backtests",
-      "/court_cases /strategy_leaderboard /forward_tests /signals /evaluator_results /lessons /strategy_health",
+      "/court_cases /strategy_leaderboard /strategy_portfolio /forward_tests /signals /evaluator_results /lessons /strategy_health",
       "Confirmation required: /pause_demo /resume_demo /disable_automation /kill",
       "Live trading commands are blocked.",
     ].join("\n");
@@ -225,6 +226,7 @@ export class TelegramCommandRouter {
       case "/backtests":
       case "/court_cases":
       case "/strategy_leaderboard":
+      case "/strategy_portfolio":
       case "/forward_tests":
       case "/signals":
       case "/evaluator_results":

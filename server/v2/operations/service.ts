@@ -543,6 +543,7 @@ export class V2OperationsService {
 
   async telegramSummary(command: string) {
     if (command === "/research_today") return this.telegramResearchProgress();
+    if (command === "/strategy_portfolio") return this.telegramStrategyPortfolio();
     if (command === "/v2_status") {
       const status = this.status().body;
       return [`Version 2 Status`, `Health: ${(status.moduleHealth as Record<string, string>).orchestration}`, `Dead letters: ${status.deadLetterCount}`, `Kill switch: ${status.killSwitchState}`, `Live execution: blocked`].join("\n");
@@ -620,6 +621,38 @@ export class V2OperationsService {
       `- Live execution blocked: ${readiness.liveExecutionBlocked ?? true}`,
       `- Paper execution state: ${readiness.paperExecutionState ?? "gated"}`,
       `- Demo execution state: ${readiness.demoExecutionState ?? "gated"}`,
+    ].join("\n").slice(0, 3900);
+  }
+
+  async telegramStrategyPortfolio() {
+    const progress = (await this.researchProgress()).body as Record<string, unknown>;
+    if (progress.degraded) return `Strategy Portfolio\nState: degraded\nReason: ${progress.reason}\nLive execution: blocked`;
+    const pipeline = progress.pipeline as Record<string, unknown>;
+    const templates = progress.strategyTemplates as Record<string, unknown>;
+    const universe = progress.strategyUniverse as Record<string, unknown> | undefined;
+    const diversification = universe?.diversification as Record<string, unknown> | undefined;
+    const concentration = diversification?.concentration as Record<string, Record<string, unknown>> | undefined;
+    const warnings = Array.isArray(diversification?.concentrationWarnings) ? diversification.concentrationWarnings as string[] : [];
+    return [
+      "Strategy Portfolio",
+      `Generated: ${progress.generatedAt}`,
+      `Source: ${progress.source ?? "unknown"}`,
+      `Durable strategies: ${pipeline.strategies ?? 0}`,
+      `Ranked candidates: ${pipeline.rankedCandidates ?? 0}`,
+      `Templates: ${templates.totalTemplates ?? 0} total, ${templates.enabledTemplates ?? 0} enabled, ${templates.blockedTemplates ?? 0} blocked`,
+      `Families: ${formatCounts(templates.byFamily as Record<string, number> | undefined)}`,
+      "",
+      "Concentration",
+      `- Family: ${formatConcentration(concentration?.family)}`,
+      `- Session: ${formatConcentration(concentration?.session)}`,
+      `- Symbol: ${formatConcentration(concentration?.symbol)}`,
+      `- Regime: ${formatConcentration(concentration?.regime)}`,
+      warnings.length ? `Warnings: ${warnings.slice(0, 5).join("; ")}` : "Warnings: none",
+      "",
+      "Blocked template classes",
+      "- news_macro requires authoritative event data",
+      "- relative_value requires explicit multi-symbol feature lineage",
+      "Live execution: blocked",
     ].join("\n").slice(0, 3900);
   }
 
@@ -946,6 +979,16 @@ function commandLabel(command: string, collection: V2OperationsCollection) {
 function formatCoverage(value: unknown) {
   if (!Array.isArray(value) || value.length === 0) return "none";
   return value.map(item => typeof item === "object" && item !== null ? `${(item as { value?: unknown }).value}:${(item as { count?: unknown }).count}` : String(item)).join(", ");
+}
+
+function formatCounts(counts: Record<string, number> | undefined) {
+  if (!counts || !Object.keys(counts).length) return "none";
+  return Object.entries(counts).sort((left, right) => right[1] - left[1]).map(([key, value]) => `${key}:${value}`).join(", ");
+}
+
+function formatConcentration(value: Record<string, unknown> | undefined) {
+  if (!value) return "none";
+  return `${value.key ?? "unknown"} ${value.count ?? 0} (${value.percentage ?? 0}%)`;
 }
 
 function formatWindowRows(windows: Record<string, Record<string, unknown>>) {
