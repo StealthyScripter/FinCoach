@@ -564,7 +564,7 @@ export class TelegramBotService {
     if (this.notifiedAlertIds.has(alert.id)) return { sent: false as const, reason: "Alert already sent" };
     const chatId = Number(allowedUserId);
     if (!Number.isFinite(chatId)) return { sent: false as const, reason: "Telegram allowed user ID is invalid" };
-    const priority = new AlertPriorityRouter().route(alert.severity);
+    const priority = "eventType" in alert && alert.eventType === "system.application_online" ? "immediate" : new AlertPriorityRouter().route(alert.severity);
     const message = this.formatter.format({ text: this.describeAlert(alert) });
     if (priority === "digest") {
       this.queueDigestAlert(alert);

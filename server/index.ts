@@ -12,6 +12,7 @@ import { configureWeeklyTransitionNotifier, getFinCoachV2Runtime } from "./v2/ru
 import { weeklyMarketNotificationService } from "./telegram/weeklyMarketNotificationService";
 import { structuredLogger } from "./structuredLogger";
 import { deploymentMetadata } from "./deploymentMetadata";
+import { publishTelegramLifecycleAlert } from "./telegramNotificationBus";
 
 const app = express();
 const httpServer = createServer(app);
@@ -145,6 +146,16 @@ app.use((req, res, next) => {
     () => {
       log(`serving on port ${port}`);
       structuredLogger.audit({ level: "info", event: "application_listening", message: "FinCoach server listening", port });
+      void publishTelegramLifecycleAlert({
+        id: `application-online-${process.pid}-${Date.now()}`,
+        source: "system",
+        eventType: "system.application_online",
+        severity: "info",
+        title: "FinCoach application online",
+        message: `Server is listening on port ${port}.`,
+        metadata: { port, deployedRevision: deploymentMetadata() },
+        createdAt: new Date().toISOString(),
+      });
     },
   );
 })();

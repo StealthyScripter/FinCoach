@@ -249,7 +249,7 @@ async function testOutageAndMigrationFailures() {
 
   const operations = new PgV2OperationsRepository(pool);
   const unsupportedReportId = `unsupported-report-${suffix}`;
-  const unsupportedReportDate = uniqueFutureReportDate();
+  const unsupportedReportDate = uniqueHistoricalReportDate(10);
   await pool.query(
     `INSERT INTO v2_operations_daily_reports
       (report_id, schema_version, report_date, idempotency_key, status, payload, correlation_id, created_at, updated_at)
@@ -312,11 +312,11 @@ async function cleanup() {
 }
 
 function reportDate() {
-  return `2099-05-${String((Date.now() % 20) + 1).padStart(2, "0")}`;
+  return uniqueHistoricalReportDate();
 }
 
-function uniqueFutureReportDate() {
-  const date = new Date(Date.UTC(2099, 0, 1 + (Date.now() % 20_000)));
+function uniqueHistoricalReportDate(additionalOffset = 0) {
+  const date = new Date(Date.UTC(2022, 0, 1 + ((Date.now() + additionalOffset) % 1_000)));
   return date.toISOString().slice(0, 10);
 }
 

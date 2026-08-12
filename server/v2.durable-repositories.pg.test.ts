@@ -186,7 +186,9 @@ async function testPilotDurability() {
 }
 
 async function testOperationsDurability() {
-  const report = dailyReport(`report-${suffix}`, uniqueFutureReportDate());
+  await assert.doesNotReject(() => operations.getReportByDate(currentReportDate()));
+
+  const report = dailyReport(`report-${suffix}`, uniqueHistoricalReportDate());
   const saved = await operations.saveReport({
     report,
     status: "created",
@@ -223,20 +225,57 @@ async function testOperationsDurability() {
     (error) => error instanceof V2PersistenceError && error.code === "persistence_integrity_failure",
   );
   assert.equal((await operations.deliveriesForReport(report.reportId))[0]?.status, "failed");
+
+  for (const invalidReportDate of ["not-a-date", "2026-02-30", farFutureReportDate()]) {
+    const invalidReport = dailyReport(`report-invalid-${invalidReportDate}-${suffix}`, invalidReportDate);
+    await assert.rejects(
+      () => operations.saveReport({
+        report: invalidReport,
+        status: "created",
+        correlationId: `corr-${suffix}`,
+        causationId: null,
+        createdAt: invalidReport.createdAt,
+        updatedAt: invalidReport.createdAt,
+      }),
+      (error) => error instanceof V2PersistenceError && error.code === "malformed_persisted_record",
+    );
+  }
 }
 
 async function testMalformedAndUnsupportedRows() {
+  const validReportId = `report-valid-latest-${suffix}`;
+  const validReportDate = uniqueHistoricalReportDate(10);
+  const validReport = dailyReport(validReportId, validReportDate);
+  const validLatestCreatedAt = new Date(Date.now() + 1_000).toISOString();
+  await operations.saveReport({
+    report: validReport,
+    status: "created",
+    correlationId: `corr-${suffix}`,
+    causationId: null,
+    createdAt: validLatestCreatedAt,
+    updatedAt: validLatestCreatedAt,
+  });
+
   const malformedReportId = `report-malformed-${suffix}`;
   await pool.query(
     `INSERT INTO v2_operations_daily_reports
       (report_id, schema_version, report_date, idempotency_key, status, payload, correlation_id, created_at, updated_at)
      VALUES ($1, $2, $3, $3, 'created', $4, $5, $6, $6)`,
-    [malformedReportId, "fincoach.v2.daily-research-report.1", `malformed-${suffix}`, JSON.stringify({ schemaVersion: "wrong", reportId: "other", reportDate: "other" }), `corr-${suffix}`, new Date().toISOString()],
+    [malformedReportId, "fincoach.v2.daily-research-report.1", `malformed-${suffix}`, JSON.stringify({ schemaVersion: "wrong", reportId: "other", reportDate: "other" }), `corr-${suffix}`, new Date(Date.now() + 2_000).toISOString()],
   );
   await assert.rejects(
     () => operations.getReportByDate(`malformed-${suffix}`),
     (error) => error instanceof V2PersistenceError && error.code === "malformed_persisted_record",
   );
+  const futureReportId = `report-future-${suffix}`;
+  const futureReportDate = farFutureReportDate();
+  await pool.query(
+    `INSERT INTO v2_operations_daily_reports
+      (report_id, schema_version, report_date, idempotency_key, status, payload, correlation_id, created_at, updated_at)
+     VALUES ($1, $2, $3, $3, 'created', $4, $5, $6, $6)`,
+    [futureReportId, "fincoach.v2.daily-research-report.1", futureReportDate, JSON.stringify(dailyReport(futureReportId, futureReportDate)), `corr-${suffix}`, new Date(Date.now() + 3_000).toISOString()],
+  );
+  assert.equal((await operations.latestReport())?.report.reportId, validReportId);
 
   await pool.query(
     `INSERT INTO v2_orchestration_dead_letters
@@ -272,9 +311,17 @@ function hash(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function uniqueFutureReportDate() {
-  const date = new Date(Date.UTC(2099, 0, 1 + (Date.now() % 20_000)));
+function currentReportDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function uniqueHistoricalReportDate(additionalOffset = 0) {
+  const date = new Date(Date.UTC(2020, 0, 1 + ((Date.now() + additionalOffset) % 1_000)));
   return date.toISOString().slice(0, 10);
+}
+
+function farFutureReportDate() {
+  return "2099-01-01";
 }
 
 function pilotConfig(pilotId: string): DemoResearchPilotConfig {

@@ -25,12 +25,23 @@ const env = {
   TELEGRAM_ALLOW_GROUPS: "false",
 };
 
-const fakeFetch: typeof fetch = async () => ({
-  ok: true,
-  status: 200,
-  json: async () => ({ ok: true }),
-  text: async () => JSON.stringify({ ok: true }),
-} as Response);
+const sentTelegramTexts: string[] = [];
+const fakeFetch: typeof fetch = async (_url, init) => {
+  if (typeof init?.body === "string") {
+    try {
+      const body = JSON.parse(init.body) as { text?: string };
+      if (body.text) sentTelegramTexts.push(body.text);
+    } catch {
+      // Ignore non-JSON test requests.
+    }
+  }
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true }),
+    text: async () => JSON.stringify({ ok: true }),
+  } as Response;
+};
 
 const restoreRisk = executionRiskService.snapshot();
 const restoreLevel = automationLevelService.snapshot().level;
@@ -74,6 +85,19 @@ try {
 
   const bot = new TelegramBotService(env, fakeFetch);
   assert.equal(bot.status().allowedUserId, "[REDACTED]");
+  const beforeOnlineAlert = sentTelegramTexts.length;
+  const onlineAlert = await bot.notifyAlert({
+    id: "test-application-online",
+    source: "system",
+    eventType: "system.application_online",
+    severity: "info",
+    title: "FinCoach application online",
+    message: "Server is listening on port 5000.",
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal(onlineAlert.ok, true);
+  assert.equal(sentTelegramTexts.length, beforeOnlineAlert + 1);
+  assert.match(sentTelegramTexts.at(-1) ?? "", /FinCoach application online/);
   const helpReply = await bot.handleCommand("/help", "42", 42);
   assert.match(helpReply.text, /\*View\*/);
   assert.match(helpReply.text, /Confirmation required:/);

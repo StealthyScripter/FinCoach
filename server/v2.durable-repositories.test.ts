@@ -137,7 +137,7 @@ function dailyReport(): V2DailyResearchReport {
   return {
     reportId: "report-memory-compat",
     schemaVersion: "fincoach.v2.daily-research-report.1",
-    reportDate: "2099-02-01",
+    reportDate: "2026-02-01",
     observations: 0,
     hypotheses: 0,
     experiments: 0,

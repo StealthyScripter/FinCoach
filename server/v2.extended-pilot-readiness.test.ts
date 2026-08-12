@@ -269,7 +269,7 @@ function dailyReport(reportId: string): V2DailyResearchReport {
   return {
     reportId,
     schemaVersion: "fincoach.v2.daily-research-report.1",
-    reportDate: `2099-06-${String((Date.now() % 20) + 1).padStart(2, "0")}`,
+    reportDate: uniqueHistoricalReportDate(),
     observations: 1,
     hypotheses: 1,
     experiments: 1,
@@ -289,6 +289,10 @@ function dailyReport(reportId: string): V2DailyResearchReport {
     liveExecutionBlocked: true,
     createdAt: new Date().toISOString(),
   };
+}
+
+function uniqueHistoricalReportDate() {
+  return new Date(Date.UTC(2021, 0, 1 + (Date.now() % 1_000))).toISOString().slice(0, 10);
 }
 
 function signalCompatibility() {

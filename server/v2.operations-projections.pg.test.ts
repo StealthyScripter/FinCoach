@@ -115,7 +115,10 @@ async function seedProjectionEvidence() {
     updatedAt: now,
   }, { correlationId });
 
-  const report = dailyReport(`report-${suffix}`, uniqueFutureReportDate());
+  const report = {
+    ...dailyReport(`report-${suffix}`, uniqueHistoricalReportDate()),
+    createdAt: new Date(Date.now() + 60_000).toISOString(),
+  };
   await operations.saveReport({ report, status: "created", correlationId, causationId: null, createdAt: report.createdAt, updatedAt: report.createdAt });
   await operations.saveDelivery({
     deliveryId: `delivery-${suffix}`,
@@ -165,7 +168,7 @@ async function testListProjection() {
 }
 
 async function testDailyReportProjection() {
-  const created = await service.dailyReportAsync({ reportDate: uniqueFutureReportDate(100), correlationId });
+  const created = await service.dailyReportAsync({ reportDate: uniqueHistoricalReportDate(100), correlationId });
   const duplicate = await service.dailyReportAsync({ reportDate: created.body.report.reportDate, correlationId });
   assert.equal(created.body.status, "created");
   assert.equal(duplicate.body.status, "existing");
@@ -303,9 +306,9 @@ function dailyReport(reportId: string, reportDate: string): V2DailyResearchRepor
   };
 }
 
-function uniqueFutureReportDate(additionalOffset = 0) {
+function uniqueHistoricalReportDate(additionalOffset = 0) {
   const dayOffset = (Date.now() + additionalOffset) % 3650;
-  return new Date(Date.UTC(2090, 0, 1 + dayOffset)).toISOString().slice(0, 10);
+  return new Date(Date.UTC(2010, 0, 1 + dayOffset)).toISOString().slice(0, 10);
 }
 
 function uniqueFutureTimestamp() {
