@@ -28,6 +28,7 @@ import { signalPriorityService } from "./signalPriorityService";
 import { registerTelegramLifecycleListener, type TelegramLifecycleAlert } from "./telegramNotificationBus";
 import { publishTelegramLifecycleAlert } from "./telegramNotificationBus";
 import { demoOnlyPolicyService } from "./execution/demoOnlyPolicy";
+import { isAutomatedTestProcess } from "./processGuards";
 
 export type TelegramCommandIntent =
   | { kind: "start" }
@@ -477,9 +478,11 @@ export class TelegramBotService {
 
   constructor(private readonly env: NodeJS.ProcessEnv = process.env, private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis)) {
     this.auth = new TelegramAuthGuard(env);
-    registerTelegramLifecycleListener(async (alert) => {
-      await this.notifyAlert(alert);
-    });
+    if (!isAutomatedTestProcess(env)) {
+      registerTelegramLifecycleListener(async (alert) => {
+        await this.notifyAlert(alert);
+      });
+    }
   }
 
   status(): TelegramSystemStatus {

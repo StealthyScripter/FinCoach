@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { isAutomatedTestProcess } from "../processGuards";
 
 export type GovernanceApprovalRecord = {
   id: string;
@@ -249,6 +250,9 @@ function mapApproval(row: Record<string, unknown>) {
 }
 
 export function createGovernanceRepository(env: NodeJS.ProcessEnv = process.env): GovernanceRepository {
+  if (isAutomatedTestProcess(env) && env.FINCOACH_ALLOW_TEST_POSTGRES_GOVERNANCE !== "true") {
+    return new InMemoryGovernanceRepository();
+  }
   return env.DATABASE_URL ? new PgGovernanceRepository(env.DATABASE_URL) : new InMemoryGovernanceRepository();
 }
 

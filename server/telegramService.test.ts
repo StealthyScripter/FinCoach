@@ -16,6 +16,7 @@ import { PaperStrategyRuntime } from "./execution/paperStrategyRuntime";
 import { postTradeReviewService } from "./execution/postTradeReviewService";
 import { StrategyOpsService } from "./execution/strategyOpsService";
 import { paperAutomationService } from "./execution/paperAutomation";
+import { isAutomatedTestProcess } from "./processGuards";
 
 const env = {
   TELEGRAM_BOT_TOKEN: "bot-token",
@@ -55,6 +56,8 @@ let unregisterLifecycleListener: null | (() => void) = null;
 let restoreSandboxBrokerAdapter: null | (() => void) = null;
 
 try {
+  assert.equal(isAutomatedTestProcess({ npm_lifecycle_event: "test" } as NodeJS.ProcessEnv, ["tsx", "server/telegramService.test.ts"]), true);
+
   const guard = new TelegramAuthGuard(env, () => 1_700_000_000_000);
   const update = {
     update_id: 1,
