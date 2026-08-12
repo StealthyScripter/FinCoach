@@ -561,6 +561,10 @@ await withTelegramScheduleEnv({
   const receiver = new TelegramUpdateReceiver(loadTelegramConfig(baseEnv), cursor, transport, fetcher);
   receiver.start();
   await waitFor(() => handled.length === 1);
+  const healthy = receiver.health();
+  assert.equal(healthy.reachabilityState, "available");
+  assert.ok(healthy.lastPollSuccessAt);
+  assert.equal(healthy.consecutivePollFailures, 0);
   await receiver.stop();
   assert.deepEqual(handled, ["/help"]);
   assert.equal(await cursor.loadOffset(), 42);

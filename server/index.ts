@@ -11,6 +11,7 @@ import { startTelegramOperations } from "./telegram";
 import { configureWeeklyTransitionNotifier, getFinCoachV2Runtime } from "./v2/runtime/composition";
 import { weeklyMarketNotificationService } from "./telegram/weeklyMarketNotificationService";
 import { structuredLogger } from "./structuredLogger";
+import { deploymentMetadata } from "./deploymentMetadata";
 
 const app = express();
 const httpServer = createServer(app);
@@ -80,6 +81,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  structuredLogger.audit({ level: "info", event: "application_starting", message: "FinCoach server starting", deployedRevision: deploymentMetadata() });
   const demoOnlyEnvironment = demoOnlyPolicyService.validateEnvironment();
   if (!demoOnlyEnvironment.safe) {
     structuredLogger.audit({ level: "fatal", event: "startup_safety_check_failed", message: "MarketPilot demo-only safety check failed", violations: demoOnlyEnvironment.violations });

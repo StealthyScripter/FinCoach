@@ -70,6 +70,22 @@ assert.equal(resolveResearchInstrument("BTC_USD"), null);
 }
 
 {
+  const config = loadV2RuntimeConfig({
+    ...baseEnv,
+    FINCOACH_V2_TARGET_EVALUATIONS_PER_HOUR: "400",
+    FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE: "400",
+  }).config;
+  const theoretical = DEFAULT_RESEARCH_SYMBOLS.reduce((total, symbol) => total + buildObservationPlan({ ...config, targetEvaluationsPerHour: Number.MAX_SAFE_INTEGER }, [symbol]).length, 0);
+  assert.equal(theoretical, 572);
+  const first = buildObservationPlan(config, DEFAULT_RESEARCH_SYMBOLS, "cycle-a");
+  const second = buildObservationPlan(config, DEFAULT_RESEARCH_SYMBOLS, "cycle-b");
+  assert.equal(first.length, 400);
+  assert.equal(new Set(first.map(plan => plan.symbol)).size, 26);
+  assert.equal(new Set(second.map(plan => plan.symbol)).size, 26);
+  assert.deepEqual(buildObservationPlan(config, DEFAULT_RESEARCH_SYMBOLS, "restart-safe"), buildObservationPlan(config, DEFAULT_RESEARCH_SYMBOLS, "restart-safe"));
+}
+
+{
   const tokyo = activeFxResearchSession(new Date("2026-08-11T01:30:00.000Z"), DEFAULT_RESEARCH_SYMBOLS);
   assert.equal(tokyo?.sessionId, "tokyo");
   assert.ok(tokyo?.prioritySymbols.includes("USD_JPY"));

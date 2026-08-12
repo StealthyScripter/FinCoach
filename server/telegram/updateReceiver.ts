@@ -30,6 +30,10 @@ export class TelegramUpdateReceiver {
   private inFlight: AbortController | null = null;
   private seenUpdateIds = new Set<number>();
   private shutdownRegistered = false;
+  private lastPollSuccessAt: string | null = null;
+  private lastPollFailureAt: string | null = null;
+  private consecutivePollFailures = 0;
+  private lastPollError: string | null = null;
 
   constructor(
     private readonly config: TelegramEnvironmentConfig = loadTelegramConfig(),
@@ -64,6 +68,11 @@ export class TelegramUpdateReceiver {
       stopped: this.stopped,
       inFlight: Boolean(this.inFlight),
       seenUpdateIds: this.seenUpdateIds.size,
+      lastPollSuccessAt: this.lastPollSuccessAt,
+      lastPollFailureAt: this.lastPollFailureAt,
+      consecutivePollFailures: this.consecutivePollFailures,
+      lastPollError: this.lastPollError,
+      reachabilityState: this.reachabilityState(),
     };
   }
 
@@ -87,6 +96,9 @@ export class TelegramUpdateReceiver {
       try {
         const updates = await this.getUpdates(offset);
         attempt = 0;
+        this.lastPollSuccessAt = new Date().toISOString();
+        this.consecutivePollFailures = 0;
+        this.lastPollError = null;
         if (updates.length > 0) telegramMetrics.increment("updatesReceived", updates.length);
         if (updates.length > 0) structuredLogger.telegram({ level: "info", event: "telegram_updates_received", message: "Telegram updates received", updateCount: updates.length, offset });
         for (const update of updates) {
@@ -114,11 +126,22 @@ export class TelegramUpdateReceiver {
         telegramMetrics.increment("pollingReconnects");
         const retryAfter = retryAfterSeconds(error);
         const delayMs = retryAfter ? retryAfter * 1000 : backoff(attempt += 1);
+        this.lastPollFailureAt = new Date().toISOString();
+        this.consecutivePollFailures += 1;
+        this.lastPollError = error instanceof Error ? error.message : String(error);
         console.warn(`Telegram update polling failed; retrying in ${Math.round(delayMs / 1000)}s: ${error instanceof Error ? error.message : String(error)}`);
         structuredLogger.telegram({ level: "error", event: "telegram_polling_failed", message: "Telegram update polling failed", retryAttempt: attempt, nextRetryAt: new Date(Date.now() + delayMs).toISOString(), retryDelayMs: delayMs, error });
         await sleep(delayMs);
       }
     }
+  }
+
+  private reachabilityState(): "available" | "degraded" | "unavailable" | "unknown" {
+    if (!this.config.botToken || !this.config.notificationsEnabled) return "unavailable";
+    if (!this.lastPollSuccessAt && !this.lastPollFailureAt) return "unknown";
+    if (this.consecutivePollFailures >= 3) return "unavailable";
+    if (this.consecutivePollFailures > 0) return "degraded";
+    return "available";
   }
 
   private async getUpdates(offset: number) {

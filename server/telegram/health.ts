@@ -18,6 +18,8 @@ export async function buildTelegramStatus() {
   const storage = getStorageHealth();
   const providers = providerRegistryService.getSnapshot();
   const risk = executionRiskService.snapshot();
+  const clientHealth = telegramClient.health();
+  const receiverHealth = telegramUpdateReceiver.health();
   return {
     generatedAt: new Date().toISOString(),
     finCoachState: "running",
@@ -39,7 +41,18 @@ export async function buildTelegramStatus() {
       operationsChat: redactChatId(config.chatId),
       signalChat: redactChatId(config.signalChatId),
       client: telegramClient.health(),
-      updateReceiver: telegramUpdateReceiver.health(),
+      updateReceiver: receiverHealth,
+      telegramTransport: {
+        configured: clientHealth.configured,
+        receiverRunning: receiverHealth.running,
+        lastPollSuccessAt: receiverHealth.lastPollSuccessAt,
+        lastPollFailureAt: receiverHealth.lastPollFailureAt,
+        consecutivePollFailures: receiverHealth.consecutivePollFailures,
+        lastPollError: receiverHealth.lastPollError,
+        lastDeliverySuccessAt: clientHealth.lastSuccessfulSendAt,
+        lastDeliveryFailureAt: clientHealth.lastFailedSendAt,
+        reachabilityState: receiverHealth.reachabilityState,
+      },
       repository: telegramRepository.health(),
     },
   };

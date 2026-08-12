@@ -110,6 +110,7 @@ import { strategyResearchSchedulerService } from "./strategyResearchSchedulerSer
 import { historicalDataImportService } from "./historicalDataImportService";
 import { researchAccelerationService } from "./researchAccelerationService";
 import { oandaHistoricalBackfillService } from "./historicalDataBackfillService";
+import { deploymentMetadata } from "./deploymentMetadata";
 
 const emergencyControlService = new EmergencyControlService(
   executionRiskService,
@@ -141,6 +142,7 @@ export async function registerRoutes(
       storageMode: storageHealth.mode,
       providers: providers.providers.length,
       liveExecutionBlocked: true,
+      deployedRevision: deploymentMetadata(),
     });
   });
 

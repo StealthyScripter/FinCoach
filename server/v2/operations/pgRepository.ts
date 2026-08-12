@@ -300,7 +300,7 @@ export class PgV2OperationsRepository {
     try {
       const result = await this.db.query("SELECT * FROM v2_operations_daily_reports ORDER BY created_at DESC, report_id DESC LIMIT 25");
       for (const row of result.rows) {
-        if (!isValidReportDate(String(row.report_date))) continue;
+        if (!isAcceptableReportDate(String(row.report_date))) continue;
         try {
           return mapReport(row);
         } catch (error) {
@@ -317,7 +317,7 @@ export class PgV2OperationsRepository {
   async invalidDailyReportCount(): Promise<number> {
     try {
       const result = await this.db.query("SELECT report_date FROM v2_operations_daily_reports");
-      return result.rows.filter(row => !isValidReportDate(String(row.report_date))).length;
+      return result.rows.filter(row => !isAcceptableReportDate(String(row.report_date))).length;
     } catch (error) {
       throw classifyPostgresError(error);
     }
@@ -482,9 +482,16 @@ function isValidReportDate(value: string) {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function isAcceptableReportDate(value: string, now = new Date()) {
+  if (!isValidReportDate(value)) return false;
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const report = new Date(`${value}T00:00:00.000Z`);
+  return report.getTime() <= today.getTime() + 24 * 60 * 60_000;
+}
+
 function assertValidReportDate(value: string) {
-  if (!isValidReportDate(value)) {
-    throw new V2PersistenceError("malformed_persisted_record", "Daily report date is not a real YYYY-MM-DD calendar date");
+  if (!isAcceptableReportDate(value)) {
+    throw new V2PersistenceError("malformed_persisted_record", "Daily report date is not an acceptable current or historical YYYY-MM-DD calendar date");
   }
 }
 

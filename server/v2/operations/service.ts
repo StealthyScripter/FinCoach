@@ -10,6 +10,8 @@ import type { DemoResearchPilotRecord } from "../pilot/contracts";
 import { loadV2RuntimeConfig } from "../runtime/config";
 import { validateResearchUniverse } from "../researchUniverse";
 import { strategyTemplateInventory } from "../strategyTemplates";
+import { deploymentMetadata } from "../../deploymentMetadata";
+import { emitReportDeliverySummary } from "../../observerTelemetry";
 
 type ProjectionRepositories = {
   operations?: DurableOperationsProjectionRepository | InMemoryV2OperationsRepository;
@@ -149,6 +151,7 @@ export class V2OperationsService {
       telegramPublicationState: "disabled",
       configurationState: "incomplete",
       economicEvidenceState: "not_configured",
+      deployedRevision: deploymentMetadata(),
       ...(this.runtimeStatusProvider?.() ?? {}),
     };
     return { status: 200, body, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "status" })] };
@@ -538,6 +541,15 @@ export class V2OperationsService {
       };
       await repository.saveDelivery(delivery);
     }
+    emitReportDeliverySummary({
+      correlationId,
+      reportId,
+      deliveryAttempt: input.deliveryAttempt,
+      sent: input.sent,
+      destinationHash: redactDestination(input.destination),
+      reason: input.sent ? null : deliveryErrorCode(input.error),
+      deployedRevision: deploymentMetadata(),
+    });
     return this.recordDailyReportDelivery(reportId, { sent: input.sent, error: input.error, correlationId });
   }
 
@@ -739,7 +751,7 @@ export class V2OperationsService {
   }
 
   private createReport(reportDate: string, statusBody: Record<string, unknown> = this.status().body): V2DailyResearchReport {
-    if (!isValidReportDate(reportDate)) throw new V2PersistenceError("malformed_persisted_record", "Daily report date is not a real YYYY-MM-DD calendar date");
+    if (!isAcceptableReportDate(reportDate)) throw new V2PersistenceError("malformed_persisted_record", "Daily report date is not an acceptable current or historical YYYY-MM-DD calendar date");
     return {
       reportId: createHash("sha256").update(reportDate).digest("hex").slice(0, 32),
       schemaVersion: "fincoach.v2.daily-research-report.1",
@@ -946,8 +958,22 @@ function isValidReportDate(value: string) {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function isAcceptableReportDate(value: string, now = new Date()) {
+  if (!isValidReportDate(value)) return false;
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return Date.parse(`${value}T00:00:00.000Z`) <= today.getTime() + 24 * 60 * 60_000;
+}
+
 function redactDestination(destination: string) {
   return createHash("sha256").update(destination).digest("hex").slice(0, 16);
+}
+
+function deliveryErrorCode(error: string | undefined) {
+  if (!error) return "delivery_failed";
+  if (/rate.?limit|429/i.test(error)) return "rate_limited";
+  if (/timeout/i.test(error)) return "timeout";
+  if (/not configured|missing/i.test(error)) return "not_configured";
+  return "delivery_failed";
 }
 
 async function countEvidence(repository: EvidenceProjectionRepository | undefined) {

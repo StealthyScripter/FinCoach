@@ -57,6 +57,7 @@ export type V2RuntimeConfig = {
   weeklyResearchSchedule: WeeklyResearchScheduleConfig;
   continuousMarketWeeklyPause: ContinuousMarketWeeklyPauseConfig;
   marketSnapshot: MarketSnapshotConfig;
+  researchDataMode: "provider" | "synthetic";
 };
 
 export type V2RuntimeConfigValidation = {
@@ -178,6 +179,7 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
       maxEvents: Math.min(50, int(env.FINCOACH_MARKET_SNAPSHOT_MAX_EVENTS, 12)),
       lookaheadHours: Math.min(168, int(env.FINCOACH_MARKET_SNAPSHOT_LOOKAHEAD_HOURS, 24)),
     },
+    researchDataMode: env.FINCOACH_V2_RESEARCH_DATA_MODE?.trim().toLowerCase() === "provider" || env.NODE_ENV === "production" ? "provider" : "synthetic",
   };
 
   const errors: string[] = [];
@@ -190,6 +192,7 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.researchEnabled && !config.runtimeEnabled) errors.push("Research cannot be enabled when V2 runtime is disabled.");
   if (config.pilotEnabled && !config.researchEnabled) errors.push("Pilot cannot be enabled when V2 research is disabled.");
   if (config.autostart && (!config.runtimeEnabled || !config.pilotEnabled || !config.researchEnabled)) errors.push("Autostart requires runtime, pilot, and research enabled.");
+  if (config.researchDataMode === "synthetic" && env.NODE_ENV === "production") errors.push("Synthetic V2 research data is prohibited in production.");
   if (config.symbols.length === 0) errors.push("At least one V2 symbol is required.");
   const universe = validateResearchUniverse(config.symbols);
   if (config.researchEnabled && universe.unsupported.length) {

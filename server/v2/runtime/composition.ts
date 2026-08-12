@@ -47,6 +47,8 @@ import { weeklyResearchWindowState, type WeeklyResearchWindowState } from "./wee
 import { marketSessionsService, type AggregateTradableWindow } from "../../marketSessionsService";
 import { eventLogService } from "../../eventLogService";
 import { structuredLogger } from "../../structuredLogger";
+import { deploymentMetadata } from "../../deploymentMetadata";
+import { emitResearchCycleObserverSummaries, emitSafetyStateSnapshot, type MarketDataCoverage } from "../../observerTelemetry";
 import { createDomainEvent, type DomainEvent } from "../contracts";
 import { OrchestrationV2EventTypes } from "../orchestration/events";
 import { marketSnapshotService } from "../../marketSnapshotService";
@@ -101,6 +103,7 @@ export class FinCoachV2Runtime {
         runtimeInstanceId: this.bootId,
         configuration: { ok: validation.ok, errors: validation.errors, warnings: validation.warnings, config: redactedConfig(validation.config) },
       });
+      this.logSafetyStateSnapshot("configuration_checked");
       if (validation.config.runtimeEnabled) throw new Error(`V2 runtime configuration failed: ${validation.errors.join("; ")}`);
       return this.status();
     }
@@ -108,6 +111,7 @@ export class FinCoachV2Runtime {
       this.state = "disabled";
       configureV2OperationsService(this.createOperationsService(null));
       structuredLogger.v2({ level: "info", event: "v2_runtime_disabled", message: "V2 runtime disabled by configuration", runtimeInstanceId: this.bootId, configuration: { config: redactedConfig(validation.config), warnings: validation.warnings } });
+      this.logSafetyStateSnapshot("runtime_disabled");
       return this.status();
     }
     structuredLogger.v2({ level: "info", event: "v2_runtime_initializing", message: "V2 runtime initialization started", runtimeInstanceId: this.bootId, configuration: { config: redactedConfig(validation.config), warnings: validation.warnings } });
@@ -118,6 +122,7 @@ export class FinCoachV2Runtime {
     configureV2OperationsService(this.createOperationsService(this.repositories));
     this.state = "initialized";
     structuredLogger.v2({ level: "info", event: "v2_runtime_initialized", message: "V2 runtime initialized", runtimeInstanceId: this.bootId });
+    this.logSafetyStateSnapshot("runtime_initialized");
     return this.status();
   }
 
@@ -355,6 +360,7 @@ export class FinCoachV2Runtime {
       weeklyNotificationDeliveryState: this.lastWeeklyTransition,
       marketSnapshotScheduler: marketSnapshotService.status(),
       liveExecutionBlocked: true,
+      deployedRevision: deploymentMetadata(this.env),
       liveMoneyExecution: this.config.liveExecutionEnabled ? "enabled_blocked_by_policy" : "blocked",
       demoBrokerExecution: this.config.demoBrokerExecutionEnabled ? "enabled_demo_only" : "disabled",
       paperExecution: this.config.paperExecutionEnabled ? "enabled" : "disabled",
@@ -424,6 +430,20 @@ export class FinCoachV2Runtime {
     }).catch(() => undefined);
   }
 
+  private logSafetyStateSnapshot(reason: string) {
+    emitSafetyStateSnapshot({
+      runtimeInstanceId: this.bootId,
+      reason,
+      executionMode: this.config.liveExecutionEnabled ? "live_blocked" : this.config.demoBrokerExecutionEnabled ? "demo_broker" : this.config.paperExecutionEnabled ? "paper" : "research_only",
+      killSwitchState: "inactive",
+      dailyLossBreakerState: this.config.maxPaperDailyLoss > 0 ? "configured" : "disabled",
+      brokerEnvironment: this.config.demoBrokerExecutionEnabled ? "demo" : "none",
+      riskGateStatus: this.configValidation.ok && !this.config.liveExecutionEnabled ? "passing" : "blocked",
+      liveExecutionBlocked: true,
+      deployedRevision: deploymentMetadata(this.env),
+    });
+  }
+
   private async runResearchPath(input: { cycleId: string; cycleEventId: string; correlationId: string; now: Date; guard: CycleLeaseGuard }) {
     const repositories = this.requireRepositories();
     const observations = new ObservationsV2Service();
@@ -456,6 +476,8 @@ export class FinCoachV2Runtime {
     const candidateCausationIds = new Map<string, string>();
     const strategyCandidatesByFamily = new Map<string, number>();
     const strategyCandidatesBySymbol = new Map<string, number>();
+    const marketDataCoverage = new Map<string, MarketDataCoverage>();
+    const cycleStartedAt = Date.now();
 
     const tradableResearchSymbols = marketSessionsService.instrumentSessions(this.config.symbols, input.now)
       .filter(session => session.status === "open" && resolveResearchInstrument(session.symbol))
@@ -465,15 +487,32 @@ export class FinCoachV2Runtime {
     const orderedResearchSymbols = prioritySymbols.length
       ? [...prioritySymbols, ...tradableResearchSymbols.filter((symbol) => !prioritySymbols.includes(symbol))]
       : tradableResearchSymbols;
-    const plans = buildObservationPlan(this.config, orderedResearchSymbols);
+    const theoreticalPlans = buildObservationPlan({ ...this.config, targetEvaluationsPerHour: Number.MAX_SAFE_INTEGER, maxObservationsPerCycle: Number.MAX_SAFE_INTEGER }, orderedResearchSymbols, input.cycleId);
+    const plans = buildObservationPlan(this.config, orderedResearchSymbols, input.cycleId);
+    const evaluatedSymbols = new Set<string>();
+    const perSymbolLastEvaluatedAt: Record<string, string> = {};
+    const deferReasons: Record<string, string> = {};
     for (const plan of plans) {
-      if (observationsCount >= this.config.maxObservationsPerCycle) break;
       const { symbol, timeframe, detector } = plan;
+      evaluatedSymbols.add(symbol);
+      perSymbolLastEvaluatedAt[symbol] = input.now.toISOString();
+      const coverage = ensureCoverage(marketDataCoverage, symbol, timeframe, activeFxSession?.sessionId ?? "unknown", "unknown");
+      coverage.requested += 1;
       evaluationsAttempted += 1;
       await guarded(input.guard, "detector_evaluation_attempted", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "attempted", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
       structuredLogger.v2({ level: "info", event: "detector_evaluation_started", message: "V2 detector evaluation started", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId, strategyFamily: detector.capability?.strategyFamily });
-      const candles = demoCandles(symbol, timeframe, input.now, 80);
+      let candles: NormalizedCandle[];
+      try {
+        candles = await researchCandles(this.config, this.env, symbol, timeframe, input.now, Math.max(80, detector.capability?.requiredCandles ?? 0));
+      } catch (error) {
+        blockers.push(blocker("warning", "research_market_data_unavailable", "observations", "Detector evaluation skipped because authoritative provider research data was unavailable.", symbol, "provider candles", "Restore the configured provider; do not substitute synthetic candles.", input.now));
+        deferReasons[symbol] = "market_data_unavailable";
+        await guarded(input.guard, "detector_evaluation_skipped", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "skipped", reason: "market_data_unavailable", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
+        structuredLogger.v2({ level: "warn", event: "detector_evaluation_skipped", message: "V2 detector evaluation skipped because authoritative market data is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId, reason: error instanceof Error ? error.message : String(error) });
+        continue;
+      }
       const lastCandle = candles.at(-1)!;
+      recordCoverageSuccess(marketDataCoverage, symbol, timeframe, activeFxSession?.sessionId ?? "unknown", lastCandle.source.provider, lastCandle.timestamp, input.now);
       if (!lastCandle.complete) {
         blockers.push(blocker("warning", "incomplete_candle_skipped", "observations", "Detector evaluation skipped because latest candle is incomplete.", false, true, "Wait for completed candle boundary.", input.now));
         await guarded(input.guard, "detector_evaluation_skipped", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "skipped", reason: "incomplete_candle", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
@@ -485,6 +524,10 @@ export class FinCoachV2Runtime {
       const sourceDataIds = candles.slice(-40).map(candle => `${candle.source.provider}:${candle.symbol}:${candle.timeframe}:${candle.timestamp}`);
       const sourceDataHash = stableHash(candles.slice(-40).map(candle => ({ timestamp: candle.timestamp, open: candle.open, high: candle.high, low: candle.low, close: candle.close, spread: candle.spread, complete: candle.complete })));
       const metrics = metricsFromCandles(candles);
+      const syntheticFixture = this.config.researchDataMode === "synthetic";
+      const compressionDetected = syntheticFixture || Number(metrics.compressionRatio ?? 1) <= 0.7;
+      const breakoutDetected = syntheticFixture || Number(metrics.breakoutDistance ?? 0) > Math.max(Number(metrics.atr ?? 0) * 0.1, 0.00001);
+      const liquiditySweepDetected = syntheticFixture || detectLiquiditySweep(candles);
       const obs = observations.create({
         symbol,
         timeframe,
@@ -504,8 +547,9 @@ export class FinCoachV2Runtime {
         correlationId: input.correlationId,
         causationId: input.cycleEventId,
         evidence: [
-          observationEvidence("chart", contextEventId, "volatility.compression", true, lastCandle.timestamp, { symbol, timeframe, candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), marketDataSource: lastCandle.source.provider, sourceDataIds, sourceDataHash, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, detectorParameters: { requiredCandles: detector.capability?.requiredCandles ?? 0 } }),
-          observationEvidence("chart", contextEventId, "structure.breakOfStructure", true, lastCandle.timestamp, { symbol, timeframe, candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), marketDataSource: lastCandle.source.provider, sourceDataIds, sourceDataHash, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, detectorParameters: { requiredCandles: detector.capability?.requiredCandles ?? 0 } }),
+          observationEvidence("chart", contextEventId, "volatility.compression", compressionDetected, lastCandle.timestamp, { symbol, timeframe, candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), marketDataSource: lastCandle.source.provider, sourceDataIds, sourceDataHash, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, detectorParameters: { requiredCandles: detector.capability?.requiredCandles ?? 0 } }),
+          observationEvidence("chart", contextEventId, "structure.breakOfStructure", breakoutDetected, lastCandle.timestamp, { symbol, timeframe, candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), marketDataSource: lastCandle.source.provider, sourceDataIds, sourceDataHash, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, detectorParameters: { requiredCandles: detector.capability?.requiredCandles ?? 0 } }),
+          observationEvidence("chart", contextEventId, "liquidity.sweep", liquiditySweepDetected, lastCandle.timestamp, { symbol, timeframe, candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), marketDataSource: lastCandle.source.provider, sourceDataIds, sourceDataHash, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, detectorParameters: { requiredCandles: detector.capability?.requiredCandles ?? 0 } }),
         ],
       });
       const compatible = obs.observations.filter(observation => observation.detectorId === detector.detectorId).slice(0, this.config.maxObservationsPerCycle - observationsCount);
@@ -530,6 +574,20 @@ export class FinCoachV2Runtime {
       await guarded(input.guard, "detector_evaluation_completed", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "completed", candleStart: lastCandle.timestamp, candleEnd: nextCandleBoundary(lastCandle.timestamp, timeframe).toISOString(), sourceDataHash, correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
       structuredLogger.v2({ level: "info", event: "detector_evaluation_completed", message: "V2 detector evaluation completed", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId });
     }
+    const deferredSymbols = orderedResearchSymbols.filter(symbol => !evaluatedSymbols.has(symbol));
+    for (const symbol of deferredSymbols) deferReasons[symbol] ??= "evaluation_budget_exhausted";
+    const planning = {
+      plannedEvaluations: theoreticalPlans.length,
+      executedEvaluations: evaluationsAttempted,
+      budgetExhausted: plans.length < theoreticalPlans.length,
+      eligibleSymbols: orderedResearchSymbols,
+      evaluatedSymbols: [...evaluatedSymbols],
+      deferredSymbols,
+      deferReasons,
+      perSymbolLastEvaluatedAt,
+      rolling24hSymbolCoverage: [...evaluatedSymbols].map(symbol => ({ symbol, evaluated: true, lastEvaluatedAt: perSymbolLastEvaluatedAt[symbol] ?? null })),
+      coverageStarvationWarning: deferredSymbols.length > 0 ? "Some eligible symbols were deferred; deterministic rotation provides bounded future coverage." : null,
+    };
 
     const durableGroups = await repositories.observations.eligibleSemanticGroups({
       lookbackHours: this.config.hypothesisLookbackHours,
@@ -736,9 +794,40 @@ export class FinCoachV2Runtime {
     lessonsCount = await createLessonsFromJournalEntries({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, limit: artifactLimit(this.config), guard: input.guard });
     lifecycleDecisionsCount = await createLifecycleDecisionsFromLessons({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
     const completedEvent = blockers.length ? "pipeline_cycle_completed_with_blockers" : "pipeline_cycle_completed";
-    structuredLogger.v2({ level: "info", event: completedEvent, message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, evaluationsAttempted, evaluationsCompleted, observations: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypotheses: hypothesesCount, hypothesesBlocked, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, forwardTests: forwardTestsCount, signals: signalsCount, evaluations: evaluationsCount, journalEntries: journalEntriesCount, lessons: lessonsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers });
+    structuredLogger.v2({ level: "info", event: completedEvent, message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, planning, evaluationsAttempted, evaluationsCompleted, observations: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypotheses: hypothesesCount, hypothesesBlocked, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, forwardTests: forwardTestsCount, signals: signalsCount, evaluations: evaluationsCount, journalEntries: journalEntriesCount, lessons: lessonsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers });
+    emitResearchCycleObserverSummaries({
+      cycleId: input.cycleId,
+      correlationId: input.correlationId,
+      runtimeInstanceId: this.bootId,
+      durationMs: Date.now() - cycleStartedAt,
+      result: blockers.length ? "completed_with_blockers" : "completed",
+      observationsAttempted: evaluationsAttempted,
+      observationsCreated: observationsCount,
+      observationsDeduplicated,
+      hypothesesEvaluated,
+      hypothesesCreated: hypothesesCount,
+      experimentsRun: experimentsCount,
+      backtestsCompleted: backtestsCount,
+      rankedCandidates: rankedCount,
+      forwardTestsStarted: forwardTestsCount,
+      blockers,
+      pipeline: {
+        ingested: evaluationsCompleted,
+        parsed: observationsCount + observationsDeduplicated,
+        candidates: hypothesesEvaluated,
+        riskApproved: rankedCount,
+        riskRejected: hypothesesBlocked,
+        executionRequested: 0,
+        executionSucceeded: 0,
+        executionFailed: 0,
+        reconciled: lifecycleDecisionsCount,
+        closed: 0,
+      },
+      marketDataCoverage: [...marketDataCoverage.values()],
+      deployedRevision: deploymentMetadata(this.env),
+    });
     v2TelemetryService.counter("v2_research_cycles_total", 1, { module: "orchestration", operation: "runOnce", resultClass: "success" });
-    return { status: blockers.length ? "completed_with_blockers" : "completed", evaluationsAttempted, evaluationsCompleted, observationsCreated: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypothesesCreated: hypothesesCount, hypothesesBlocked, strategiesCreated: strategiesCount, experimentsQueued: experimentsCount, backtestsCompleted: backtestsCount, verdictsCreated: verdictsCount, rankedCandidates: rankedCount, forwardTestsCreated: forwardTestsCount, signalsCreated: signalsCount, evaluationsCreated: evaluationsCount, journalEntriesCreated: journalEntriesCount, lessonsCreated: lessonsCount, lifecycleDecisionsCreated: lifecycleDecisionsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
+    return { status: blockers.length ? "completed_with_blockers" : "completed", planning, evaluationsAttempted, evaluationsCompleted, observationsCreated: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypothesesCreated: hypothesesCount, hypothesesBlocked, strategiesCreated: strategiesCount, experimentsQueued: experimentsCount, backtestsCompleted: backtestsCount, verdictsCreated: verdictsCount, rankedCandidates: rankedCount, forwardTestsCreated: forwardTestsCount, signalsCreated: signalsCount, evaluationsCreated: evaluationsCount, journalEntriesCreated: journalEntriesCount, lessonsCreated: lessonsCount, lifecycleDecisionsCreated: lifecycleDecisionsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
   }
 
   private startCadence(initialRequestedBy: string) {
@@ -1022,6 +1111,36 @@ function normalizeTimeframe(value: string): V2Timeframe {
   return ["1m", "5m", "15m", "30m", "1h", "3h", "4h", "6h", "1d", "1w", "1mo"].includes(normalized) ? normalized as V2Timeframe : "15m";
 }
 
+function ensureCoverage(map: Map<string, MarketDataCoverage>, symbol: string, timeframe: string, session: string, provider: string) {
+  const key = `${symbol}:${timeframe}`;
+  const existing = map.get(key);
+  if (existing) return existing;
+  const created: MarketDataCoverage = {
+    symbol,
+    timeframe,
+    session,
+    provider,
+    requested: 0,
+    successful: 0,
+    latestTimestamp: null,
+    freshnessSeconds: null,
+    stale: false,
+  };
+  map.set(key, created);
+  return created;
+}
+
+function recordCoverageSuccess(map: Map<string, MarketDataCoverage>, symbol: string, timeframe: string, session: string, provider: string, latestTimestamp: string, now: Date) {
+  const coverage = ensureCoverage(map, symbol, timeframe, session, provider);
+  coverage.session = session;
+  coverage.provider = provider;
+  coverage.successful += 1;
+  if (!coverage.latestTimestamp || latestTimestamp > coverage.latestTimestamp) coverage.latestTimestamp = latestTimestamp;
+  const freshnessSeconds = Math.max(0, Math.floor((now.getTime() - Date.parse(latestTimestamp)) / 1000));
+  coverage.freshnessSeconds = coverage.freshnessSeconds === null ? freshnessSeconds : Math.min(coverage.freshnessSeconds, freshnessSeconds);
+  coverage.stale = freshnessSeconds > 24 * 60 * 60;
+}
+
 function demoCandles(symbol: string, timeframe: V2Timeframe, now: Date, count: number): NormalizedCandle[] {
   const step = timeframeMs(timeframe);
   const seed = Number.parseInt(createHash("sha256").update(symbol).digest("hex").slice(0, 6), 16) / 0xffffff;
@@ -1036,23 +1155,53 @@ function demoCandles(symbol: string, timeframe: V2Timeframe, now: Date, count: n
   });
 }
 
+async function researchCandles(config: V2RuntimeConfig, env: NodeJS.ProcessEnv, symbol: string, timeframe: V2Timeframe, now: Date, count: number): Promise<NormalizedCandle[]> {
+  if (config.researchDataMode === "synthetic") return demoCandles(symbol, timeframe, now, count);
+  const token = env["OANDA_API_TOKEN"]?.trim();
+  if (!token) throw new Error("OANDA_API_TOKEN is not configured");
+  const baseUrl = (env["OANDA_BASE_URL"]?.trim() || `https://api-fx${env["OANDA_ENV"] === "live" ? "trade" : "practice"}.oanda.com`).replace(/\/$/, "");
+  const granularity = ({ "1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30", "1h": "H1", "3h": "H3", "4h": "H4", "6h": "H6", "1d": "D", "1w": "W", "1mo": "M" } as Record<V2Timeframe, string>)[timeframe];
+  const response = await fetch(`${baseUrl}/v3/instruments/${encodeURIComponent(symbol)}/candles?count=${Math.min(count, 5000)}&granularity=${granularity}&price=M`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+  if (!response.ok) throw new Error(`OANDA historical candles failed with HTTP ${response.status}`);
+  const payload = await response.json() as { candles?: Array<{ time: string; complete?: boolean; mid?: { o: string; h: string; l: string; c: string }; volume?: number }> };
+  const candles = (payload.candles ?? []).map(candle => {
+    if (!candle.mid) throw new Error("OANDA candle missing mid prices");
+    return { symbol, timeframe, timestamp: new Date(candle.time).toISOString(), open: Number(candle.mid.o), high: Number(candle.mid.h), low: Number(candle.mid.l), close: Number(candle.mid.c), spread: null, volume: candle.volume ?? null, tickVolume: candle.volume ?? null, complete: candle.complete !== false, source: { provider: "oanda-practice-historical", providerSymbol: symbol, adapterVersion: "v1" }, corporateAction: null };
+  });
+  if (candles.length < count || !candles.every(candle => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite))) throw new Error("OANDA returned insufficient or invalid candles");
+  return candles;
+}
+
 export function configuredObservationDetectors() {
   return [compressionDetector, breakoutDetector, liquiditySweepDetector].filter(detector => detector.capability?.enabled !== false);
 }
 
-export function buildObservationPlan(config: V2RuntimeConfig, symbols = config.symbols) {
+export function buildObservationPlan(config: V2RuntimeConfig, symbols = config.symbols, rotationKey = "static") {
   const detectors = configuredObservationDetectors();
-  const plans = [];
-  for (const symbol of symbols) {
+  const perSymbol = symbols.map(symbol => ({ symbol, plans: [] as Array<{ symbol: string; timeframe: V2Timeframe; detector: typeof detectors[number] }> }));
+  for (const entry of perSymbol) {
+    const symbol = entry.symbol;
     if (!resolveResearchInstrument(symbol)) continue;
     for (const timeframe of config.timeframes.map(normalizeTimeframe)) {
       for (const detector of detectors) {
         if (!detector.capability?.supportedTimeframes.includes(timeframe)) continue;
-        plans.push({ symbol, timeframe, detector });
+        entry.plans.push({ symbol, timeframe, detector });
       }
     }
   }
-  return plans.slice(0, Math.max(config.targetEvaluationsPerHour, config.maxObservationsPerCycle));
+  const budget = Math.max(config.targetEvaluationsPerHour, config.maxObservationsPerCycle);
+  const rotation = perSymbol.length ? Number.parseInt(createHash("sha256").update(rotationKey).digest("hex").slice(0, 8), 16) % perSymbol.length : 0;
+  const ordered = perSymbol.slice(rotation).concat(perSymbol.slice(0, rotation));
+  const plans: Array<{ symbol: string; timeframe: V2Timeframe; detector: typeof detectors[number] }> = [];
+  let depth = 0;
+  while (plans.length < budget && ordered.some(entry => entry.plans[depth])) {
+    for (const entry of ordered) {
+      const plan = entry.plans[depth];
+      if (plan && plans.length < budget) plans.push(plan);
+    }
+    depth += 1;
+  }
+  return plans;
 }
 
 function addSemanticCandidate(candidates: Map<string, ObservationSemanticGroup>, observation: MarketObservation) {
@@ -1643,6 +1792,18 @@ function metricsFromCandles(candles: NormalizedCandle[]) {
     returnN: Number((last.close / candles[0].close - 1).toFixed(6)),
     sampleSize: candles.length,
   };
+}
+
+function detectLiquiditySweep(candles: NormalizedCandle[]) {
+  if (candles.length < 50) return false;
+  const last = candles.at(-1)!;
+  const prior = candles.slice(-21, -1);
+  const priorHigh = Math.max(...prior.map(candle => candle.high));
+  const priorLow = Math.min(...prior.map(candle => candle.low));
+  const range = Math.max(priorHigh - priorLow, 0.000001);
+  const sweptHigh = last.high > priorHigh && last.close < priorHigh;
+  const sweptLow = last.low < priorLow && last.close > priorLow;
+  return (sweptHigh || sweptLow) && Math.abs(last.close - (sweptHigh ? priorHigh : priorLow)) <= range * 0.35;
 }
 
 function nextCandleBoundary(timestamp: string, timeframe: V2Timeframe) {
