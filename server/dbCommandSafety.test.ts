@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import { spawnSync } from "child_process";
 
 const baseEnv = { ...process.env };
+delete baseEnv.DATABASE_URL;
+
+const drizzleConfigMissingUrl = spawnSync("npx", ["tsx", "-e", "import('./drizzle.config.ts').then(() => process.exit(0)).catch((error) => { console.error(error.message); process.exit(1); })"], {
+  encoding: "utf8",
+  env: baseEnv,
+});
+assert.notEqual(drizzleConfigMissingUrl.status, 0);
+assert.match(`${drizzleConfigMissingUrl.stderr}\n${drizzleConfigMissingUrl.stdout}`, /DATABASE_URL is required/);
+assert.doesNotMatch(`${drizzleConfigMissingUrl.stderr}\n${drizzleConfigMissingUrl.stdout}`, /postgres:\/\/user:password@localhost:5432\/marketpilot/);
 
 const pushDefault = spawnSync("npm", ["run", "db:push"], { encoding: "utf8", env: baseEnv });
 assert.notEqual(pushDefault.status, 0);
