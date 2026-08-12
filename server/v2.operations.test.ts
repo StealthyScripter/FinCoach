@@ -37,10 +37,18 @@ const runtimeAwareOperations = new V2OperationsService(undefined, {}, () => ({
     liveExecutionBlocked: true,
     blockers: ["cycle_timed_out", "daily_limit_reached", "lease_held", "lease_lost", "stale_cycle_recovered"],
   },
+  telegramTransport: {
+    reachabilityState: "degraded",
+    consecutivePollFailures: 2,
+    lastPollFailureAt: "2026-08-11T20:45:00.000Z",
+    lastPollError: "Telegram getUpdates failed with HTTP 502",
+  },
 }));
 const runtimeAwareStatus = runtimeAwareOperations.status({ correlationId: "00000000-0000-4000-8000-000000000025" });
 assert.equal((runtimeAwareStatus.body.runtimeConfiguration as Record<string, unknown>).liveExecutionBlocked, true);
 assert.deepEqual((runtimeAwareStatus.body.orchestrationSafety as Record<string, unknown>).blockers, ["cycle_timed_out", "daily_limit_reached", "lease_held", "lease_lost", "stale_cycle_recovered"]);
+assert.equal((runtimeAwareStatus.body.moduleHealth as Record<string, unknown>).telegram, "degraded");
+assert.equal((runtimeAwareStatus.body.telegramTransport as Record<string, unknown>).reachabilityState, "degraded");
 assert.equal(JSON.stringify(runtimeAwareStatus.body).includes("worker-"), false);
 assert.equal(JSON.stringify(runtimeAwareStatus.body).includes("postgres://"), false);
 

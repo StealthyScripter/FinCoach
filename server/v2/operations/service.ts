@@ -12,6 +12,7 @@ import { validateResearchUniverse } from "../researchUniverse";
 import { strategyTemplateInventory } from "../strategyTemplates";
 import { deploymentMetadata } from "../../deploymentMetadata";
 import { emitReportDeliverySummary } from "../../observerTelemetry";
+import { telegramUpdateReceiver } from "../../telegram/updateReceiver";
 
 type ProjectionRepositories = {
   operations?: DurableOperationsProjectionRepository | InMemoryV2OperationsRepository;
@@ -102,13 +103,15 @@ export class V2OperationsService {
     const correlationId = query.correlationId ?? randomUUID();
     const orchestration = orchestrationV2Service.health();
     const latestReport = this.syncOperationsRepository()?.latestReport?.() ?? null;
+    const runtimeStatus = { telegramTransport: telegramUpdateReceiver.health(), ...(this.runtimeStatusProvider?.() ?? {}) };
+    const telegramHealth = telegramModuleHealth(runtimeStatus);
     const body = {
       schemaVersion: "fincoach.v2.operations-status.1",
       correlationId,
       moduleHealth: {
         orchestration: orchestration.status,
         operations: latestReport ? "healthy" : "degraded",
-        telegram: "healthy",
+        telegram: telegramHealth,
         api: "healthy",
       },
       moduleAvailability: defaultAvailability(this.moduleAvailabilityDetails),
@@ -152,7 +155,7 @@ export class V2OperationsService {
       configurationState: "incomplete",
       economicEvidenceState: "not_configured",
       deployedRevision: deploymentMetadata(),
-      ...(this.runtimeStatusProvider?.() ?? {}),
+      ...runtimeStatus,
     };
     return { status: 200, body, events: [this.event(V2OperationsEventTypes.V2OperationsResponseCreated, correlationId, { kind: "status" })] };
   }
@@ -950,6 +953,15 @@ function applyPipelineAvailability(moduleAvailability: Record<string, V2Operatio
 
 function operatorAvailabilityState(state: string) {
   return state === "available_empty" ? "configured_empty" : state;
+}
+
+function telegramModuleHealth(runtimeStatus: Record<string, unknown>) {
+  const transport = runtimeStatus.telegramTransport as Record<string, unknown> | undefined;
+  const reachability = String(transport?.reachabilityState ?? runtimeStatus.telegramReachabilityState ?? "unknown");
+  if (reachability === "available") return "healthy";
+  if (reachability === "degraded") return "degraded";
+  if (reachability === "unavailable") return "unavailable";
+  return "unknown";
 }
 
 function isValidReportDate(value: string) {
