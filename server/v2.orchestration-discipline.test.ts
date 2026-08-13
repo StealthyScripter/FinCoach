@@ -88,16 +88,21 @@ async function testRuntimeAdmissionBeforeLease() {
 }
 
 async function testRuntimeTimeoutCancelsCycle() {
+  const saveGate = deferred<void>();
   const result = await runRuntimeWithBlockedObservation({
     cycleTimeoutMs: 30,
     leaseTtlMs: 200,
     leaseRenewIntervalMs: 50,
-    saveDelayMs: 120,
+    saveGate,
     renewLease: async lease => ({ ...lease, acquiredAt: Date.now(), expiresAt: Date.now() + 200 }),
   });
   assert.equal(result.completed, false);
   assert.equal(result.reason, "cycle_timeout");
-  assert.ok(result.durationMs < 110, `timeout should cancel promptly, got ${result.durationMs}ms`);
+  assert.equal(result.saveStarted, true);
+  assert.equal(result.saveResolvedBeforeReturn, false, "timeout should cancel the cycle while the blocked write is still pending");
+  assert.deepEqual(result.statuses, ["running", "failed"]);
+  saveGate.resolve();
+  await result.saveSettled;
 }
 
 async function testRuntimeLeaseLossCancelsCycle() {
@@ -263,7 +268,8 @@ async function runRuntimeWithBlockedObservation(input: {
   cycleTimeoutMs: number;
   leaseTtlMs: number;
   leaseRenewIntervalMs: number;
-  saveDelayMs: number;
+  saveDelayMs?: number;
+  saveGate?: Deferred<void>;
   renewLease: (lease: { leaseName: string; workerId: string; fencingToken: number }) => Promise<unknown>;
 }) {
   const runtime = createFinCoachV2Runtime({
@@ -284,13 +290,23 @@ async function runRuntimeWithBlockedObservation(input: {
     FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "false",
   } as NodeJS.ProcessEnv);
   const lease = { leaseName: "fincoach-v2-runtime", workerId: "test-worker", fencingToken: 1 };
+  const statuses: string[] = [];
+  let saveStarted = false;
+  let saveResolved = false;
+  let resolveSaveSettled!: () => void;
+  const saveSettled = new Promise<void>(resolve => {
+    resolveSaveSettled = resolve;
+  });
   (runtime as unknown as { repositories: unknown }).repositories = {
     orchestration: {
       admitCycle: async ({ cycle, maxCyclesPerDay }: { cycle: unknown; maxCyclesPerDay: number }) => ({ admitted: true, cycle, admittedCount: 1, limit: maxCyclesPerDay, admissionDate: "2026-07-31" }),
       acquireLease: async () => lease,
       renewLease: async () => input.renewLease(lease),
       verifyLease: async () => true,
-      updateCycleStatus: async (record: unknown) => record,
+      updateCycleStatus: async (record: { status?: string }) => {
+        if (record.status) statuses.push(record.status);
+        return record;
+      },
       checkpoint: async (record: unknown) => record,
       saveRetry: async (record: unknown) => record,
       releaseLease: async () => true,
@@ -299,8 +315,15 @@ async function runRuntimeWithBlockedObservation(input: {
     runtime: { health: async () => undefined, recordBoot: async () => undefined },
     observations: {
       save: async (record: unknown) => {
-        await sleep(input.saveDelayMs);
-        return { inserted: true, record };
+        saveStarted = true;
+        try {
+          if (input.saveGate) await input.saveGate.promise;
+          else await sleep(input.saveDelayMs ?? 0);
+          saveResolved = true;
+          return { inserted: true, record };
+        } finally {
+          resolveSaveSettled();
+        }
       },
       eligibleForHypothesis: async () => [],
       eligibleSemanticGroups: async () => [],
@@ -322,15 +345,36 @@ async function runRuntimeWithBlockedObservation(input: {
     evolution: {},
     evidence: {},
   };
+  const keepAlive = input.saveGate ? setInterval(() => undefined, 1_000) : null;
   const started = Date.now();
-  const result = await runtime.runOnce({ requestedBy: "lease-test" });
-  const durationMs = Date.now() - started;
-  await sleep(input.saveDelayMs + 10);
-  return { ...result, durationMs };
+  try {
+    const result = await runtime.runOnce({ requestedBy: "lease-test" });
+    const durationMs = Date.now() - started;
+    if (!input.saveGate) await sleep((input.saveDelayMs ?? 0) + 10);
+    return { ...result, durationMs, saveStarted, saveResolvedBeforeReturn: saveResolved, saveSettled, statuses };
+  } finally {
+    if (keepAlive) clearInterval(keepAlive);
+  }
 }
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>["resolve"];
+  let reject!: Deferred<T>["reject"];
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject };
 }
 
 function cycle(cycleId: string, requestedBy: string, createdAt: string, status: "requested" | "running" | "completed" | "failed" = "requested") {
