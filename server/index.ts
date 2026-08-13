@@ -5,14 +5,15 @@ import { createServer } from "http";
 import { createApiRateLimiter } from "./rateLimit";
 import { metricsService } from "./metricsService";
 import { strategyEvidenceStore } from "./execution/strategyEvidenceStore";
-import { startDemoRunScheduler } from "./demoRunScheduler";
+import { startDemoRunScheduler, stopDemoRunScheduler } from "./demoRunScheduler";
 import { demoOnlyPolicyService } from "./execution/demoOnlyPolicy";
-import { startTelegramOperations } from "./telegram";
+import { startTelegramOperations, stopTelegramOperations, telegramLifecycleMonitor } from "./telegram";
 import { configureWeeklyTransitionNotifier, getFinCoachV2Runtime } from "./v2/runtime/composition";
 import { weeklyMarketNotificationService } from "./telegram/weeklyMarketNotificationService";
 import { structuredLogger } from "./structuredLogger";
 import { deploymentMetadata } from "./deploymentMetadata";
-import { publishTelegramLifecycleAlert } from "./telegramNotificationBus";
+import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
+import { getStorageHealth } from "./storageMode";
 
 const app = express();
 const httpServer = createServer(app);
@@ -96,22 +97,40 @@ app.use((req, res, next) => {
   const v2Runtime = getFinCoachV2Runtime();
   await v2Runtime.initialize();
   await registerRoutes(httpServer, app);
-  await v2Runtime.start();
+  const runtimeStartStatus = await v2Runtime.start();
   startDemoRunScheduler();
-  void startTelegramOperations().then((result) => {
-    structuredLogger.telegram({ level: result.started ? "info" : "warn", event: result.started ? "telegram_operations_started" : "telegram_operations_not_started", message: result.started ? "Telegram operations started" : "Telegram operations not started", reason: "reason" in result ? result.reason : undefined, validation: result.validation });
-  }).catch((error) => {
-    structuredLogger.telegram({ level: "error", event: "telegram_operations_start_failed", message: "Telegram operations failed to start", error });
-  });
-  const shutdown = (signal: string) => {
+  let shuttingDown = false;
+  const shutdown = (signal: "SIGTERM" | "SIGINT" | "graceful_shutdown") => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     structuredLogger.audit({ level: "info", event: "graceful_shutdown_started", message: "Process graceful shutdown started", signal });
-    void v2Runtime.stop(`process_${signal.toLowerCase()}`).finally(() => {
+    void (async () => {
+      const runtimeBeforeStop = v2Runtime.status();
+      await closeHttpServer(httpServer, 2_000);
+      stopDemoRunScheduler();
+      await v2Runtime.stop(`process_${signal.toLowerCase()}`).catch((error) => {
+        structuredLogger.v2Error({ level: "error", event: "v2_runtime_shutdown_failed", message: "V2 runtime shutdown failed", error });
+      });
+      await telegramLifecycleMonitor.stop(signal, {
+        runtimeState: String(runtimeBeforeStop.state ?? "unknown"),
+        lastCompletedResearchCycle: runtimeBeforeStop.lastRunAt ?? null,
+        bootId: runtimeBeforeStop.bootId,
+        timeoutMs: 3_000,
+      });
+      await stopTelegramOperations().catch((error) => {
+        structuredLogger.telegram({ level: "error", event: "telegram_operations_stop_failed", message: "Telegram operations failed to stop cleanly", error });
+      });
       structuredLogger.audit({ level: "info", event: "graceful_shutdown_completed", message: "Process graceful shutdown completed", signal });
       process.exit(0);
+    })().catch((error) => {
+      structuredLogger.audit({ level: "fatal", event: "graceful_shutdown_failed", message: "Process graceful shutdown failed", signal, error });
+      process.exit(1);
     });
   };
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
-  process.once("SIGINT", () => shutdown("SIGINT"));
+  if (!isAutomatedTestProcess()) {
+    process.once("SIGTERM", () => shutdown("SIGTERM"));
+    process.once("SIGINT", () => shutdown("SIGINT"));
+  }
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -146,16 +165,48 @@ app.use((req, res, next) => {
     () => {
       log(`serving on port ${port}`);
       structuredLogger.audit({ level: "info", event: "application_listening", message: "FinCoach server listening", port });
-      void publishTelegramLifecycleAlert({
-        id: `application-online-${process.pid}-${Date.now()}`,
-        source: "system",
-        eventType: "system.application_online",
-        severity: "info",
-        title: "FinCoach application online",
-        message: `Server is listening on port ${port}.`,
-        metadata: { port, deployedRevision: deploymentMetadata() },
-        createdAt: new Date().toISOString(),
+      void (async () => {
+        const telegramStart = await startTelegramOperations();
+        structuredLogger.telegram({ level: telegramStart.started ? "info" : "warn", event: telegramStart.started ? "telegram_operations_started" : "telegram_operations_not_started", message: telegramStart.started ? "Telegram operations started" : "Telegram operations not started", reason: "reason" in telegramStart ? telegramStart.reason : undefined, validation: telegramStart.validation });
+        if (telegramStart.started && telegramStart.validation.ok && !isAutomatedTestProcess()) {
+          await telegramLifecycleMonitor.start();
+          const runtimeStatus = v2Runtime.status();
+          const researchStatus = strategyResearchSchedulerService.snapshot();
+          await telegramLifecycleMonitor.notifyStartup({
+            runtimeState: String(runtimeStatus.state ?? runtimeStartStatus.state ?? "unknown"),
+            researchSchedulerState: researchStatus.health.status,
+            postgresqlHealth: getStorageHealth().status,
+            telegramState: "connected",
+            bootId: runtimeStatus.bootId,
+          });
+        }
+      })().catch((error) => {
+        structuredLogger.telegram({ level: "error", event: "telegram_operations_start_failed", message: "Telegram operations failed to start", error });
       });
     },
   );
 })();
+
+function isAutomatedTestProcess(env: NodeJS.ProcessEnv = process.env) {
+  const argv = process.argv.join(" ");
+  return env.NODE_ENV === "test" || argv.includes(".test.") || argv.includes("tsx server/");
+}
+
+async function closeHttpServer(server: typeof httpServer, timeoutMs: number) {
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
+    }, timeoutMs);
+    server.close((error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) structuredLogger.application({ level: "error", module: "http", event: "http_server_close_failed", message: "HTTP server close failed", error });
+      resolve();
+    });
+  });
+}

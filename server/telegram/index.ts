@@ -30,11 +30,17 @@ export async function startTelegramOperations() {
   if (!config.notificationsEnabled || !config.botToken || !config.chatId) {
     return { started: false, validation };
   }
-  await telegramLifecycleMonitor.start();
   const scheduler = telegramScheduler.start();
   const marketSnapshotScheduler = marketSnapshotService.start();
   const updateReceiver = telegramUpdateReceiver.start();
   return { started: true, validation, scheduler, marketSnapshotScheduler, updateReceiver };
+}
+
+export async function stopTelegramOperations() {
+  telegramScheduler.stop();
+  marketSnapshotService.stop();
+  await telegramUpdateReceiver.stop();
+  await telegramRepository.close();
 }
 
 export function registerTelegramOperationsRoutes(app: Express) {

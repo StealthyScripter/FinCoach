@@ -7,6 +7,7 @@ import { loadTelegramConfig, telegramClient, validateTelegramConfig } from "./te
 import { telegramRepository } from "./repository";
 import { redactChatId } from "./formatter";
 import { telegramUpdateReceiver } from "./updateReceiver";
+import { telegramLifecycleMonitor } from "./lifecycleMonitor";
 
 const processStartedAt = Date.now();
 
@@ -55,6 +56,7 @@ export async function buildTelegramStatus() {
       },
       repository: telegramRepository.health(),
     },
+    telegramLifecycle: telegramLifecycleMonitor.status(),
   };
 }
 

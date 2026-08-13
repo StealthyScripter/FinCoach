@@ -11,6 +11,7 @@ import { TelegramTransport } from "./telegram/transport";
 import { TelegramUpdateReceiver } from "./telegram/updateReceiver";
 import { TelegramScheduler } from "./telegram/scheduler";
 import { TelegramLifecycleMonitor, normalizeProcessFailure } from "./telegram/lifecycleMonitor";
+import { TelegramNotificationService } from "./telegram/notificationService";
 import { telegramMetrics } from "./telegram/metrics";
 import type { TelegramSchedulerRunRecord, TelegramSummaryRecord } from "./telegram/contracts";
 
@@ -101,6 +102,25 @@ function fakeSummaryNotifications(deliveryIds: string[]) {
       const id = `delivery-${deliveryIds.length + 1}`;
       deliveryIds.push(id);
       return { sent: true as const, result: { delivery: { id } } };
+    },
+  };
+}
+
+function fakeLifecycleNotifications(input: { sent?: boolean; delayMs?: number; throwError?: Error; texts?: string[]; metadata?: Record<string, unknown>[] } = {}) {
+  return {
+    sendLifecycleImmediate: async (text: string, metadata: Record<string, unknown> = {}) => {
+      input.texts?.push(text);
+      input.metadata?.push(metadata);
+      if (input.delayMs) await new Promise((resolve) => setTimeout(resolve, input.delayMs));
+      if (input.throwError) throw input.throwError;
+      return input.sent === false
+        ? { sent: false as const, reason: "fake delivery failed" }
+        : { sent: true as const, result: { delivery: { id: `delivery-${input.texts?.length ?? 1}` } } };
+    },
+    sendOperations: async (_kind: string, text: string, metadata: Record<string, unknown> = {}) => {
+      input.texts?.push(text);
+      input.metadata?.push(metadata);
+      return { sent: true as const, result: { delivery: { id: `delivery-${input.texts?.length ?? 1}` } } };
     },
   };
 }
@@ -582,6 +602,125 @@ await withTelegramScheduleEnv({
   assert.ok(states.some((state) => state.key === "forex-london" && state.open));
   const holidayStates = monitor.sessionStates(new Date("2026-12-25T15:00:00.000Z"));
   assert.ok(holidayStates.some((state) => state.key === "us-equity-regular" && !state.open));
+}
+
+{
+  const repo = new InMemoryTelegramRepository();
+  const texts: string[] = [];
+  const metadata: Record<string, unknown>[] = [];
+  const monitor = new TelegramLifecycleMonitor(repo, fakeLifecycleNotifications({ texts, metadata }) as never, { NODE_ENV: "production", FINCOACH_PRESENTATION_TIMEZONE: "America/New_York" } as NodeJS.ProcessEnv, "boot-startup-once");
+  assert.equal(monitor.status().startupNotification.status, "idle");
+  await monitor.start();
+  const first = await monitor.notifyStartup({
+    runtimeState: "running",
+    researchSchedulerState: "healthy",
+    postgresqlHealth: "healthy",
+    bootId: "runtime-boot-1",
+  });
+  const second = await monitor.notifyStartup({
+    runtimeState: "running",
+    researchSchedulerState: "healthy",
+    postgresqlHealth: "healthy",
+    bootId: "runtime-boot-1",
+  });
+  assert.equal(first.sent, true);
+  assert.equal(second.sent, false);
+  assert.equal(texts.length, 1);
+  assert.match(texts[0], /🟢 FinCoach Online/);
+  assert.match(texts[0], /Environment: production/);
+  assert.match(texts[0], /Telegram: connected/);
+  assert.match(texts[0], /Live execution: blocked/);
+  assert.equal(metadata[0].bypassDigest, true);
+  assert.equal(metadata[0].immediate, true);
+  assert.equal(metadata[0].liveExecutionBlocked, true);
+  assert.equal(monitor.status().startupNotification.status, "delivered");
+}
+
+{
+  const texts: string[] = [];
+  const monitor = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), fakeLifecycleNotifications({ texts }) as never, { NODE_ENV: "production" } as NodeJS.ProcessEnv, "boot-sigterm");
+  await monitor.start();
+  const first = await monitor.stop("SIGTERM", { runtimeState: "running", lastCompletedResearchCycle: "cycle-1", bootId: "runtime-boot-term" });
+  const second = await monitor.stop("SIGTERM", { runtimeState: "running", lastCompletedResearchCycle: "cycle-1", bootId: "runtime-boot-term" });
+  assert.equal(first.sent, true);
+  assert.equal(second.sent, false);
+  assert.equal(texts.length, 1);
+  assert.match(texts[0], /🔴 FinCoach Offline/);
+  assert.match(texts[0], /Reason: SIGTERM/);
+  assert.match(texts[0], /Last completed research cycle: cycle-1/);
+  assert.match(texts[0], /Live execution: blocked/);
+}
+
+{
+  const texts: string[] = [];
+  const monitor = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), fakeLifecycleNotifications({ texts }) as never, { NODE_ENV: "production" } as NodeJS.ProcessEnv, "boot-sigint");
+  await monitor.start();
+  const result = await monitor.stop("SIGINT", { runtimeState: "idle", lastCompletedResearchCycle: null, bootId: "runtime-boot-int" });
+  assert.equal(result.sent, true);
+  assert.equal(texts.length, 1);
+  assert.match(texts[0], /Reason: SIGINT/);
+  assert.match(texts[0], /Last completed research cycle: unavailable/);
+}
+
+{
+  const texts: string[] = [];
+  const oldProcess = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), fakeLifecycleNotifications({ texts }) as never, { NODE_ENV: "production" } as NodeJS.ProcessEnv, "old-boot");
+  await oldProcess.start();
+  await oldProcess.stop("SIGTERM", { runtimeState: "running", lastCompletedResearchCycle: "old-cycle", bootId: "old-runtime" });
+  const newProcess = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), fakeLifecycleNotifications({ texts }) as never, { NODE_ENV: "production" } as NodeJS.ProcessEnv, "new-boot");
+  await newProcess.start();
+  await newProcess.notifyStartup({ runtimeState: "running", researchSchedulerState: "healthy", postgresqlHealth: "healthy", bootId: "new-runtime" });
+  assert.equal(texts.length, 2);
+  assert.match(texts[0], /FinCoach Offline/);
+  assert.match(texts[1], /FinCoach Online/);
+}
+
+{
+  const texts: string[] = [];
+  const monitor = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), fakeLifecycleNotifications({ texts, delayMs: 100 }) as never, { NODE_ENV: "production" } as NodeJS.ProcessEnv, "timeout-boot");
+  await monitor.start();
+  const started = Date.now();
+  const result = await monitor.stop("SIGTERM", { runtimeState: "stopping", timeoutMs: 10 });
+  assert.equal(result.sent, false);
+  assert.ok(Date.now() - started < 90);
+  assert.equal(monitor.status().shutdownNotification.status, "failed");
+  assert.match(monitor.status().shutdownNotification.error ?? "", /timed out/);
+}
+
+{
+  const texts: string[] = [];
+  const monitor = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), fakeLifecycleNotifications({ texts, throwError: new Error("Telegram API unavailable") }) as never, { NODE_ENV: "production" } as NodeJS.ProcessEnv, "failure-boot");
+  await monitor.start();
+  const result = await monitor.stop("SIGTERM", { runtimeState: "stopping", timeoutMs: 50 });
+  assert.equal(result.sent, false);
+  assert.equal(monitor.status().shutdownNotification.status, "failed");
+  assert.match(monitor.status().shutdownNotification.error ?? "", /Telegram API unavailable/);
+}
+
+{
+  const repo = new InMemoryTelegramRepository();
+  let interceptedFetches = 0;
+  const client = new TelegramClient(loadTelegramConfig(baseEnv), repo, async (url) => {
+    interceptedFetches += 1;
+    assert.ok(String(url).includes("api.telegram.org"));
+    return jsonResponse({ ok: true, result: { message_id: 1 } });
+  });
+  const notifications = new TelegramNotificationService(client, baseEnv);
+  const result = await notifications.sendLifecycleImmediate("test lifecycle", { bypassDigest: true });
+  assert.equal(result.sent, true);
+  assert.equal(interceptedFetches, 1);
+  const delivery = (await repo.listDeliveries(1))[0];
+  assert.equal(delivery.kind, "lifecycle");
+  assert.equal(delivery.metadata.bypassDigest, true);
+  assert.equal(delivery.metadata.liveExecutionBlocked, true);
+}
+
+{
+  const texts: string[] = [];
+  const monitor = new TelegramLifecycleMonitor(new InMemoryTelegramRepository(), fakeLifecycleNotifications({ texts }) as never, { NODE_ENV: "production" } as NodeJS.ProcessEnv, "import-only-boot");
+  assert.equal(texts.length, 0);
+  assert.equal(monitor.status().startupNotification.status, "idle");
+  assert.equal(monitor.status().shutdownNotification.status, "idle");
 }
 
 console.log("telegramOperations tests passed");

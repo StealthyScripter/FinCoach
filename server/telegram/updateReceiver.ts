@@ -29,7 +29,6 @@ export class TelegramUpdateReceiver {
   private loop: Promise<void> | null = null;
   private inFlight: AbortController | null = null;
   private seenUpdateIds = new Set<number>();
-  private shutdownRegistered = false;
   private lastPollSuccessAt: string | null = null;
   private lastPollFailureAt: string | null = null;
   private consecutivePollFailures = 0;
@@ -58,7 +57,6 @@ export class TelegramUpdateReceiver {
       console.warn(`Telegram update receiver stopped unexpectedly: ${error instanceof Error ? error.message : String(error)}`);
       structuredLogger.telegram({ level: "error", event: "telegram_update_receiver_stopped_unexpectedly", message: "Telegram update receiver stopped unexpectedly", error });
     });
-    this.registerShutdownHandlers();
     return this;
   }
 
@@ -177,15 +175,6 @@ export class TelegramUpdateReceiver {
     }
   }
 
-  private registerShutdownHandlers() {
-    if (this.shutdownRegistered) return;
-    this.shutdownRegistered = true;
-    for (const signal of ["SIGTERM", "SIGINT"] as const) {
-      process.once(signal, () => {
-        void this.stop();
-      });
-    }
-  }
 }
 
 function normalizeUpdate(update: TelegramApiUpdate): TelegramNormalizedUpdate | null {

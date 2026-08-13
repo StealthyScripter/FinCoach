@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import type { FinCoachSignal, TelegramEnvironmentConfig, TelegramSignalLifecycleUpdate } from "./contracts";
+import { formatPresentation, presentationTimezone } from "../timeService";
 
 const SENSITIVE_KEYS = /(token|secret|password|database|api[_-]?key|account[_-]?id|credential|authorization)/i;
 
@@ -57,6 +58,54 @@ export function formatGracefulStop(input: { reason: string; uptime: string; stop
     `Uptime: ${input.uptime}`,
     `Stopped: ${input.stoppedAt}`,
   ].join("\n");
+}
+
+export function formatApplicationOnline(input: {
+  startedAt: string;
+  environment: string;
+  application: string;
+  runtimeState: string;
+  researchSchedulerState: string;
+  postgresqlHealth: string;
+  telegramState: string;
+  bootId?: string | null;
+  timezone?: string;
+}) {
+  const timezone = input.timezone ?? presentationTimezone();
+  return [
+    "🟢 FinCoach Online",
+    `Started: ${formatPresentation(input.startedAt, timezone)} (${timezone})`,
+    `Environment: ${input.environment}`,
+    `Application: ${input.application}`,
+    `Runtime: ${input.runtimeState}`,
+    `Research scheduler: ${input.researchSchedulerState}`,
+    `PostgreSQL: ${input.postgresqlHealth}`,
+    `Telegram: ${input.telegramState}`,
+    "Live execution: blocked",
+    input.bootId ? `Boot: ${input.bootId}` : null,
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+export function formatApplicationOffline(input: {
+  stoppedAt: string;
+  reason: "SIGTERM" | "SIGINT" | "graceful_shutdown" | string;
+  uptime: string;
+  lastRuntimeState: string;
+  lastCompletedResearchCycle: string | null;
+  bootId?: string | null;
+  timezone?: string;
+}) {
+  const timezone = input.timezone ?? presentationTimezone();
+  return [
+    "🔴 FinCoach Offline",
+    `Stopped: ${formatPresentation(input.stoppedAt, timezone)} (${timezone})`,
+    `Reason: ${input.reason}`,
+    `Uptime: ${input.uptime}`,
+    `Last runtime state: ${input.lastRuntimeState}`,
+    `Last completed research cycle: ${input.lastCompletedResearchCycle ?? "unavailable"}`,
+    "Live execution: blocked",
+    input.bootId ? `Boot: ${input.bootId}` : null,
+  ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
 export function formatRecovery(input: { previousHeartbeat: string; recoveryTime: string; downtime: string; currentHealth: string }) {

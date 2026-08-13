@@ -14,6 +14,10 @@ export class TelegramNotificationService {
     return { sent: result.ok, result };
   }
 
+  async sendLifecycleImmediate(text: string, metadata: Record<string, unknown> = {}) {
+    return this.sendOperations("lifecycle", text, { ...metadata, bypassDigest: true, immediate: true, liveExecutionBlocked: true });
+  }
+
   async sendCommandReply(chatId: string, text: string, metadata: Record<string, unknown> = {}) {
     const config = loadTelegramConfig(this.env);
     if (!config.notificationsEnabled || !config.botToken) return { sent: false as const, reason: "telegram command replies not configured" };

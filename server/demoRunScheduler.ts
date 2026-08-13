@@ -26,3 +26,8 @@ export function startDemoRunScheduler(env: NodeJS.ProcessEnv = process.env) {
   demoRunSchedulerTimer.unref();
   return demoRunSchedulerTimer;
 }
+
+export function stopDemoRunScheduler() {
+  if (demoRunSchedulerTimer) clearInterval(demoRunSchedulerTimer);
+  demoRunSchedulerTimer = null;
+}
