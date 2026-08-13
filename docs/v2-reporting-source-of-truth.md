@@ -24,16 +24,26 @@ PostgreSQL is authoritative for persisted research artifacts. The canonical proj
 | lifecycle decisions | `v2_strategy_lifecycle_decisions` |
 | pilot scorecards | `v2_pilot_scorecards` |
 
-## Windows
+## Time And Accounting Windows
 
-All reporting windows are UTC:
+Internal timestamps are UTC. PostgreSQL timestamps, comparisons, scheduler state, and calculations must remain UTC. Operator-facing timestamps are formatted only at presentation boundaries using `FINCOACH_PRESENTATION_TIMEZONE`, which defaults to `America/New_York` and may be changed to another valid IANA timezone while traveling.
+
+Trading/accounting boundaries are independent of presentation timezone. The canonical business boundary is always 17:00 `America/New_York` wall-clock time, with the UTC instant derived from New York timezone rules for that date.
 
 | Window | Definition |
 | --- | --- |
 | `currentHour` | UTC hour containing `generatedAt` |
-| `running24Hours` | rolling 24 hours ending at `generatedAt` |
-| `running7Days` | rolling 7 days ending at `generatedAt` |
+| `daily` | 17:00 New York wall-clock time through immediately before the next 17:00 New York boundary |
+| `weekly` | Sunday 17:00 New York through Friday 17:00 New York; weekend reporting shows the most recently completed trading week |
+| `monthly` | Accounting days whose 17:00 New York start date falls in the calendar month |
+| `yearly` | Accounting months/days whose 17:00 New York start date falls in the calendar year |
+| `running24Hours` | rolling 24 hours ending at `generatedAt`, used only where explicitly labeled as rolling |
+| `running7Days` | rolling 7 days ending at `generatedAt`, used only where explicitly labeled as rolling |
 | `lifetime` | all durable rows in PostgreSQL |
+
+Monthly P/L uses the explicit accounting-day rule above: for September 2026, the period begins at `2026-09-01 17:00 America/New_York` and ends at `2026-10-01 17:00 America/New_York`. Transactions from the partial wall-clock evening of the prior calendar month remain in the prior accounting month because their accounting-day start date is in that prior month.
+
+Every P/L projection must expose period type, UTC start/end, presentation start/end, realized and unrealized P/L separately, gross profit, gross loss, fees/costs where available, trade count, winning/losing trade counts, win rate, profit factor, source, `databaseBacked`, `brokerBacked`, `degraded`, projection error, and generated-at UTC. Do not infer realized P/L from lifetime account P/L.
 
 `GET /api/v2/research/progress` must include:
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, readFileSync } from "fs";
 import { appendFileSync } from "fs";
 import { join } from "path";
 
@@ -109,7 +109,7 @@ export class StructuredLogger {
   private rotateIfNeeded(path: string, timestamp: string) {
     if (!existsSync(path)) return;
     const stat = statSync(path);
-    const currentDate = stat.mtime.toISOString().slice(0, 10);
+    const currentDate = latestLoggedDate(path) ?? stat.mtime.toISOString().slice(0, 10);
     const entryDate = timestamp.slice(0, 10);
     if (stat.size < this.maxBytes && currentDate === entryDate) return;
     const suffix = timestamp.replace(/[:.]/g, "-");
@@ -124,6 +124,18 @@ export class StructuredLogger {
       const fullPath = join(this.logDir, item);
       if (statSync(fullPath).mtime.getTime() < cutoff) unlinkSync(fullPath);
     }
+  }
+}
+
+function latestLoggedDate(path: string) {
+  try {
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    const latest = lines.at(-1);
+    if (!latest) return null;
+    const parsed = JSON.parse(latest) as { timestamp?: unknown };
+    return typeof parsed.timestamp === "string" ? parsed.timestamp.slice(0, 10) : null;
+  } catch {
+    return null;
   }
 }
 

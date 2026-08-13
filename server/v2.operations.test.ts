@@ -81,6 +81,8 @@ assert.deepEqual(app.routes, [
   "/api/v2/status",
   "/api/v2/research/progress",
   "/api/v2/research/blockers",
+  "/api/v2/operations/reporting",
+  "/api/v2/operations/reporting/:view",
   "/api/v2/metrics",
   "/api/v2/runtime/status",
   "/api/v2/market-sessions",

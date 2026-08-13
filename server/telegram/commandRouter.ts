@@ -8,6 +8,7 @@ import { telegramReportingService, type TelegramReportingService } from "./repor
 import { telegramRepository, type TelegramRepository } from "./repository";
 import { buildHealthMessage } from "./health";
 import { structuredLogger } from "../structuredLogger";
+import { operationsReportingService } from "../operationsReportingService";
 
 const READ_ONLY_COMMANDS = new Set([
   "/status",
@@ -21,6 +22,17 @@ const READ_ONLY_COMMANDS = new Set([
   "/today",
   "/week",
   "/strategies",
+  "/strategy",
+  "/research",
+  "/coverage",
+  "/leaderboard",
+  "/sessions",
+  "/detectors",
+  "/data",
+  "/trading",
+  "/risk",
+  "/daily",
+  "/why",
   "/kill_status",
   "/v2_status",
   "/v2_metrics",
@@ -97,7 +109,7 @@ export class TelegramCommandRouter {
       await this.audit(input, command, true, "rejected", "Unsupported command");
       return "Unknown command. Send /help for supported operations commands.";
     }
-    const reply = await this.execute(command);
+    const reply = await this.execute(command, commandArgument(input.command));
     await this.audit(input, command, true, "accepted", null);
     return reply;
   }
@@ -108,24 +120,26 @@ export class TelegramCommandRouter {
       "/status /health /demo_status /pipeline_status /providers",
       "/open_trades /exposure /today /week /strategies /kill_status /performance /restarts",
       "/v2_status /v2_metrics /research_today /research_throughput /data_reconciliation",
-      "/research_progress /research_blockers",
+      "/research_progress /research_blockers /research /coverage",
       "/open_exchanges /markets_open /market_status",
       "/market_snapshot /morning_snapshot /evening_snapshot /upcoming_events",
       "/observations /hypotheses /experiments /backtests",
+      "/strategies /leaderboard /strategy <rank|id|symbol> /sessions /detectors",
+      "/pipeline /blockers /data /trading /risk /daily /why <metric>",
       "/court_cases /strategy_leaderboard /strategy_portfolio /forward_tests /signals /evaluator_results /lessons /strategy_health",
       "Confirmation required: /pause_demo /resume_demo /disable_automation /kill",
       "Live trading commands are blocked.",
     ].join("\n");
   }
 
-  private async execute(command: string) {
+  private async execute(command: string, argument = "") {
     switch (command) {
       case "/start":
         return this.help();
       case "/status":
-        return this.reporting.statusMessage();
+        return operationsReportingService.telegramMessage("/status");
       case "/health":
-        return buildHealthMessage();
+        return operationsReportingService.telegramMessage("/health");
       case "/demo_status": {
         const status = await demoRunService.status();
         return [`Demo Status`, `State: ${status.state}`, `Uptime: ${status.uptimeSeconds}s`, `Live execution: blocked`].join("\n");
@@ -147,11 +161,15 @@ export class TelegramCommandRouter {
       case "/exposure":
         return this.reporting.exposureMessage();
       case "/today":
-        return this.reporting.todayMessage();
+      case "/daily":
+        return operationsReportingService.telegramMessage("/daily");
       case "/week":
-        return this.reporting.weekMessage();
+        return operationsReportingService.telegramMessage("/week");
       case "/strategies":
-        return "Strategy performance is available in /api/marketpilot/telegram/status and weekly summaries.";
+      case "/strategy_portfolio":
+        return operationsReportingService.telegramMessage("/strategies");
+      case "/strategy":
+        return operationsReportingService.telegramMessage("/strategy", argument);
       case "/kill_status":
         return `Kill switch: ${executionRiskService.snapshot().globalKillSwitch ? "ACTIVE" : "inactive"}\nNew signals: ${executionRiskService.snapshot().globalKillSwitch ? "suppressed" : "allowed through quality gate"}\nLive execution: blocked`;
       case "/v2_status":
@@ -162,16 +180,33 @@ export class TelegramCommandRouter {
         return this.researchThroughputMessage();
       case "/research_progress":
       case "/progress":
+      case "/research":
+        return operationsReportingService.telegramMessage("/research");
       case "/pipeline": {
-        const { v2OperationsService } = await import("../v2/operations");
-        return v2OperationsService.telegramResearchProgress();
+        return operationsReportingService.telegramMessage("/pipeline");
       }
       case "/research_blockers":
       case "/blockers":
       case "/readiness": {
-        const { v2OperationsService } = await import("../v2/operations");
-        return v2OperationsService.telegramResearchBlockers();
+        return operationsReportingService.telegramMessage("/blockers");
       }
+      case "/coverage":
+        return operationsReportingService.telegramMessage("/coverage");
+      case "/leaderboard":
+      case "/strategy_leaderboard":
+        return operationsReportingService.telegramMessage("/leaderboard");
+      case "/sessions":
+        return operationsReportingService.telegramMessage("/sessions");
+      case "/detectors":
+        return operationsReportingService.telegramMessage("/detectors");
+      case "/data":
+        return operationsReportingService.telegramMessage("/data");
+      case "/trading":
+        return operationsReportingService.telegramMessage("/trading");
+      case "/risk":
+        return operationsReportingService.telegramMessage("/risk");
+      case "/why":
+        return operationsReportingService.telegramMessage("/why", argument);
       case "/open_exchanges":
       case "/markets_open":
       case "/market_status": {
@@ -225,8 +260,6 @@ export class TelegramCommandRouter {
       case "/experiments":
       case "/backtests":
       case "/court_cases":
-      case "/strategy_leaderboard":
-      case "/strategy_portfolio":
       case "/forward_tests":
       case "/signals":
       case "/evaluator_results":
@@ -377,6 +410,10 @@ export class TelegramCommandRouter {
 
 function normalizeCommand(command: string) {
   return command.trim().split(/\s+/)[0]?.toLowerCase() || "/help";
+}
+
+function commandArgument(command: string) {
+  return command.trim().split(/\s+/).slice(1).join(" ");
 }
 
 function isLiveTradingCommand(command: string) {

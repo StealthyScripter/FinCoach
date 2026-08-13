@@ -5,6 +5,7 @@ import { v2TelemetryService } from "../telemetry";
 import { getFinCoachV2Runtime } from "../runtime/composition";
 import { marketSessionsService } from "../../marketSessionsService";
 import { marketSnapshotService } from "../../marketSnapshotService";
+import { operationsReportingService } from "../../operationsReportingService";
 
 const routes: [string, V2OperationsCollection][] = [
   ["/api/v2/observations", "observations"],
@@ -27,6 +28,8 @@ export function registerV2OperationsRoutes(app: Express, service: V2OperationsSe
   app.get("/api/v2/status", async (req: Request, res: Response) => send(res, await service.statusAsync({ correlationId: correlationId(req) })));
   app.get("/api/v2/research/progress", async (_req: Request, res: Response) => send(res, await service.researchProgress()));
   app.get("/api/v2/research/blockers", async (_req: Request, res: Response) => send(res, await service.researchBlockers()));
+  app.get("/api/v2/operations/reporting", async (_req: Request, res: Response) => send(res, await operationsReportingService.apiView("status")));
+  app.get("/api/v2/operations/reporting/:view", async (req: Request, res: Response) => send(res, await operationsReportingService.apiView(String(req.params.view ?? "status"))));
   app.get("/api/v2/metrics", async (_req: Request, res: Response) => res.status(200).json({ ...v2TelemetryService.snapshot(), liveExecutionBlocked: true }));
   app.get("/api/v2/runtime/status", async (_req: Request, res: Response) => res.status(200).json(getFinCoachV2Runtime().status()));
   app.get("/api/v2/market-sessions", async (_req: Request, res: Response) => res.status(200).json(marketSessionsService.marketSessions()));
