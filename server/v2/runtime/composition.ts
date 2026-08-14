@@ -525,7 +525,7 @@ export class FinCoachV2Runtime {
           await guarded(input.guard, "detector_evaluation_attempted", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "attempted", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
           structuredLogger.v2({ level: "info", event: "detector_evaluation_started", message: "V2 detector evaluation started", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId, strategyFamily: detector.capability?.strategyFamily });
           await guarded(input.guard, "detector_evaluation_skipped", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: plan.detector.detectorId, detectorVersion: plan.detector.detectorVersion, strategyFamily: plan.detector.capability?.strategyFamily, status: "skipped", reason, correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
-          structuredLogger.v2({ level: "warn", event: "detector_evaluation_skipped", message: "V2 detector evaluation skipped because authoritative market data is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: plan.detector.detectorId, reason });
+          structuredLogger.v2({ level: "warn", event: "detector_evaluation_skipped", message: "V2 detector evaluation skipped because authoritative market data is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: plan.detector.detectorId, reason, ...(providerDiagnostic(error) ?? {}) });
         }
         continue;
       }
@@ -1204,7 +1204,9 @@ function demoCandles(symbol: string, timeframe: V2Timeframe, now: Date, count: n
   });
 }
 
-async function researchCandles(config: V2RuntimeConfig, env: NodeJS.ProcessEnv, symbol: string, timeframe: V2Timeframe, now: Date, count: number): Promise<NormalizedCandle[]> {
+const COMPLETED_CANDLE_FETCH_BUFFER = 2;
+
+export async function researchCandles(config: V2RuntimeConfig, env: NodeJS.ProcessEnv, symbol: string, timeframe: V2Timeframe, now: Date, count: number): Promise<NormalizedCandle[]> {
   if (config.researchDataMode === "synthetic") return demoCandles(symbol, timeframe, now, count);
   const token = env["OANDA_API_TOKEN"]?.trim();
   if (!token) throw new Error("OANDA_API_TOKEN is not configured");
@@ -1213,17 +1215,45 @@ async function researchCandles(config: V2RuntimeConfig, env: NodeJS.ProcessEnv, 
   if (!granularity) throw new Error("Unsupported OANDA timeframe");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
-  const response = await fetch(`${baseUrl}/v3/instruments/${encodeURIComponent(symbol)}/candles?count=${Math.min(count, 5000)}&granularity=${granularity}&price=M`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: controller.signal }).finally(() => clearTimeout(timeout));
+  const requestedCount = Math.min(count + COMPLETED_CANDLE_FETCH_BUFFER, 5000);
+  const response = await fetch(`${baseUrl}/v3/instruments/${encodeURIComponent(symbol)}/candles?count=${requestedCount}&granularity=${granularity}&price=M`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: controller.signal }).finally(() => clearTimeout(timeout));
   if (!response.ok) throw new Error(`OANDA historical candles failed with HTTP ${response.status}`);
   const payload = await response.json() as { candles?: Array<{ time: string; complete?: boolean; mid?: { o: string; h: string; l: string; c: string }; volume?: number }> };
-  const candles = (payload.candles ?? []).map(candle => {
+  const rawCandles = payload.candles ?? [];
+  const candles = rawCandles.map(candle => {
     if (!candle.mid) throw new Error("OANDA candle missing mid prices");
     return { symbol, timeframe, timestamp: new Date(candle.time).toISOString(), open: Number(candle.mid.o), high: Number(candle.mid.h), low: Number(candle.mid.l), close: Number(candle.mid.c), spread: null, volume: candle.volume ?? null, tickVolume: candle.volume ?? null, complete: candle.complete !== false, source: { provider: "oanda-practice-historical", providerSymbol: symbol, adapterVersion: "v1" }, corporateAction: null };
   });
   if (!candles.every(candle => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite))) throw new Error("OANDA returned invalid candles");
   const completedCandles = candles.filter(candle => candle.complete);
-  if (completedCandles.length < count) throw new Error("OANDA returned insufficient completed candles");
+  if (completedCandles.length < count) {
+    throw new InsufficientCompletedCandlesError({ symbol, timeframe, requestedCount, returnedCount: rawCandles.length, completedCount: completedCandles.length, requiredCount: count, providerGranularity: granularity });
+  }
   return completedCandles.slice(-count);
+}
+
+class InsufficientCompletedCandlesError extends Error {
+  readonly diagnostic: ProviderCandleDiagnostic;
+
+  constructor(diagnostic: ProviderCandleDiagnostic) {
+    super(`OANDA returned insufficient completed candles: returned=${diagnostic.returnedCount} completed=${diagnostic.completedCount} required=${diagnostic.requiredCount}`);
+    this.name = "InsufficientCompletedCandlesError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+type ProviderCandleDiagnostic = {
+  symbol: string;
+  timeframe: string;
+  requestedCount: number;
+  returnedCount: number;
+  completedCount: number;
+  requiredCount: number;
+  providerGranularity: string;
+};
+
+function providerDiagnostic(error: unknown): ProviderCandleDiagnostic | null {
+  return error instanceof InsufficientCompletedCandlesError ? error.diagnostic : null;
 }
 
 export function configuredObservationDetectors() {
@@ -1268,7 +1298,7 @@ export function planProviderRequests(config: Pick<V2RuntimeConfig, "researchData
     group.plans.push(plan);
     grouped.set(key, group);
   }
-  const requests = [...grouped.values()];
+  const requests = interleaveProviderRequests([...grouped.values()]);
   if (config.researchDataMode !== "provider") {
     return { plannedProviderRequests: 0, selected: requests, deferred: [] as typeof requests, remainingBudget: 0 };
   }
@@ -1279,6 +1309,26 @@ export function planProviderRequests(config: Pick<V2RuntimeConfig, "researchData
     deferred: requests.slice(budget),
     remainingBudget: Math.max(0, budget - Math.min(budget, requests.length)),
   };
+}
+
+function interleaveProviderRequests<T extends { timeframe: V2Timeframe }>(requests: T[]) {
+  const byTimeframe = new Map<V2Timeframe, T[]>();
+  for (const request of requests) {
+    const group = byTimeframe.get(request.timeframe) ?? [];
+    group.push(request);
+    byTimeframe.set(request.timeframe, group);
+  }
+  const timeframes = [...byTimeframe.keys()];
+  const interleaved: T[] = [];
+  let depth = 0;
+  while (timeframes.some(timeframe => byTimeframe.get(timeframe)?.[depth])) {
+    for (const timeframe of timeframes) {
+      const request = byTimeframe.get(timeframe)?.[depth];
+      if (request) interleaved.push(request);
+    }
+    depth += 1;
+  }
+  return interleaved;
 }
 
 function observationPlanKey(plan: ObservationPlan) {

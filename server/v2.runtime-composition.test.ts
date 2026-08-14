@@ -1,5 +1,5 @@
 import assert from "assert/strict";
-import { buildObservationPlan, createFinCoachV2Runtime, createForwardTestsFromRanking, planProviderRequests, sanitizedProviderFailureReason } from "./v2/runtime/composition";
+import { buildObservationPlan, createFinCoachV2Runtime, createForwardTestsFromRanking, planProviderRequests, researchCandles, sanitizedProviderFailureReason } from "./v2/runtime/composition";
 import { loadV2RuntimeConfig } from "./v2/runtime/config";
 import { StrategyResearchSchedulerService } from "./strategyResearchSchedulerService";
 import { TelegramCommandRouter } from "./telegram/commandRouter";
@@ -64,6 +64,95 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
     planProviderRequests(config, buildObservationPlan(config, config.symbols, "restart-key")),
     planProviderRequests(config, buildObservationPlan(config, config.symbols, "restart-key")),
   );
+}
+
+{
+  const config = loadV2RuntimeConfig({
+    ...disabledEnv,
+    FINCOACH_V2_RESEARCH_DATA_MODE: "provider",
+    FINCOACH_V2_SYMBOLS: "EUR_USD,GBP_USD,AUD_USD,NZD_USD",
+    FINCOACH_V2_TIMEFRAMES: "1m,5m,15m",
+    FINCOACH_V2_TARGET_EVALUATIONS_PER_HOUR: "24",
+    FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE: "24",
+    FINCOACH_V2_PROVIDER_CALL_BUDGET: "6",
+  }).config;
+  const requests = planProviderRequests(config, buildObservationPlan(config, config.symbols, "timeframe-fairness"));
+  assert.equal(requests.selected.length, 6);
+  assert.ok(new Set(requests.selected.map(request => request.timeframe)).size > 1, "provider budget should cover multiple timeframes in one cycle");
+  assert.deepEqual(
+    planProviderRequests(config, buildObservationPlan(config, config.symbols, "timeframe-fairness")),
+    planProviderRequests(config, buildObservationPlan(config, config.symbols, "timeframe-fairness")),
+  );
+}
+
+{
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = "";
+  globalThis.fetch = (async (url) => {
+    requestedUrl = String(url);
+    const requestedCount = Number(new URL(requestedUrl).searchParams.get("count"));
+    const candles = oandaCandles("2026-07-31T14:00:00.000Z", requestedCount, "M1");
+    candles[candles.length - 1].complete = false;
+    return {
+      ok: true,
+      json: async () => ({ candles }),
+    } as Response;
+  }) as typeof fetch;
+  try {
+    const candles = await researchCandles(loadV2RuntimeConfig(providerRuntimeEnv()).config, providerRuntimeEnv(), "EUR_USD", "1m", new Date("2026-07-31T15:30:00.000Z"), 80);
+    const url = new URL(requestedUrl);
+    assert.equal(url.pathname, "/v3/instruments/EUR_USD/candles");
+    assert.equal(url.searchParams.get("granularity"), "M1");
+    assert.equal(url.searchParams.get("price"), "M");
+    assert.equal(url.searchParams.get("from"), null);
+    assert.equal(url.searchParams.get("to"), null);
+    assert.equal(url.searchParams.get("includeFirst"), null);
+    assert.equal(url.searchParams.get("count"), "82");
+    assert.equal(candles.length, 80);
+    assert.equal(candles.every(candle => candle.complete), true);
+    assert.equal(candles.at(-1)?.timestamp, "2026-07-31T15:20:00.000Z");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+{
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    const candles = oandaCandles("2026-07-31T14:00:00.000Z", 81, "M1");
+    candles[candles.length - 1].complete = false;
+    return {
+      ok: true,
+      json: async () => ({ candles }),
+    } as Response;
+  }) as typeof fetch;
+  try {
+    const candles = await researchCandles(loadV2RuntimeConfig(providerRuntimeEnv()).config, providerRuntimeEnv(), "EUR_USD", "1m", new Date("2026-07-31T15:30:00.000Z"), 80);
+    assert.equal(candles.length, 80);
+    assert.equal(candles.every(candle => candle.complete), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+{
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    const candles = oandaCandles("2026-07-31T14:00:00.000Z", 80, "M1");
+    candles[candles.length - 1].complete = false;
+    return {
+      ok: true,
+      json: async () => ({ candles }),
+    } as Response;
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      () => researchCandles(loadV2RuntimeConfig(providerRuntimeEnv()).config, providerRuntimeEnv(), "EUR_USD", "1m", new Date("2026-07-31T15:30:00.000Z"), 80),
+      (error) => sanitizedProviderFailureReason(error) === "insufficient_completed_candles",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 {
