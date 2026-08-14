@@ -66,8 +66,11 @@ export type V2ResearchPipelineCounts = {
     recordsCurrentHour: number;
     attemptedCurrentHour: number;
     completedCurrentHour: number;
+    skippedCurrentHour: number;
     duplicatesSuppressedCurrentHour: number;
     failuresCurrentHour: number;
+    currentHourByStatus: Record<string, number>;
+    currentHourByReason: Record<string, number>;
   };
 };
 
@@ -101,6 +104,7 @@ export type V2ResearchProgress = {
   diversification?: Record<string, unknown>;
   pipeline?: V2ResearchPipelineCounts;
   readiness?: V2ResearchReadiness;
+  forwardTestEligibility?: Record<string, unknown>;
   degraded?: boolean;
   reason?: string;
   projectionError?: string;

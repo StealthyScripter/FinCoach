@@ -605,8 +605,10 @@ export class V2OperationsService {
       ...formatWindowRows(windows),
       `- Evaluations attempted this hour: ${evals.attemptedCurrentHour ?? 0}`,
       `- Evaluations completed this hour: ${evals.completedCurrentHour ?? 0}`,
+      `- Evaluations skipped this hour: ${evals.skippedCurrentHour ?? 0}`,
       `- Duplicates suppressed this hour: ${evals.duplicatesSuppressedCurrentHour ?? 0}`,
       `- Failures this hour: ${evals.failuresCurrentHour ?? 0}`,
+      `- Skip/error reasons: ${formatCounts(evals.currentHourByReason as Record<string, number> | undefined)}`,
       "",
       "Coverage",
       `- Active symbols: ${formatCoverage(coverage.symbols)}`,
@@ -685,7 +687,10 @@ export class V2OperationsService {
       ...formatWindowRows(windows),
       `Current-hour detector attempts: ${evals?.attemptedCurrentHour ?? 0}`,
       `Current-hour detector completions: ${evals?.completedCurrentHour ?? 0}`,
+      `Current-hour detector skips: ${evals?.skippedCurrentHour ?? 0}`,
       `Current-hour duplicate suppressions: ${evals?.duplicatesSuppressedCurrentHour ?? 0}`,
+      `Current-hour failures: ${evals?.failuresCurrentHour ?? 0}`,
+      `Current-hour reasons: ${formatCounts(evals?.currentHourByReason as Record<string, number> | undefined)}`,
     ].join("\n");
   }
 

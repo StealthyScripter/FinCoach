@@ -70,6 +70,7 @@ export class PgV2OperationsRepository {
         ${countSql},
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'attempted') AS evaluations_attempted_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'completed') AS evaluations_completed_hour,
+        (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'skipped') AS evaluations_skipped_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'duplicate_suppressed') AS duplicates_suppressed_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'failed') AS failures_hour,
         (SELECT max(candle_end) FROM v2_market_observations) AS most_recent_market_data_timestamp`,
@@ -77,6 +78,15 @@ export class PgV2OperationsRepository {
     );
     const row = counts.rows[0] ?? {};
     const windows = buildPipelineWindows(row, currentHour, generatedAt);
+    const detectorReasonRows = await this.db.query(
+      `SELECT status, COALESCE(reason, status) AS reason, count(*)::int AS count
+       FROM v2_detector_evaluations
+       WHERE created_at >= $1
+       GROUP BY status, COALESCE(reason, status)
+       ORDER BY status, reason`,
+      [currentHour],
+    );
+    const detectorReasonSummary = summarizeDetectorReasons(detectorReasonRows.rows);
     const pipeline = {
       observations: Number(windows.lifetime.observations ?? 0),
       hypotheses: Number(windows.lifetime.hypotheses ?? 0),
@@ -96,8 +106,11 @@ export class PgV2OperationsRepository {
         recordsCurrentHour: Number((windows.currentHour as Record<string, unknown>).detectorEvaluations ?? 0),
         attemptedCurrentHour: Number(row.evaluations_attempted_hour ?? 0),
         completedCurrentHour: Number(row.evaluations_completed_hour ?? 0),
+        skippedCurrentHour: Number(row.evaluations_skipped_hour ?? 0),
         duplicatesSuppressedCurrentHour: Number(row.duplicates_suppressed_hour ?? 0),
         failuresCurrentHour: Number(row.failures_hour ?? 0),
+        currentHourByStatus: detectorReasonSummary.byStatus,
+        currentHourByReason: detectorReasonSummary.byReason,
       },
     };
     const grouped = await this.db.query(
@@ -126,6 +139,7 @@ export class PgV2OperationsRepository {
       strategyUniverse: strategyInventory,
       pipeline,
       readiness: readinessFromPipeline(pipeline),
+      forwardTestEligibility: await this.forwardTestEligibility(),
     };
   }
 
@@ -186,6 +200,16 @@ export class PgV2OperationsRepository {
       failed: Number(row.failed ?? 0),
       total: Number(row.total ?? 0),
     }));
+  }
+
+  async forwardTestEligibility() {
+    const [rankingRows, strategyRows] = await Promise.all([
+      this.db.query("SELECT payload FROM v2_ranking_decisions ORDER BY created_at DESC, record_id DESC LIMIT 100"),
+      this.db.query("SELECT record_id, payload FROM v2_strategy_definitions"),
+    ]);
+    const strategies = new Map<string, Record<string, unknown>>();
+    for (const row of strategyRows.rows) strategies.set(String(row.record_id), requireObject(row.payload, "strategy payload"));
+    return summarizeForwardTestEligibility(rankingRows.rows.map(row => requireObject(row.payload, "ranking payload")), strategies);
   }
 
   private async strategyInventory(pipeline: Record<string, unknown>) {
@@ -476,6 +500,109 @@ function buildPipelineWindows(row: QueryResultRow, currentHour: string, generate
   };
 }
 
+function summarizeDetectorReasons(rows: QueryResultRow[]) {
+  const byStatus: Record<string, number> = {};
+  const byReason: Record<string, number> = {};
+  for (const row of rows) {
+    const status = String(row.status ?? "unknown");
+    const reason = sanitizeStoredReason(row.reason ?? status);
+    const count = Number(row.count ?? 0);
+    byStatus[status] = (byStatus[status] ?? 0) + count;
+    byReason[reason] = (byReason[reason] ?? 0) + count;
+  }
+  return { byStatus, byReason };
+}
+
+function sanitizeStoredReason(value: unknown) {
+  const reason = String(value ?? "unknown").trim().toLowerCase();
+  if (/^provider_http_(401|403|429|5xx)$/.test(reason)) return reason;
+  if ([
+    "provider_timeout",
+    "provider_network",
+    "insufficient_completed_candles",
+    "invalid_candles",
+    "incomplete_latest_candle",
+    "session_gated",
+    "unsupported_timeframe",
+    "duplicate_suppressed",
+    "cycle_budget",
+    "provider_budget",
+    "database_write_budget",
+    "market_data_unavailable",
+    "completed",
+    "attempted",
+    "failed",
+    "skipped",
+  ].includes(reason)) return reason;
+  if (/401/.test(reason)) return "provider_http_401";
+  if (/403/.test(reason)) return "provider_http_403";
+  if (/429/.test(reason)) return "provider_http_429";
+  if (/\b5\d\d\b/.test(reason)) return "provider_http_5xx";
+  if (/timeout|abort/.test(reason)) return "provider_timeout";
+  if (/network|fetch|econn|enotfound|eai_again|socket/.test(reason)) return "provider_network";
+  if (/insufficient.*completed|completed.*insufficient/.test(reason)) return "insufficient_completed_candles";
+  if (/insufficient/.test(reason)) return "insufficient_completed_candles";
+  if (/invalid|missing mid|non-finite/.test(reason)) return "invalid_candles";
+  if (/incomplete/.test(reason)) return "incomplete_latest_candle";
+  if (/unsupported.*timeframe|granularity/.test(reason)) return "unsupported_timeframe";
+  if (/duplicate/.test(reason)) return "duplicate_suppressed";
+  return "market_data_unavailable";
+}
+
+function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], strategies: Map<string, Record<string, unknown>>) {
+  const candidates = rankings.flatMap(ranking => Array.isArray(ranking.candidates) ? ranking.candidates as Record<string, unknown>[] : []);
+  const criteria = {
+    currentCycleSourceAvailable: { passed: 0, failed: candidates.length },
+    durableStrategySourceAvailable: { passed: 0, failed: 0 },
+    verdictEligible: { passed: 0, failed: 0 },
+    lineagePresent: { passed: 0, failed: 0 },
+    demoVerificationWouldBePractice: { passed: candidates.length, failed: 0 },
+    snapshotWouldBeFresh: { passed: candidates.length, failed: 0 },
+    exitsPresent: { passed: 0, failed: 0 },
+    expectedRPositive: { passed: 0, failed: 0 },
+    riskPositive: { passed: 0, failed: 0 },
+  };
+  const rejectionReasons: Record<string, number> = {};
+  let durableEligible = 0;
+  for (const candidate of candidates) {
+    const reasons: string[] = ["current_cycle_source_missing"];
+    const strategy = strategies.get(String(candidate.strategyId ?? ""));
+    countCriterion(criteria.durableStrategySourceAvailable, Boolean(strategy), reasons, "durable_strategy_source_missing");
+    const verdict = String(candidate.courtVerdict ?? "");
+    countCriterion(criteria.verdictEligible, verdict === "approve_for_forward_test" || verdict === "approve_for_replay", reasons, "court_not_approved_for_forward_test");
+    countCriterion(criteria.lineagePresent, Array.isArray(candidate.lineageEventIds) && candidate.lineageEventIds.length > 0, reasons, "missing_lineage");
+    countCriterion(criteria.exitsPresent, Boolean(strategy?.stopLoss && strategy?.takeProfit), reasons, "missing_exits");
+    const expectedR = Number((candidate.metrics as Record<string, unknown> | undefined)?.oosExpectancy ?? Number.NaN);
+    countCriterion(criteria.expectedRPositive, Number.isFinite(expectedR) && expectedR > 0, reasons, "invalid_risk");
+    const risk = Number((strategy?.positionSizing as Record<string, unknown> | undefined)?.riskFraction ?? Number.NaN);
+    countCriterion(criteria.riskPositive, Number.isFinite(risk) && risk > 0, reasons, "invalid_risk");
+    const durablePass = reasons.length === 1;
+    if (durablePass) durableEligible += 1;
+    for (const reason of [...new Set(reasons)]) rejectionReasons[reason] = (rejectionReasons[reason] ?? 0) + 1;
+  }
+  return {
+    schemaVersion: "fincoach.v2.forward-test-eligibility-projection.1",
+    rankedCandidatesTotal: candidates.length,
+    criteria,
+    fullyEligibleCount: 0,
+    durableQualityEligibleCount: durableEligible,
+    rejectionReasons,
+    notes: [
+      "Forward-test creation remains disabled by configuration.",
+      "Existing persisted rankings do not carry the in-memory current-cycle source map required by automatic forward-test creation.",
+    ],
+    liveExecutionBlocked: true as const,
+  };
+}
+
+function countCriterion(counter: { passed: number; failed: number }, passed: boolean, reasons: string[], reason: string) {
+  if (passed) counter.passed += 1;
+  else {
+    counter.failed += 1;
+    reasons.push(reason);
+  }
+}
+
 function isValidReportDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -530,7 +657,7 @@ function concentrationWarnings(groups: Record<string, Record<string, number>>, t
 
 function deriveBlockers(progress: Awaited<ReturnType<PgV2OperationsRepository["researchProgress"]>>, now: Date) {
   const at = now.toISOString();
-  const pipeline = progress.pipeline as Record<string, number | Record<string, number>>;
+  const pipeline = progress.pipeline as unknown as Record<string, number | Record<string, unknown>>;
   const mk = (severity: "info" | "warning" | "critical", code: string, phase: string, reason: string, currentValue: unknown, requiredValue: unknown, recommendedAction: string) => ({ code, severity, phase, reason, currentValue, requiredValue, recommendedAction, firstObservedAt: at, lastObservedAt: at });
   const blockers = [];
   if (Number(pipeline.observations ?? 0) === 0) blockers.push(mk("critical", "no_observations", "observations", "No persisted observations exist.", 0, "> 0", "Run a bounded research cycle with complete candle data."));

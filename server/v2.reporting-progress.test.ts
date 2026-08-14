@@ -46,15 +46,29 @@ async function testDurableProgressCountsAndReadiness() {
               lessons: [0, 1, 1, 1],
               lifecycle_decisions: [0, 1, 1, 1],
               pilot_scorecards: [0, 0, 0, 0],
-              detector_evaluations: [2, 2, 2, 2],
+              detector_evaluations: [6, 6, 6, 6],
             }),
             evaluations_attempted_hour: 1,
             evaluations_completed_hour: 1,
+            evaluations_skipped_hour: 4,
             duplicates_suppressed_hour: 0,
             failures_hour: 0,
             most_recent_market_data_timestamp: "2026-07-31T15:30:00.000Z",
           }],
           rowCount: 1,
+        };
+      }
+      if (sql.includes("COALESCE(reason, status)")) {
+        return {
+          rows: [
+            { status: "attempted", reason: "attempted", count: 1 },
+            { status: "completed", reason: "completed", count: 1 },
+            { status: "skipped", reason: "provider_http_429", count: 1 },
+            { status: "skipped", reason: "OANDA historical candles failed with HTTP 401", count: 1 },
+            { status: "skipped", reason: "provider_network_error", count: 1 },
+            { status: "skipped", reason: "OANDA returned insufficient completed candles", count: 1 },
+          ],
+          rowCount: 6,
         };
       }
       if (sql.includes("WITH evaluations AS")) {
@@ -77,15 +91,31 @@ async function testDurableProgressCountsAndReadiness() {
       }
       if (sql.includes("to_regclass('strategy_evidence_records')")) return { rows: [{ table_name: "strategy_evidence_records" }], rowCount: 1 };
       if (sql.includes("FROM strategy_evidence_records")) return { rows: [{ rows: 1339, distinct_strategy_ids: 87 }], rowCount: 1 };
-      if (sql.includes("SELECT payload FROM v2_strategy_definitions")) return {
+      if (sql.includes("FROM v2_strategy_definitions")) return {
         rows: [{
+          record_id: "strategy-ok",
           payload: {
+            strategyId: "strategy-ok",
             symbols: ["EUR_USD"],
             timeframes: ["15m"],
+            stopLoss: { type: "atr_multiple", value: 1 },
+            takeProfit: { type: "atr_multiple", value: 2 },
+            positionSizing: { type: "fixed_fractional", riskFraction: 0.01 },
             filters: [{ field: "primaryFamily", operator: "==", value: "breakout" }],
             sessionRestrictions: [{ field: "sessionId", operator: "in", value: ["london_morning"] }],
             supportedRegimes: ["volatility_expansion"],
             entryConditions: [{ field: "templateId", operator: "==", value: "breakout.session_high_low_breakout" }],
+          },
+        }],
+        rowCount: 1,
+      };
+      if (sql.includes("FROM v2_ranking_decisions ORDER BY created_at DESC")) return {
+        rows: [{
+          payload: {
+            candidates: [
+              { strategyId: "strategy-ok", courtVerdict: "approve_for_replay", lineageEventIds: ["event-1"], metrics: { oosExpectancy: 0.2 } },
+              { strategyId: "strategy-missing", courtVerdict: "reject", lineageEventIds: [], metrics: { oosExpectancy: -0.1 } },
+            ],
           },
         }],
         rowCount: 1,
@@ -111,11 +141,14 @@ async function testDurableProgressCountsAndReadiness() {
   assert.equal(progress.pipeline.lessons, 1);
   assert.equal(progress.pipeline.lifecycleDecisions, 1);
   assert.deepEqual(progress.pipeline.detectorEvaluations, {
-    recordsCurrentHour: 2,
+    recordsCurrentHour: 6,
     attemptedCurrentHour: 1,
     completedCurrentHour: 1,
+    skippedCurrentHour: 4,
     duplicatesSuppressedCurrentHour: 0,
     failuresCurrentHour: 0,
+    currentHourByStatus: { attempted: 1, completed: 1, skipped: 4 },
+    currentHourByReason: { attempted: 1, completed: 1, provider_http_429: 1, provider_http_401: 1, provider_network: 1, insufficient_completed_candles: 1 },
   });
   assert.deepEqual((progress.coverage as Record<string, unknown>).detectorCoverage, [{
     symbol: "EUR_USD",
@@ -137,6 +170,16 @@ async function testDurableProgressCountsAndReadiness() {
   assert.equal(progress.strategyUniverse?.legacyEvidenceDistinctStrategyIds, 87);
   assert.equal(progress.strategyUniverse?.legacyEvidenceClassification, "evidence_record");
   assert.equal((progress.strategyUniverse?.diversification as Record<string, Record<string, Record<string, unknown>>>).concentration.family.key, "breakout");
+  assert.deepEqual((progress.forwardTestEligibility as Record<string, unknown>).rejectionReasons, {
+    current_cycle_source_missing: 2,
+    court_not_approved_for_forward_test: 1,
+    missing_lineage: 1,
+    durable_strategy_source_missing: 1,
+    missing_exits: 1,
+    invalid_risk: 1,
+  });
+  assert.equal((progress.forwardTestEligibility as Record<string, unknown>).fullyEligibleCount, 0);
+  assert.equal((progress.forwardTestEligibility as Record<string, unknown>).durableQualityEligibleCount, 1);
   assert.deepEqual(progress.readiness, {
     currentStage: "lifecycle decision",
     nextStage: "research lifecycle complete",
@@ -144,7 +187,7 @@ async function testDurableProgressCountsAndReadiness() {
     paperExecutionState: "disabled_or_gated",
     demoExecutionState: "demo_only_gated",
   });
-  assert.equal(sqlSeen.length, 7);
+  assert.equal(sqlSeen.length, 10);
 }
 
 async function testProgressProjectionFailureIsSanitized() {
@@ -340,7 +383,7 @@ function progressRepository(overrides: Record<string, number>) {
     lifecycleDecisions: 0,
     pilotScorecards: 0,
     ...overrides,
-    detectorEvaluations: { recordsCurrentHour: 0, attemptedCurrentHour: 0, completedCurrentHour: 0, duplicatesSuppressedCurrentHour: 0, failuresCurrentHour: 0 },
+    detectorEvaluations: { recordsCurrentHour: 0, attemptedCurrentHour: 0, completedCurrentHour: 0, skippedCurrentHour: 0, duplicatesSuppressedCurrentHour: 0, failuresCurrentHour: 0, currentHourByStatus: {}, currentHourByReason: {} },
   };
   return {
     latestReport: async () => null,

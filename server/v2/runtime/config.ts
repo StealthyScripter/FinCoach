@@ -193,6 +193,11 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.pilotEnabled && !config.researchEnabled) errors.push("Pilot cannot be enabled when V2 research is disabled.");
   if (config.autostart && (!config.runtimeEnabled || !config.pilotEnabled || !config.researchEnabled)) errors.push("Autostart requires runtime, pilot, and research enabled.");
   if (config.researchDataMode === "synthetic" && env.NODE_ENV === "production") errors.push("Synthetic V2 research data is prohibited in production.");
+  if (config.researchEnabled && config.researchDataMode === "provider") {
+    if ((env.OANDA_ENV?.trim().toLowerCase() || "practice") !== "practice") errors.push("V2 provider research requires OANDA_ENV=practice.");
+    if (!env.OANDA_API_TOKEN?.trim()) errors.push("V2 provider research requires OANDA_API_TOKEN.");
+    if (!env.OANDA_ACCOUNT_ID?.trim()) errors.push("V2 provider research requires OANDA_ACCOUNT_ID.");
+  }
   if (config.symbols.length === 0) errors.push("At least one V2 symbol is required.");
   const universe = validateResearchUniverse(config.symbols);
   if (config.researchEnabled && universe.unsupported.length) {

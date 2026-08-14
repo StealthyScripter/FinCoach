@@ -236,12 +236,13 @@ export class OperationsReportingService {
       const currentHour = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours())).toISOString();
       const countSql = PIPELINE_TABLES.map(([key, table]) => `(SELECT count(*)::int FROM ${table}) AS "${key}"`).join(", ");
       const currentSql = PIPELINE_TABLES.map(([key, table]) => `(SELECT count(*)::int FROM ${table} WHERE created_at >= $1::timestamp) AS "${key}"`).join(", ");
-      const [counts, current, cycles, coverage, detectors, strategies, rankings] = await Promise.all([
+      const [counts, current, cycles, coverage, detectors, detectorReasons, strategies, rankings] = await Promise.all([
         db.query(`SELECT ${countSql}`),
         db.query(`SELECT ${currentSql}`, [currentHour]),
         db.query(`SELECT status, count(*)::int AS count FROM v2_orchestration_cycles WHERE created_at >= $1::timestamp AND created_at < $2::timestamp GROUP BY status`, [daily.startUtc, daily.endUtc]),
         db.query(`SELECT symbol, timeframe, detector_id, strategy_family, count(*)::int AS count FROM v2_market_observations GROUP BY symbol, timeframe, detector_id, strategy_family ORDER BY count DESC, symbol LIMIT 200`),
-        db.query(`SELECT detector_id, symbol, timeframe, count(*)::int AS total, count(*) FILTER (WHERE status = 'completed')::int AS completed, count(*) FILTER (WHERE status = 'duplicate_suppressed')::int AS duplicate_suppressed, count(*) FILTER (WHERE status = 'failed')::int AS failed FROM v2_detector_evaluations GROUP BY detector_id, symbol, timeframe ORDER BY total DESC LIMIT 200`),
+        db.query(`SELECT detector_id, symbol, timeframe, count(*)::int AS total, count(*) FILTER (WHERE status = 'attempted')::int AS attempted, count(*) FILTER (WHERE status = 'completed')::int AS completed, count(*) FILTER (WHERE status = 'skipped')::int AS skipped, count(*) FILTER (WHERE status = 'duplicate_suppressed')::int AS duplicate_suppressed, count(*) FILTER (WHERE status = 'failed')::int AS failed FROM v2_detector_evaluations GROUP BY detector_id, symbol, timeframe ORDER BY total DESC LIMIT 200`),
+        db.query(`SELECT status, COALESCE(reason, status) AS reason, count(*)::int AS count FROM v2_detector_evaluations WHERE created_at >= $1::timestamp GROUP BY status, COALESCE(reason, status) ORDER BY status, reason`, [currentHour]),
         db.query(`SELECT payload, created_at FROM v2_strategy_definitions ORDER BY created_at DESC LIMIT 1000`),
         db.query(`SELECT payload, created_at FROM v2_ranking_decisions ORDER BY created_at DESC LIMIT 1000`),
       ]);
@@ -249,10 +250,13 @@ export class OperationsReportingService {
       const hour = mapCounts(current.rows[0] ?? {});
       const strategyRows = strategies.rows.map(row => row.payload as Record<string, unknown>);
       const rankingRows = rankings.rows.map(row => row.payload as Record<string, unknown>);
-      const detectorRows = detectors.rows.map(row => ({ detector: String(row.detector_id ?? "unknown"), symbol: String(row.symbol ?? "unknown"), timeframe: String(row.timeframe ?? "unknown"), total: Number(row.total ?? 0), completed: Number(row.completed ?? 0), duplicateSuppressed: Number(row.duplicate_suppressed ?? 0), failed: Number(row.failed ?? 0) }));
+      const detectorRows = detectors.rows.map(row => ({ detector: String(row.detector_id ?? "unknown"), symbol: String(row.symbol ?? "unknown"), timeframe: String(row.timeframe ?? "unknown"), total: Number(row.total ?? 0), attempted: Number(row.attempted ?? 0), completed: Number(row.completed ?? 0), skipped: Number(row.skipped ?? 0), duplicateSuppressed: Number(row.duplicate_suppressed ?? 0), failed: Number(row.failed ?? 0) }));
       const evaluationTotal = detectorRows.reduce((sum, row) => sum + row.total, 0);
+      const attemptedTotal = detectorRows.reduce((sum, row) => sum + row.attempted, 0);
+      const skippedTotal = detectorRows.reduce((sum, row) => sum + row.skipped, 0);
       const duplicateTotal = detectorRows.reduce((sum, row) => sum + row.duplicateSuppressed, 0);
       const failureTotal = detectorRows.reduce((sum, row) => sum + row.failed, 0);
+      const reasonSummary = detectorReasonSummary(detectorReasons.rows);
       return {
         degraded: false,
         projectionError: null as string | null,
@@ -264,13 +268,17 @@ export class OperationsReportingService {
         coverage: coverageFacts(coverage.rows, this.env),
         detectors: {
           total: evaluationTotal,
+          attempted: attemptedTotal,
           completed: detectorRows.reduce((sum, row) => sum + row.completed, 0),
+          skipped: skippedTotal,
           positiveObservations: pipeline.observations,
           positiveRate: evaluationTotal > 0 ? round(Number(pipeline.observations ?? 0) / evaluationTotal * 100) : null,
           duplicateSuppressed: duplicateTotal,
           duplicateRate: evaluationTotal > 0 ? round(duplicateTotal / evaluationTotal * 100) : null,
           failed: failureTotal,
           failureRate: evaluationTotal > 0 ? round(failureTotal / evaluationTotal * 100) : null,
+          currentHourByStatus: reasonSummary.byStatus,
+          currentHourByReason: reasonSummary.byReason,
           supported: detectorRows,
           abnormalWarnings: evaluationTotal > 0 && Number(pipeline.observations ?? 0) / evaluationTotal >= 0.95 ? ["near_100_percent_positive_output"] : [],
         },
@@ -400,7 +408,7 @@ function formatTelegram(snapshot: ReportingSnapshot, command: string, argument: 
     case "/status":
       return [...header("FinCoach Status"), `Runtime: ${snapshot.runtime.state}`, `Session: ${snapshot.runtime.currentSession}`, `Pairs: ${formatList(snapshot.runtime.configuredPairs as unknown[])}`, `Cycles: ${research.cyclesCompleted}/${research.maxCyclesPerDay} completed`, `Evaluations: ${research.evaluations}; Observations: ${research.observations}`, `Strategies: ${strategies.total}; Ranked: ${strategies.ranked}`, `Top strategy: ${formatTopStrategy(strategies)}`, `P/L paper realized/unrealized: ${paper.realizedPnl}/${paper.unrealizedPnl}`, `Broker P/L: ${broker.realizedPnl} (${broker.projectionError ?? broker.source})`, `Kill switch: ${risk.killSwitch}; daily loss: ${risk.dailyLossCircuitBreaker}`, `Live execution: ${snapshot.runtime.liveExecutionState}`].join("\n");
     case "/research":
-      return [...header("FinCoach Research Progress"), `Cycles completed/failed/skipped: ${research.cyclesCompleted}/${research.cyclesFailed}/${research.cyclesSkipped}`, `Evaluations: ${research.evaluations}; target/hr: ${research.targetEvaluationsPerHour}; actual/hr: ${research.actualEvaluationsPerHour}`, `Observations: ${research.observations}; duplicates: ${research.duplicatesSuppressed}; failures: ${research.failures}`, `Coverage: ${coverageLine(snapshot.coverage)}`, `Lowest-covered: ${formatList((snapshot.coverage.lowestCoveredPairs as unknown[]) ?? [])}`, `Next cycle: ${research.nextCycle}`].join("\n");
+      return [...header("FinCoach Research Progress"), `Cycles completed/failed/skipped: ${research.cyclesCompleted}/${research.cyclesFailed}/${research.cyclesSkipped}`, `Evaluations: ${research.evaluations}; target/hr: ${research.targetEvaluationsPerHour}; actual/hr: ${research.actualEvaluationsPerHour}`, `Observations: ${research.observations}; skipped: ${snapshot.detectors.skipped ?? 0}; duplicates: ${research.duplicatesSuppressed}; failures: ${research.failures}`, `Reasons: ${formatObject(snapshot.detectors.currentHourByReason as Record<string, unknown>) || "none"}`, `Coverage: ${coverageLine(snapshot.coverage)}`, `Lowest-covered: ${formatList((snapshot.coverage.lowestCoveredPairs as unknown[]) ?? [])}`, `Next cycle: ${research.nextCycle}`].join("\n");
     case "/coverage":
       return [...header("Coverage"), `Configured: ${formatList(snapshot.coverage.configuredInstruments as unknown[])}`, `Covered: ${formatList(snapshot.coverage.coveredInstruments as unknown[])}`, `Missing/starved: ${formatList(snapshot.coverage.missingInstruments as unknown[])}`, `By pair: ${formatObject(snapshot.coverage.observationsByPair as Record<string, unknown>)}`, `Sessions: ${formatObject(snapshot.coverage.sessionDistribution as Record<string, unknown>)}`, `Detectors: ${formatObject(snapshot.coverage.detectorDistribution as Record<string, unknown>)}`, `Warnings: ${formatList(snapshot.coverage.warnings as unknown[]) || "none"}`].join("\n");
     case "/strategies":
@@ -414,7 +422,7 @@ function formatTelegram(snapshot: ReportingSnapshot, command: string, argument: 
     case "/sessions":
       return [...header("Sessions"), `Current FX research phase: ${snapshot.runtime.currentSession}`, `Tradable instruments: ${formatList(snapshot.runtime.configuredPairs as unknown[])}`, `Priority pairs: ${formatList(snapshot.coverage.coveredInstruments as unknown[])}`, `Applicable families: ${formatObject(strategies.byFamily as Record<string, unknown>)}`, `Next boundary: ${snapshot.periods.daily.presentationEnd}`].join("\n");
     case "/detectors":
-      return [...header("Detectors"), `Evaluations: ${snapshot.detectors.total}`, `Positive observations: ${snapshot.detectors.positiveObservations}`, `Positive rate: ${snapshot.detectors.positiveRate ?? "unavailable"}%`, `Duplicate rate: ${snapshot.detectors.duplicateRate ?? "unavailable"}%`, `Failure rate: ${snapshot.detectors.failureRate ?? "unavailable"}%`, `Warnings: ${formatList(snapshot.detectors.abnormalWarnings as unknown[]) || "none"}`].join("\n");
+      return [...header("Detectors"), `Evaluations: ${snapshot.detectors.total}`, `Attempted/completed/skipped/duplicates/failed: ${snapshot.detectors.attempted ?? 0}/${snapshot.detectors.completed ?? 0}/${snapshot.detectors.skipped ?? 0}/${snapshot.detectors.duplicateSuppressed ?? 0}/${snapshot.detectors.failed ?? 0}`, `Current-hour reasons: ${formatObject(snapshot.detectors.currentHourByReason as Record<string, unknown>) || "none"}`, `Positive observations: ${snapshot.detectors.positiveObservations}`, `Positive rate: ${snapshot.detectors.positiveRate ?? "unavailable"}%`, `Duplicate rate: ${snapshot.detectors.duplicateRate ?? "unavailable"}%`, `Failure rate: ${snapshot.detectors.failureRate ?? "unavailable"}%`, `Warnings: ${formatList(snapshot.detectors.abnormalWarnings as unknown[]) || "none"}`].join("\n");
     case "/pipeline":
       return [...header("Pipeline"), `evaluations -> ${pipeline.evaluations}`, `observations -> ${pipeline.observations}`, `hypotheses -> ${pipeline.hypotheses}`, `strategies -> ${pipeline.strategies}`, `experiments -> ${pipeline.experiments}`, `backtests -> ${pipeline.backtests}`, `verdicts -> ${pipeline.verdicts}`, `rankings -> ${pipeline.rankings}`, `forward eligible -> ${strategies.forwardEligible}`, `forward tests -> ${pipeline.forwardTests}`, `signals -> ${pipeline.signals}`, `EXPECTED GATE: disabled execution/signal flags stay locked unless explicitly configured.`, `UNEXPECTED FAILURE: ${snapshot.projectionError ?? "none"}`].join("\n");
     case "/blockers":
@@ -443,6 +451,55 @@ function mapCounts(row: Record<string, unknown>) {
 function countStatuses(rows: QueryResultRow[]) {
   const counts = Object.fromEntries(rows.map(row => [String(row.status), Number(row.count ?? 0)]));
   return { completed: counts.completed ?? 0, failed: counts.failed ?? 0, skipped: counts.skipped ?? 0, admitted: Object.values(counts).reduce((sum, value) => sum + value, 0) };
+}
+
+function detectorReasonSummary(rows: QueryResultRow[]) {
+  const byStatus: Record<string, number> = {};
+  const byReason: Record<string, number> = {};
+  for (const row of rows) {
+    const status = String(row.status ?? "unknown");
+    const reason = sanitizedDetectorReason(row.reason ?? status);
+    const count = Number(row.count ?? 0);
+    byStatus[status] = (byStatus[status] ?? 0) + count;
+    byReason[reason] = (byReason[reason] ?? 0) + count;
+  }
+  return { byStatus, byReason };
+}
+
+function sanitizedDetectorReason(value: unknown) {
+  const reason = String(value ?? "unknown").trim().toLowerCase();
+  if (/^provider_http_(401|403|429|5xx)$/.test(reason)) return reason;
+  if ([
+    "provider_timeout",
+    "provider_network",
+    "insufficient_completed_candles",
+    "invalid_candles",
+    "incomplete_latest_candle",
+    "session_gated",
+    "unsupported_timeframe",
+    "duplicate_suppressed",
+    "cycle_budget",
+    "provider_budget",
+    "database_write_budget",
+    "market_data_unavailable",
+    "completed",
+    "attempted",
+    "failed",
+    "skipped",
+  ].includes(reason)) return reason;
+  if (/401/.test(reason)) return "provider_http_401";
+  if (/403/.test(reason)) return "provider_http_403";
+  if (/429/.test(reason)) return "provider_http_429";
+  if (/\b5\d\d\b/.test(reason)) return "provider_http_5xx";
+  if (/timeout|abort/.test(reason)) return "provider_timeout";
+  if (/network|fetch|econn|enotfound|eai_again|socket/.test(reason)) return "provider_network";
+  if (/insufficient.*completed|completed.*insufficient/.test(reason)) return "insufficient_completed_candles";
+  if (/insufficient/.test(reason)) return "insufficient_completed_candles";
+  if (/invalid|missing mid|non-finite/.test(reason)) return "invalid_candles";
+  if (/incomplete/.test(reason)) return "incomplete_latest_candle";
+  if (/unsupported.*timeframe|granularity/.test(reason)) return "unsupported_timeframe";
+  if (/duplicate/.test(reason)) return "duplicate_suppressed";
+  return "market_data_unavailable";
 }
 
 function coverageFacts(rows: QueryResultRow[], env: NodeJS.ProcessEnv) {
@@ -563,7 +620,7 @@ function emptyDurableFacts(reason: string): DurableFacts {
     configuredPairs: [],
     session: { current: "unavailable" },
     coverage: { configuredInstruments: [], coveredInstruments: [], missingInstruments: [], observationsByPair: {}, timeframeDistribution: {}, detectorDistribution: {}, sessionDistribution: {}, concentrationPercentages: {}, lowestCoveredPairs: [], latestMarketDataTimestamp: "unavailable", warnings: [reason] },
-    detectors: { total: "unavailable", completed: "unavailable", positiveObservations: "unavailable", positiveRate: "unavailable", duplicateSuppressed: "unavailable", duplicateRate: "unavailable", failed: "unavailable", failureRate: "unavailable", supported: [], abnormalWarnings: [] },
+    detectors: { total: "unavailable", attempted: "unavailable", completed: "unavailable", skipped: "unavailable", positiveObservations: "unavailable", positiveRate: "unavailable", duplicateSuppressed: "unavailable", duplicateRate: "unavailable", failed: "unavailable", failureRate: "unavailable", currentHourByStatus: {}, currentHourByReason: {}, supported: [], abnormalWarnings: [] },
     strategies: { total: "unavailable", createdToday: "unavailable", ranked: "unavailable", validationState: "unavailable", byFamily: {}, bySymbol: {}, bySession: {}, byTimeframe: {}, byRegime: {}, top: [], rejectedOrDemoted: [], concentrationWarnings: [], forwardEligible: "unavailable" },
   };
 }
