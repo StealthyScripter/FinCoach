@@ -59,6 +59,12 @@ class MatrixRepository extends InMemoryTelegramRepository {
     return super.saveSummary(record);
   }
 
+  async getOrCreateSummary(record: TelegramSummaryRecord) {
+    if (this.saveSummaryBarrier) await this.saveSummaryBarrier();
+    if (this.failSaveSummary) throw this.failSaveSummary;
+    return super.getOrCreateSummary(record);
+  }
+
   async markSummaryDelivered(id: string, deliveryId: string) {
     if (this.failMarkDelivered) throw this.failMarkDelivered;
     return super.markSummaryDelivered(id, deliveryId);
@@ -203,20 +209,42 @@ await withEnv(scheduleEnv, async () => {
   }
 
   {
-    const repo = new MatrixRepository();
-    const reporting = new TelegramReportingService(repo);
-    const attempts: string[] = [];
-    const summaries = await Promise.all([
-      reporting.dailySummaryResult(new Date("2026-07-13T22:00:00.000Z")),
-      reporting.dailySummaryResult(new Date("2026-07-13T22:00:00.000Z")),
-    ]);
-    assert.equal(summaries[0].summary.id, summaries[1].summary.id);
-    const delivered = await runDaily(repo, fakeNotifications({ attempts }), new Date("2026-07-13T22:15:00.000Z"));
-    const duplicate = await runDaily(repo, fakeNotifications({ attempts }), new Date("2026-07-13T22:30:00.000Z"));
-    assert.equal(delivered.status, "completed");
-    assert.equal(duplicate.status, "skipped");
-    assert.equal((await repo.listSummaries("daily", 10)).length, 1);
-    assert.equal(attempts.length, 1, "duplicate concurrent scheduler calls must not duplicate delivery");
+    const concurrency = 40;
+    for (let iteration = 0; iteration < 75; iteration += 1) {
+      const repo = new MatrixRepository();
+      const reporting = new TelegramReportingService(repo);
+      const attempts: string[] = [];
+      const now = new Date(Date.UTC(2026, 6, 13 + iteration, 22, 0, 0));
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let waiting = 0;
+      repo.saveSummaryBarrier = async () => {
+        waiting += 1;
+        if (waiting === concurrency) release();
+        await barrier;
+      };
+      const summaries = await Promise.all(Array.from({ length: concurrency }, () => reporting.dailySummaryResult(now)));
+      repo.saveSummaryBarrier = null;
+      const summaryIds = new Set(summaries.map((item) => item.summary.id));
+      assert.equal(summaryIds.size, 1, `iteration ${iteration}: all concurrent daily summary callers must receive the same row id`);
+      assert.equal(summaries.filter((item) => item.status === "created").length, 1, `iteration ${iteration}: only one concurrent daily summary caller should create`);
+      const delivered = await runDaily(repo, fakeNotifications({ attempts }), new Date(now.getTime() + 15 * 60_000));
+      const duplicate = await runDaily(repo, fakeNotifications({ attempts }), new Date(now.getTime() + 30 * 60_000));
+      assert.equal(delivered.status, "completed", `iteration ${iteration}: pending summary should deliver`);
+      assert.equal(duplicate.status, "skipped", `iteration ${iteration}: delivered summary should skip`);
+      assert.equal((await repo.listSummaries("daily", 10)).length, 1, `iteration ${iteration}: same-period concurrency should persist one row`);
+      assert.equal(attempts.length, 1, `iteration ${iteration}: duplicate scheduler calls must not duplicate delivery`);
+      const [nextDaily, weeklySameDay] = await Promise.all([
+        reporting.dailySummaryResult(new Date(now.getTime() + 86_400_000)),
+        reporting.weeklySummaryResult(now),
+      ]);
+      assert.notEqual(nextDaily.summary.id, summaries[0].summary.id, `iteration ${iteration}: different daily dates must remain independent`);
+      assert.notEqual(weeklySameDay.summary.id, summaries[0].summary.id, `iteration ${iteration}: different periods must remain independent`);
+      assert.equal((await repo.listSummaries("daily", 10)).length, 2, `iteration ${iteration}: independent daily date should add one row`);
+      assert.equal((await repo.listSummaries("weekly", 10)).length, 1, `iteration ${iteration}: independent weekly period should add one row`);
+    }
   }
 
   {
@@ -235,9 +263,9 @@ await withEnv(scheduleEnv, async () => {
 
 await withEnv(scheduleEnv, async () => {
   const failureCases: Array<{ name: string; configure: (repo: MatrixRepository) => void; expectedClass: string }> = [
-    { name: "PostgreSQL unavailable", configure: (repo) => { repo.failFindSummary = new Error("PostgreSQL connection refused"); }, expectedClass: "persistence" },
+    { name: "PostgreSQL unavailable", configure: (repo) => { repo.failSaveSummary = new Error("PostgreSQL connection refused"); }, expectedClass: "persistence" },
     { name: "repository insert failure", configure: (repo) => { repo.failSaveSummary = new Error("summary insert persistence failed"); }, expectedClass: "persistence" },
-    { name: "summary lookup failure", configure: (repo) => { repo.failFindSummary = new Error("summary lookup persistence failed"); }, expectedClass: "persistence" },
+    { name: "summary get-or-create failure", configure: (repo) => { repo.failSaveSummary = new Error("summary get-or-create persistence failed"); }, expectedClass: "persistence" },
     { name: "unrelated unique constraint violation", configure: (repo) => { const error = new Error("duplicate key value violates unique constraint unrelated_constraint") as Error & { code: string }; error.code = "23505"; repo.failSaveSummary = error; }, expectedClass: "data_integrity" },
   ];
   for (const item of failureCases) {
@@ -263,7 +291,7 @@ await withEnv(scheduleEnv, async () => {
   ];
   for (const item of malformedRows) {
     const repo = new MatrixRepository();
-    repo.findSummaryByPeriodAndDate = async () => item.row as TelegramSummaryRecord;
+    repo.getOrCreateSummary = async () => ({ created: false, record: item.row as TelegramSummaryRecord });
     const attempts: string[] = [];
     const result = await runDaily(repo, fakeNotifications({ attempts }));
     assert.equal(result.status, "failed", `${item.name}: malformed data must fail`);
@@ -595,6 +623,7 @@ async function runPostgresMatrixIfAvailable() {
     await cleanup.query("DELETE FROM telegram_scheduler_runs WHERE job_name LIKE $1", [`${unique}%`]).catch(() => undefined);
     await cleanup.query("DELETE FROM telegram_summaries WHERE id LIKE $1 OR summary_date LIKE $2", [`${unique}%`, `%${unique}%`]).catch(() => undefined);
     await cleanup.end();
+    await repo.close();
   }
 }
 

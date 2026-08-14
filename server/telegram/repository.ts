@@ -22,6 +22,7 @@ export interface TelegramRepository {
   listSignals(limit?: number): Promise<TelegramSignalRecord[]>;
   saveSignalUpdate(record: TelegramSignalLifecycleUpdate): Promise<TelegramSignalLifecycleUpdate>;
   listSignalUpdates(signalId: string): Promise<TelegramSignalLifecycleUpdate[]>;
+  getOrCreateSummary(record: TelegramSummaryRecord): Promise<{ created: boolean; record: TelegramSummaryRecord }>;
   saveSummary(record: TelegramSummaryRecord): Promise<TelegramSummaryRecord>;
   findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string): Promise<TelegramSummaryRecord | null>;
   markSummaryDelivered(id: string, deliveryId: string): Promise<TelegramSummaryRecord | null>;
@@ -103,10 +104,14 @@ export class InMemoryTelegramRepository implements TelegramRepository {
   }
 
   async saveSummary(record: TelegramSummaryRecord) {
-    const existing = await this.findSummaryByPeriodAndDate(record.period, record.summaryDate);
-    if (existing) return existing;
+    return (await this.getOrCreateSummary(record)).record;
+  }
+
+  async getOrCreateSummary(record: TelegramSummaryRecord) {
+    const existing = this.summaries.find((item) => item.period === record.period && item.summaryDate === record.summaryDate);
+    if (existing) return { created: false, record: existing };
     this.summaries.push(record);
-    return record;
+    return { created: true, record };
   }
 
   async findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string) {
@@ -310,6 +315,10 @@ export class PgTelegramRepository implements TelegramRepository {
   }
 
   async saveSummary(record: TelegramSummaryRecord) {
+    return (await this.getOrCreateSummary(record)).record;
+  }
+
+  async getOrCreateSummary(record: TelegramSummaryRecord) {
     if (!this.pool) throw new Error("DATABASE_URL is not configured");
     const rows = await this.pool.query(
       `INSERT INTO telegram_summaries (id, period, summary_date, concise_message, report, delivery_id, created_at)
@@ -319,10 +328,11 @@ export class PgTelegramRepository implements TelegramRepository {
          report = telegram_summaries.report,
          delivery_id = telegram_summaries.delivery_id,
          created_at = telegram_summaries.created_at
-       RETURNING *`,
+       RETURNING *, (xmax = 0) AS inserted`,
       [record.id, record.period, record.summaryDate, record.conciseMessage, JSON.stringify(record.report), record.deliveryId, record.createdAt],
     );
-    return rowToSummary(rows.rows[0]);
+    const saved = rowToSummary(rows.rows[0]);
+    return { created: Boolean(rows.rows[0].inserted), record: saved };
   }
 
   async findSummaryByPeriodAndDate(period: "daily" | "weekly", summaryDate: string) {

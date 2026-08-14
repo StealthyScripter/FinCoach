@@ -112,12 +112,6 @@ export class TelegramReportingService {
 
   async dailySummaryResult(now = new Date()): Promise<TelegramSummaryResult> {
     const summaryDate = now.toISOString().slice(0, 10);
-    const existing = await this.repository.findSummaryByPeriodAndDate("daily", summaryDate);
-    if (existing) {
-      validateSummaryForPeriod(existing, "daily", summaryDate);
-      telegramMetrics.recordSummaryResult("daily", "existing");
-      return { summary: existing, status: "existing" };
-    }
     const createdAt = now.toISOString();
     const demo = await demoRunService.status().catch(() => null);
     const telemetry = await demoRunService.telemetry().catch(() => null);
@@ -146,9 +140,8 @@ export class TelegramReportingService {
       `Next: ${report.nextResearchPriority}`,
       "Live execution: blocked",
     ].join("\n");
-    const candidateId = randomUUID();
-    const record = await this.repository.saveSummary({
-      id: candidateId,
+    const result = await this.repository.getOrCreateSummary({
+      id: randomUUID(),
       period: "daily",
       summaryDate,
       conciseMessage,
@@ -156,10 +149,10 @@ export class TelegramReportingService {
       deliveryId: null,
       createdAt,
     });
-    const status = record.id === candidateId ? "created" : "existing";
-    validateSummaryForPeriod(record, "daily", summaryDate);
+    const status = result.created ? "created" : "existing";
+    validateSummaryForPeriod(result.record, "daily", summaryDate);
     telegramMetrics.recordSummaryResult("daily", status);
-    return { summary: record, status };
+    return { summary: result.record, status };
   }
 
   async weeklySummary(now = new Date()) {
@@ -168,12 +161,6 @@ export class TelegramReportingService {
 
   async weeklySummaryResult(now = new Date()): Promise<TelegramSummaryResult> {
     const summaryDate = weekKey(now);
-    const existing = await this.repository.findSummaryByPeriodAndDate("weekly", summaryDate);
-    if (existing) {
-      validateSummaryForPeriod(existing, "weekly", summaryDate);
-      telegramMetrics.recordSummaryResult("weekly", "existing");
-      return { summary: existing, status: "existing" };
-    }
     const createdAt = now.toISOString();
     const pipeline = strategyResearchSchedulerService.snapshot();
     const metrics = telegramMetrics.snapshot();
@@ -197,9 +184,8 @@ export class TelegramReportingService {
       `Average signal R: ${metrics.averageSignalR ?? "not_available"}`,
       "Live execution: blocked",
     ].join("\n");
-    const candidateId = randomUUID();
-    const record = await this.repository.saveSummary({
-      id: candidateId,
+    const result = await this.repository.getOrCreateSummary({
+      id: randomUUID(),
       period: "weekly",
       summaryDate,
       conciseMessage,
@@ -207,10 +193,10 @@ export class TelegramReportingService {
       deliveryId: null,
       createdAt,
     });
-    const status = record.id === candidateId ? "created" : "existing";
-    validateSummaryForPeriod(record, "weekly", summaryDate);
+    const status = result.created ? "created" : "existing";
+    validateSummaryForPeriod(result.record, "weekly", summaryDate);
     telegramMetrics.recordSummaryResult("weekly", status);
-    return { summary: record, status };
+    return { summary: result.record, status };
   }
 
   strategyPerformance(input?: StrategyPerformanceInput[]) {
