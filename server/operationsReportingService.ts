@@ -176,7 +176,7 @@ export class OperationsReportingService {
         killSwitch: riskSnapshot.globalKillSwitch ? "active" : "inactive",
         dailyLossCircuitBreaker: Number(paperPnl.realizedPnl) < 0 && Math.abs(Number(paperPnl.realizedPnl)) >= riskSnapshot.maxDailyLoss ? "triggered" : riskSnapshot.maxDailyLoss > 0 ? "armed" : "disabled",
         automationLevel: riskSnapshot.globalKillSwitch ? 0 : "unchanged",
-        accountingDayBoundary: "17:00 America/New_York",
+        accountingDayBoundary: "21:00 UTC",
         realizedLossCurrentDay: typeof paperPnl.realizedPnl === "number" ? Math.max(0, -paperPnl.realizedPnl) : paperPnl.realizedPnl,
         configuredLimit: riskSnapshot.maxDailyLoss,
         percentageUsed: typeof paperPnl.realizedPnl === "number" && riskSnapshot.maxDailyLoss > 0 ? round(Math.max(0, -paperPnl.realizedPnl) / riskSnapshot.maxDailyLoss * 100) : "unavailable",

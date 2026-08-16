@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { storage } from "../storage";
+import { accountingDateKey } from "../accountingPeriods";
 import { demoRunService } from "../demoRunService";
 import { strategyResearchSchedulerService } from "../strategyResearchSchedulerService";
 import { executionRiskService, summarizePositions } from "../execution/riskControls";
@@ -111,7 +112,7 @@ export class TelegramReportingService {
   }
 
   async dailySummaryResult(now = new Date()): Promise<TelegramSummaryResult> {
-    const summaryDate = now.toISOString().slice(0, 10);
+    const summaryDate = accountingDateKey(now);
     const createdAt = now.toISOString();
     const demo = await demoRunService.status().catch(() => null);
     const telemetry = await demoRunService.telemetry().catch(() => null);

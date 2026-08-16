@@ -7,12 +7,12 @@ function period(type: "daily" | "weekly" | "monthly" | "yearly", iso: string, ti
 }
 
 {
-  const before = period("daily", "2026-01-15T21:59:59.000Z");
-  const exact = period("daily", "2026-01-15T22:00:00.000Z");
-  assert.equal(before.startUtc, "2026-01-14T22:00:00.000Z");
-  assert.equal(before.endUtc, "2026-01-15T22:00:00.000Z");
-  assert.equal(exact.startUtc, "2026-01-15T22:00:00.000Z");
-  assert.equal(formatPresentation(exact.startUtc, "America/New_York"), "Jan 15, 5:00 PM EST");
+  const before = period("daily", "2026-01-15T20:59:59.000Z");
+  const exact = period("daily", "2026-01-15T21:00:00.000Z");
+  assert.equal(before.startUtc, "2026-01-14T21:00:00.000Z");
+  assert.equal(before.endUtc, "2026-01-15T21:00:00.000Z");
+  assert.equal(exact.startUtc, "2026-01-15T21:00:00.000Z");
+  assert.equal(formatPresentation(exact.startUtc, "America/New_York"), "Jan 15, 4:00 PM EST");
 }
 
 {
@@ -26,11 +26,22 @@ function period(type: "daily" | "weekly" | "monthly" | "yearly", iso: string, ti
 
 {
   const spring = period("daily", "2026-03-08T21:00:00.000Z");
-  const fall = period("daily", "2026-11-01T22:00:00.000Z");
+  const fall = period("daily", "2026-11-01T21:00:00.000Z");
   assert.equal(spring.startUtc, "2026-03-08T21:00:00.000Z");
-  assert.equal(fall.startUtc, "2026-11-01T22:00:00.000Z");
+  assert.equal(fall.startUtc, "2026-11-01T21:00:00.000Z");
   assert.equal(formatPresentation(spring.startUtc, "America/New_York"), "Mar 08, 5:00 PM EDT");
-  assert.equal(formatPresentation(fall.startUtc, "America/New_York"), "Nov 01, 5:00 PM EST");
+  assert.equal(formatPresentation(fall.startUtc, "America/New_York"), "Nov 01, 4:00 PM EST");
+}
+
+{
+  for (const [season, iso] of [["summer", "2026-08-12T21:00:00.000Z"], ["winter", "2026-01-15T21:00:00.000Z"]] as const) {
+    const daily = period("daily", iso);
+    const weekly = period("weekly", iso);
+    assert.equal(daily.startUtc.endsWith("T21:00:00.000Z"), true, `${season} daily boundary must be fixed at 21:00 UTC`);
+    assert.equal(daily.endUtc.endsWith("T21:00:00.000Z"), true, `${season} daily end boundary must be fixed at 21:00 UTC`);
+    assert.equal(weekly.startUtc.endsWith("T21:00:00.000Z"), true, `${season} weekly open boundary must be fixed at 21:00 UTC`);
+    assert.equal(weekly.endUtc.endsWith("T21:00:00.000Z"), true, `${season} weekly close boundary must be fixed at 21:00 UTC`);
+  }
 }
 
 {
@@ -64,11 +75,11 @@ function period(type: "daily" | "weekly" | "monthly" | "yearly", iso: string, ti
 }
 
 {
-  const yearBefore = period("yearly", "2027-01-01T21:59:59.000Z");
-  const yearExact = period("yearly", "2027-01-01T22:00:00.000Z");
-  assert.equal(yearBefore.startUtc, "2026-01-01T22:00:00.000Z");
-  assert.equal(yearBefore.endUtc, "2027-01-01T22:00:00.000Z");
-  assert.equal(yearExact.startUtc, "2027-01-01T22:00:00.000Z");
+  const yearBefore = period("yearly", "2027-01-01T20:59:59.000Z");
+  const yearExact = period("yearly", "2027-01-01T21:00:00.000Z");
+  assert.equal(yearBefore.startUtc, "2026-01-01T21:00:00.000Z");
+  assert.equal(yearBefore.endUtc, "2027-01-01T21:00:00.000Z");
+  assert.equal(yearExact.startUtc, "2027-01-01T21:00:00.000Z");
 }
 
 {

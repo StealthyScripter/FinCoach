@@ -271,7 +271,7 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
     const opened = runtime.status();
     assert.equal(opened.weeklyResearchSchedule.nextWakeKind, "close");
     assert.equal(opened.weeklyResearchSchedule.nextWakeAt, "2026-08-14T21:00:00.000Z");
-    assert.equal(opened.weeklyResearchSchedule.configuredWeeklyCloseAt, "2026-08-14T22:00:00.000Z");
+    assert.equal(opened.weeklyResearchSchedule.configuredWeeklyCloseAt, "2026-08-14T21:00:00.000Z");
     assert.equal(opened.weeklyResearchSchedule.aggregateFinalTradableCloseAt, "2026-08-14T21:00:00.000Z");
     assert.equal(opened.weeklyResearchSchedule.nextWakeSource, "aggregate_final_tradable_close");
     assert.equal(opened.researchSchedulerActive, true);
@@ -308,10 +308,10 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
       await flushAsync();
       const status = runtime.status();
       assert.equal(status.aggregateTradableWindow.anyConfiguredInstrumentTradable, expectation.open);
-      if (iso < "2026-08-14T22:00:00.000Z") {
-        assert.equal(status.weeklyResearchSchedule.configuredWeeklyCloseAt, "2026-08-14T22:00:00.000Z");
+      if (iso < "2026-08-14T21:00:00.000Z") {
+        assert.equal(status.weeklyResearchSchedule.configuredWeeklyCloseAt, "2026-08-14T21:00:00.000Z");
       } else {
-        assert.equal(status.weeklyResearchSchedule.previousConfiguredWeeklyCloseAt, "2026-08-14T22:00:00.000Z");
+        assert.equal(status.weeklyResearchSchedule.previousConfiguredWeeklyCloseAt, "2026-08-14T21:00:00.000Z");
       }
       assert.equal(status.weeklyResearchSchedule.nextWakeAt, expectation.wake);
       assert.equal(status.weeklyResearchSchedule.nextWakeKind, expectation.kind);
@@ -385,8 +385,8 @@ for (const [iso, expected] of [
     (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
     const status = await runtime.start();
     assert.equal(status.weeklyResearchSchedule.nextWakeKind, "lead");
-    assert.equal(status.weeklyResearchSchedule.nextWakeAt, "2026-11-01T21:30:00.000Z");
-    assert.equal(status.weeklyResearchSchedule.nextOpen, "2026-11-01T22:00:00.000Z");
+    assert.equal(status.weeklyResearchSchedule.nextWakeAt, "2026-11-01T20:30:00.000Z");
+    assert.equal(status.weeklyResearchSchedule.nextOpen, "2026-11-01T21:00:00.000Z");
     await runtime.stop("test");
   } finally {
     restoreClock();

@@ -23,19 +23,19 @@ console.log("market session scheduler tests passed");
 
 async function weeklyAggregateWaitsForLastConfiguredInstrument() {
   setEnv({ FINCOACH_V2_SYMBOLS: "EUR_USD,BTC_USD" });
-  const fridayAfterFxClose = new Date("2026-07-31T21:30:00.000Z"); // Friday 5:30 PM New York.
-  const aggregate = marketSessionsService.aggregateTradableWindow(fridayAfterFxClose);
+  const fridayBeforeFixedClose = new Date("2026-07-31T20:30:00.000Z");
+  const aggregate = marketSessionsService.aggregateTradableWindow(fridayBeforeFixedClose);
   assert.equal(aggregate.anyConfiguredInstrumentTradable, true);
-  assert.deepEqual(aggregate.instrumentsRemainingOpen, ["BTC_USD"]);
-  assert.equal(aggregate.finalWeeklyCloseAt, "2026-07-31T22:00:00.000Z");
+  assert.deepEqual(aggregate.instrumentsRemainingOpen.sort(), ["BTC_USD", "EUR_USD"]);
+  assert.equal(aggregate.finalWeeklyCloseAt, "2026-07-31T21:00:00.000Z");
 }
 
 async function individualExchangeCloseDoesNotStopAggregate() {
   setEnv({ FINCOACH_V2_SYMBOLS: "EUR_USD,BTC_USD" });
   const fridayAfterFxClose = new Date("2026-07-31T21:30:00.000Z");
   const aggregate = marketSessionsService.aggregateTradableWindow(fridayAfterFxClose);
-  assert.equal(aggregate.anyConfiguredInstrumentTradable, true);
-  assert.ok(aggregate.instrumentsRemainingOpen.includes("BTC_USD"));
+  assert.equal(aggregate.anyConfiguredInstrumentTradable, false);
+  assert.deepEqual(aggregate.instrumentsRemainingOpen, []);
 }
 
 async function unknownConfiguredInstrumentFailsClosed() {
@@ -46,7 +46,7 @@ async function unknownConfiguredInstrumentFailsClosed() {
 }
 
 async function continuousMarketMaintenanceApplies() {
-  setEnv({ FINCOACH_V2_SYMBOLS: "BTC_USD", FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_TIME: "18:00", FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_TIME: "17:00" });
+  setEnv({ FINCOACH_V2_SYMBOLS: "BTC_USD" });
   const duringMaintenance = marketSessionsService.aggregateTradableWindow(new Date("2026-07-31T23:30:00.000Z"));
   assert.equal(duringMaintenance.anyConfiguredInstrumentTradable, false);
   assert.equal(duringMaintenance.nextTradableOpenAt, "2026-08-02T21:00:00.000Z");
@@ -114,15 +114,15 @@ function setEnv(values: Record<string, string>) {
     FINCOACH_V2_SYMBOLS: symbols,
     FINCOACH_V2_OBSERVATION_SYMBOLS: symbols,
     FINCOACH_WEEKLY_RESEARCH_SCHEDULE_ENABLED: "true",
-    FINCOACH_WEEKLY_RESEARCH_TIMEZONE: "America/New_York",
+    FINCOACH_WEEKLY_RESEARCH_TIMEZONE: "UTC",
     FINCOACH_WEEKLY_RESEARCH_OPEN_DAY: "0",
-    FINCOACH_WEEKLY_RESEARCH_OPEN_TIME: "17:00",
+    FINCOACH_WEEKLY_RESEARCH_OPEN_TIME: "21:00",
     FINCOACH_WEEKLY_RESEARCH_CLOSE_DAY: "5",
-    FINCOACH_WEEKLY_RESEARCH_CLOSE_TIME: "18:00",
+    FINCOACH_WEEKLY_RESEARCH_CLOSE_TIME: "21:00",
     FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_DAY: "5",
-    FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_TIME: "18:00",
+    FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_TIME: "21:00",
     FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_DAY: "0",
-    FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_TIME: "17:00",
+    FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_TIME: "21:00",
     ...values,
     FINCOACH_V2_SYMBOLS: symbols,
     FINCOACH_V2_OBSERVATION_SYMBOLS: symbols,

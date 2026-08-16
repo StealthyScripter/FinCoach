@@ -52,11 +52,11 @@ assert.equal(resolveResearchInstrument("BTC_USD"), null);
   const fridayAfterFxClose = new Date("2026-08-14T21:30:00.000Z");
   const sessions = marketSessionsService.instrumentSessions(["EUR_USD", "BTC_USD"], fridayAfterFxClose);
   assert.equal(sessions.find(item => item.symbol === "EUR_USD")?.status, "closed");
-  assert.equal(sessions.find(item => item.symbol === "BTC_USD")?.status, "open");
+  assert.equal(sessions.find(item => item.symbol === "BTC_USD")?.status, "closed");
   const aggregate = marketSessionsService.aggregateTradableWindow(fridayAfterFxClose, ["EUR_USD", "BTC_USD"]);
-  assert.equal(aggregate.anyConfiguredInstrumentTradable, true);
-  assert.deepEqual(aggregate.instrumentsRemainingOpen, ["BTC_USD"]);
-  assert.equal(aggregate.finalWeeklyCloseAt, "2026-08-14T22:00:00.000Z");
+  assert.equal(aggregate.anyConfiguredInstrumentTradable, false);
+  assert.deepEqual(aggregate.instrumentsRemainingOpen, []);
+  assert.equal(aggregate.finalWeeklyCloseAt, null);
 }
 
 {

@@ -25,7 +25,7 @@ const notifications = {
   },
 };
 
-const config = { enabled: true, timezone: "America/New_York", openDay: 0, openTime: "17:00", closeDay: 5, closeTime: "18:00", startLeadMinutes: 5 };
+const config = { enabled: true, timezone: "UTC", openDay: 0, openTime: "21:00", closeDay: 5, closeTime: "21:00", startLeadMinutes: 5 };
 const fixtureWeekOffset = Date.now() % 500;
 const openBoundary = new Date(Date.UTC(2099, 7, 9 + fixtureWeekOffset * 7, 21, 0, 0)).toISOString();
 const closeBoundary = new Date(Date.UTC(2099, 7, 14 + fixtureWeekOffset * 7, 21, 0, 0)).toISOString();

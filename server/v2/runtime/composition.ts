@@ -1377,7 +1377,7 @@ function previousWeeklyCloseAt(config: V2RuntimeConfig["weeklyResearchSchedule"]
 }
 
 function previousFinalFridayCloseAt(now = new Date()) {
-  return weeklyResearchWindowState({ enabled: true, timezone: "America/New_York", openDay: 0, openTime: "17:00", closeDay: 5, closeTime: "17:00", startLeadMinutes: 0 }, new Date(now.getTime() - 7 * 24 * 60 * 60_000)).nextWindowClosesAt;
+  return weeklyResearchWindowState({ enabled: true, timezone: "UTC", openDay: 0, openTime: "21:00", closeDay: 5, closeTime: "21:00", startLeadMinutes: 0 }, new Date(now.getTime() - 7 * 24 * 60 * 60_000)).nextWindowClosesAt;
 }
 
 export function createFinCoachV2Runtime(env: NodeJS.ProcessEnv = process.env) {

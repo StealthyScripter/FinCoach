@@ -224,8 +224,8 @@ export class MarketSessionsService {
 
 function weeklyTemplate(assetClass: "forex" | "commodity") {
   return assetClass === "forex"
-    ? { enabled: true, timezone: "America/New_York", openDay: 0, openTime: "17:00", closeDay: 5, closeTime: "17:00", startLeadMinutes: 0 }
-    : { enabled: true, timezone: "America/New_York", openDay: 0, openTime: "18:00", closeDay: 5, closeTime: "17:00", startLeadMinutes: 0 };
+    ? { enabled: true, timezone: "UTC", openDay: 0, openTime: "21:00", closeDay: 5, closeTime: "21:00", startLeadMinutes: 0 }
+    : { enabled: true, timezone: "UTC", openDay: 0, openTime: "21:00", closeDay: 5, closeTime: "21:00", startLeadMinutes: 0 };
 }
 
 function cryptoSession(symbol: string, now: Date, policy: ContinuousMarketWeeklyPauseConfig): InstrumentSessionStatus {

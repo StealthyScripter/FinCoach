@@ -1,4 +1,4 @@
-import { ACCOUNTING_TIMEZONE, addLocalDays, formatPeriodPresentation, localDateKey, localParts, presentationTimezone, zonedTimeToUtc } from "./timeService";
+import { ACCOUNTING_BOUNDARY_HOUR_UTC, ACCOUNTING_TIMEZONE, addLocalDays, formatPeriodPresentation, localParts, presentationTimezone } from "./timeService";
 
 export type AccountingPeriodType = "daily" | "weekly" | "monthly" | "yearly";
 
@@ -45,25 +45,18 @@ export function adjacentAccountingPeriods(type: AccountingPeriodType, now = new 
 }
 
 function dailyAccountingRange(now: Date) {
-  const parts = localParts(now, ACCOUNTING_TIMEZONE);
-  let startDate = localDateKey(now, ACCOUNTING_TIMEZONE);
-  if (parts.hour < 17) startDate = addLocalDays(startDate, -1);
+  let startDate = utcDateKey(now);
+  if (now.getUTCHours() < ACCOUNTING_BOUNDARY_HOUR_UTC) startDate = addLocalDays(startDate, -1);
   const endDate = addLocalDays(startDate, 1);
   return { start: boundaryUtc(startDate), end: boundaryUtc(endDate) };
 }
 
 function weeklyAccountingRange(now: Date) {
-  const parts = localParts(now, ACCOUNTING_TIMEZONE);
-  const dayKey = localDateKey(now, ACCOUNTING_TIMEZONE);
-  let sundayKey = addLocalDays(dayKey, -parts.weekday);
-  if (parts.weekday === 0 && parts.hour < 17) sundayKey = addLocalDays(sundayKey, -7);
+  const dayKey = utcDateKey(now);
+  let sundayKey = addLocalDays(dayKey, -now.getUTCDay());
+  if (now.getTime() < boundaryUtc(sundayKey).getTime()) sundayKey = addLocalDays(sundayKey, -7);
   const fridayKey = addLocalDays(sundayKey, 5);
-  const sundayBoundary = boundaryUtc(sundayKey);
-  const fridayBoundary = boundaryUtc(fridayKey);
-  if (now.getTime() >= fridayBoundary.getTime()) {
-    return { start: sundayBoundary, end: fridayBoundary };
-  }
-  return { start: sundayBoundary, end: fridayBoundary };
+  return { start: boundaryUtc(sundayKey), end: boundaryUtc(fridayKey) };
 }
 
 function monthlyAccountingRange(now: Date) {
@@ -72,7 +65,7 @@ function monthlyAccountingRange(now: Date) {
   const startKey = `${parts.year}-${String(parts.month).padStart(2, "0")}-01`;
   const nextMonth = parts.month === 12 ? { year: parts.year + 1, month: 1 } : { year: parts.year, month: parts.month + 1 };
   const nextKey = `${nextMonth.year}-${String(nextMonth.month).padStart(2, "0")}-01`;
-  // Monthly P/L aggregates accounting days whose 17:00 New York start date falls in the calendar month.
+  // Monthly P/L aggregates accounting days whose fixed 21:00 UTC start date falls in the calendar month.
   return { start: boundaryUtc(startKey), end: boundaryUtc(nextKey) };
 }
 
@@ -83,7 +76,15 @@ function yearlyAccountingRange(now: Date) {
 }
 
 function boundaryUtc(localDate: string) {
-  return zonedTimeToUtc(`${localDate}T17:00:00`, ACCOUNTING_TIMEZONE);
+  return new Date(`${localDate}T${String(ACCOUNTING_BOUNDARY_HOUR_UTC).padStart(2, "0")}:00:00.000Z`);
+}
+
+export function accountingDateKey(now = new Date()) {
+  return dailyAccountingRange(now).start.toISOString().slice(0, 10);
+}
+
+function utcDateKey(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
 function formatPeriodBoundary(date: Date, timezone: string) {

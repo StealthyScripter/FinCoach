@@ -78,7 +78,7 @@ function instrument(
     tickSize,
     lotSize,
     marginRequirement,
-    sessionHours: assetClass === "forex" ? "Sun 17:00-Fri 17:00 America/New_York" : "Provider session; daily maintenance break applies",
+    sessionHours: assetClass === "forex" ? "Sun 21:00-Fri 21:00 UTC" : "Provider session; daily maintenance break applies",
     providerMappings,
   };
 }

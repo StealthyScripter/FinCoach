@@ -1,5 +1,7 @@
 export const DEFAULT_PRESENTATION_TIMEZONE = "America/New_York";
-export const ACCOUNTING_TIMEZONE = "America/New_York";
+export const ACCOUNTING_TIMEZONE = "UTC";
+export const ACCOUNTING_BOUNDARY_HOUR_UTC = 21;
+export const ACCOUNTING_BOUNDARY_LABEL = "21:00 UTC";
 
 export function presentationTimezone(env: NodeJS.ProcessEnv = process.env) {
   return validIanaTimezone(env.FINCOACH_PRESENTATION_TIMEZONE) ? env.FINCOACH_PRESENTATION_TIMEZONE!.trim() : DEFAULT_PRESENTATION_TIMEZONE;

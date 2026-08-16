@@ -27,15 +27,16 @@ export class MarketSessionRulesService {
     const parsed = marketSessionRulesInputSchema.parse(input);
     const now = parsed.now ?? new Date();
     const eastern = getEasternMoment(now);
+    const utc = getUtcMoment(now);
     const holiday = isUsMarketHoliday(eastern.year, eastern.month, eastern.day);
-    const marketHoursOpen = this.marketHoursOpen(parsed.assetClass, eastern);
-    const rolloverWindowActive = parsed.assetClass === "forex" && eastern.weekday === 5 && (eastern.hour > 17 || (eastern.hour === 17 && eastern.minute >= 0));
+    const marketHoursOpen = this.marketHoursOpen(parsed.assetClass, eastern, utc);
+    const rolloverWindowActive = parsed.assetClass === "forex" && utc.weekday === 5 && afterOrEqual(utc, 21, 0);
     const financingRequired = parsed.assetClass === "forex" && parsed.positionHeldOvernight;
     const projectedMarginUsagePct = parsed.accountEquity > 0 ? parsed.projectedMarginUsed / parsed.accountEquity * 100 : 100;
     const currentMarginUsagePct = parsed.accountEquity > 0 ? parsed.currentMarginUsed / parsed.accountEquity * 100 : 100;
 
     const checks: MarketSessionRuleCheck[] = [
-      check("market_hours", marketHoursOpen, this.marketHoursLabel(parsed.assetClass, eastern), this.marketHoursAction(parsed.assetClass)),
+      check("market_hours", marketHoursOpen, this.marketHoursLabel(parsed.assetClass, marketHoursOpen), this.marketHoursAction(parsed.assetClass)),
       check("holiday", !holiday, holidayLabel(eastern), "Avoid execution on the market holiday"),
       check("rollover", !rolloverWindowActive, "Forex rollover window is closed", "Avoid initiating forex exposure at the broker cutoff"),
       check("financing", !financingRequired || parsed.financingAcknowledged, financingRequired
@@ -74,23 +75,22 @@ export class MarketSessionRulesService {
     };
   }
 
-  private marketHoursOpen(assetClass: z.infer<typeof marketSessionAssetClassSchema>, eastern: EasternMoment) {
+  private marketHoursOpen(assetClass: z.infer<typeof marketSessionAssetClassSchema>, eastern: EasternMoment, utc: EasternMoment) {
     if (isUsMarketHoliday(eastern.year, eastern.month, eastern.day)) return false;
     if (assetClass === "equity") return isWeekday(eastern.weekday) && afterOrEqual(eastern, 9, 30) && before(eastern, 16, 0);
     if (assetClass === "commodity") {
-      if (eastern.weekday === 0) return afterOrEqual(eastern, 18, 0);
-      if (eastern.weekday === 6) return false;
-      if (eastern.weekday === 5) return before(eastern, 17, 0);
-      return !(afterOrEqual(eastern, 17, 0) && before(eastern, 18, 0));
+      if (utc.weekday === 0) return afterOrEqual(utc, 21, 0);
+      if (utc.weekday === 6) return false;
+      if (utc.weekday === 5) return before(utc, 21, 0);
+      return !(afterOrEqual(utc, 21, 0) && before(utc, 22, 0));
     }
-    if (eastern.weekday === 0) return afterOrEqual(eastern, 17, 0);
-    if (eastern.weekday === 6) return false;
-    if (eastern.weekday === 5) return before(eastern, 17, 0);
+    if (utc.weekday === 0) return afterOrEqual(utc, 21, 0);
+    if (utc.weekday === 6) return false;
+    if (utc.weekday === 5) return before(utc, 21, 0);
     return true;
   }
 
-  private marketHoursLabel(assetClass: z.infer<typeof marketSessionAssetClassSchema>, eastern: EasternMoment) {
-    const open = this.marketHoursOpen(assetClass, eastern);
+  private marketHoursLabel(assetClass: z.infer<typeof marketSessionAssetClassSchema>, open: boolean) {
     return open ? `${assetClass} market hours are open` : `${assetClass} market hours are closed`;
   }
 
@@ -129,6 +129,17 @@ function getEasternMoment(now: Date): EasternMoment {
     weekday: weekdayToNumber(String(values.weekday ?? "")),
     hour: Number(values.hour),
     minute: Number(values.minute),
+  };
+}
+
+function getUtcMoment(now: Date): EasternMoment {
+  return {
+    year: now.getUTCFullYear(),
+    month: now.getUTCMonth() + 1,
+    day: now.getUTCDate(),
+    weekday: now.getUTCDay(),
+    hour: now.getUTCHours(),
+    minute: now.getUTCMinutes(),
   };
 }
 

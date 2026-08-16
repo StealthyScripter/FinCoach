@@ -153,7 +153,7 @@ export function validateResearchUniverse(symbols: string[]): ResearchInstrumentV
     marketCalendarValidation: {
       status: validated.length ? "partial" : "unavailable",
       reason: validated.length
-        ? "Calendar support uses built-in FX/commodity session rules with DST-aware America/New_York boundaries, not an exchange holiday feed."
+        ? "Calendar support uses built-in FX/commodity session rules with a fixed 21:00 UTC weekly boundary, not an exchange holiday feed."
         : "No validated symbol has market-calendar support.",
     },
   };

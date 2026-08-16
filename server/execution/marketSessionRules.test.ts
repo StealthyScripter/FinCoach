@@ -25,6 +25,29 @@ const forexSundayBoundaryOpen = marketSessionRulesService.evaluate({
 assert.equal(forexSundayBoundaryOpen.marketHoursOpen, true);
 assert.equal(forexSundayBoundaryOpen.phase, "open");
 
+const forexWinterSundayBoundaryOpen = marketSessionRulesService.evaluate({
+  assetClass: "forex",
+  now: new Date("2026-11-01T21:00:00.000Z"),
+  accountEquity: 100_000,
+  currentMarginUsed: 10_000,
+  projectedMarginUsed: 20_000,
+  positionHeldOvernight: false,
+  financingAcknowledged: true,
+});
+assert.equal(forexWinterSundayBoundaryOpen.marketHoursOpen, true);
+assert.equal(forexWinterSundayBoundaryOpen.phase, "open");
+
+const forexWinterFridayBoundaryClosed = marketSessionRulesService.evaluate({
+  assetClass: "forex",
+  now: new Date("2026-11-06T21:00:00.000Z"),
+  accountEquity: 100_000,
+  currentMarginUsed: 10_000,
+  projectedMarginUsed: 20_000,
+  positionHeldOvernight: false,
+  financingAcknowledged: true,
+});
+assert.equal(forexWinterFridayBoundaryClosed.marketHoursOpen, false);
+
 const holidayClosed = marketSessionRulesService.evaluate({
   assetClass: "commodity",
   now: new Date("2026-07-04T14:00:00.000Z"),
