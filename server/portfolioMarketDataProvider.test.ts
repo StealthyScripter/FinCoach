@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { AlphaVantagePortfolioMarketDataProvider } from "./portfolio/marketData";
+import { AlphaVantagePortfolioMarketDataProvider, FixturePortfolioMarketDataProvider, PortfolioMarketDataRouter } from "./portfolio/marketData";
+import { optionMarketValue, settleExpiredOption } from "./portfolio/options";
 import { loadPortfolioConfig } from "./portfolio/config";
 
 const calls: string[] = [];
@@ -25,6 +26,9 @@ const fetchMock = async (url: URL | RequestInfo) => {
   if (fn === "MARKET_STATUS") {
     return response({ markets: [{ market_type: "Equity", region: "United States", primary_exchanges: "NASDAQ, NYSE", current_status: "open" }] });
   }
+  if (fn === "REALTIME_OPTIONS") {
+    return response({ data: [{ contractID: "SPY260918C00550000", type: "call", strike: "550", expiration: "2026-09-18", bid: "10.10", ask: "10.30", last: "10.20", volume: "100", open_interest: "2000", implied_volatility: "0.22" }] });
+  }
   throw new Error(`unexpected function ${fn}`);
 };
 
@@ -38,7 +42,7 @@ const config = {
 const provider = new AlphaVantagePortfolioMarketDataProvider(config, fetchMock as never);
 assert.equal(provider.capabilities().live, true);
 assert.equal(provider.capabilities().fixture, false);
-assert.equal(provider.capabilities().options, false);
+assert.equal(provider.capabilities().options, true);
 
 const quote = await provider.getQuote("spy", "etf", new Date("2026-08-15T12:00:00.000Z"));
 assert.equal(quote.symbol, "SPY");
@@ -58,13 +62,26 @@ assert.equal(instruments[0].benchmarkEligible, true);
 
 const status = await provider.getMarketStatus!();
 assert.equal(status[0].status, "open");
+const options = await provider.getOptionChain!("SPY", { expiration: "2026-09-18", requireGreeks: true, now: new Date("2026-08-14T15:00:00.000Z") });
+assert.equal(options[0].contractId, "SPY260918C00550000");
+assert.equal(options[0].optionType, "call");
+assert.equal(options[0].multiplier, 100);
+assert.equal(options[0].lifecycle, "ACTIVE");
+assert.equal(optionMarketValue(options[0], 2), 2040);
+assert.equal(settleExpiredOption({ contract: { ...options[0], lifecycle: "EXPIRED" }, quantity: 1, underlyingQuote: null }).reason, "underlying_settlement_price_unavailable");
+const settled = settleExpiredOption({ contract: { ...options[0], lifecycle: "EXPIRED" }, quantity: 1, underlyingQuote: { symbol: "SPY", assetClass: "etf", bid: null, ask: null, last: 560, currency: "USD", observedAt: "2026-09-18T21:00:00.000Z", stale: false, source: "alpha-vantage", fixture: false } });
+assert.equal(settled.ok, true);
+assert.equal(settled.cashSettlement, 1000);
 
 await provider.getQuote("SPY", "etf");
 assert.equal(calls.filter((item) => item.includes("GLOBAL_QUOTE")).length, 1, "quote cache should avoid duplicate provider calls");
 assert.ok(calls.every((item) => !item.includes("ALPHA_VANTAGE_API_KEY")));
 
-await assert.rejects(() => provider.getQuote("SPY", "option"), /does not support option/);
+await assert.rejects(() => provider.getQuote("SPY", "option"), /getOptionChain/);
 assert.throws(() => new AlphaVantagePortfolioMarketDataProvider({ ...config, alphaVantageApiKey: null }), /ALPHA_VANTAGE_API_KEY/);
+const router = new PortfolioMarketDataRouter([new FixturePortfolioMarketDataProvider(), provider], true);
+assert.equal(router.providerFor("QUOTE", "etf").id, "alpha-vantage");
+assert.equal(router.providerFor("OPTIONS_CHAIN", "option").id, "alpha-vantage");
 
 assert.throws(() => loadPortfolioConfig({
   NODE_ENV: "production",

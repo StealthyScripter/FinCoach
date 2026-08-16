@@ -1,13 +1,14 @@
-import type { AssetClass, PortfolioHistoricalBar, PortfolioInstrument, PortfolioMarketStatus, PortfolioQuote } from "./domain";
+import type { AssetClass, PortfolioHistoricalBar, PortfolioInstrument, PortfolioMarketDataCapability, PortfolioMarketStatus, PortfolioOptionContract, PortfolioQuote } from "./domain";
 import type { PortfolioConfig } from "./config";
 
 export type PortfolioMarketDataProvider = {
   id: string;
-  capabilities(): { assetClasses: AssetClass[]; fixture: boolean; live: boolean; historical: boolean; latestQuote: boolean; search: boolean; marketStatus: boolean; options: boolean };
+  capabilities(): { assetClasses: AssetClass[]; capabilities: PortfolioMarketDataCapability[]; fixture: boolean; live: boolean; historical: boolean; latestQuote: boolean; search: boolean; marketStatus: boolean; options: boolean };
   getQuote(symbol: string, assetClass: AssetClass, now?: Date): Promise<PortfolioQuote>;
   getHistoricalBars?(symbol: string, assetClass: AssetClass, input?: { outputSize?: "compact" | "full"; now?: Date }): Promise<PortfolioHistoricalBar[]>;
   searchInstruments?(keywords: string): Promise<PortfolioInstrument[]>;
   getMarketStatus?(now?: Date): Promise<PortfolioMarketStatus[]>;
+  getOptionChain?(underlying: string, input?: { expiration?: string; contract?: string; historicalDate?: string; requireGreeks?: boolean; now?: Date }): Promise<PortfolioOptionContract[]>;
 };
 
 const FIXTURE_PRICES: Record<string, { price: number; assetClass: AssetClass }> = {
@@ -32,7 +33,7 @@ export class FixturePortfolioMarketDataProvider implements PortfolioMarketDataPr
   id = "portfolio-fixture-market-data";
 
   capabilities() {
-    return { assetClasses: ["equity", "etf", "bond", "index_proxy", "commodity", "fx", "option"] as AssetClass[], fixture: true, live: false, historical: true, latestQuote: true, search: true, marketStatus: true, options: false };
+    return { assetClasses: ["equity", "etf", "bond", "index_proxy", "commodity", "fx", "option"] as AssetClass[], capabilities: ["QUOTE", "HISTORICAL_OHLCV", "INSTRUMENT_SEARCH", "MARKET_STATUS"] as PortfolioMarketDataCapability[], fixture: true, live: false, historical: true, latestQuote: true, search: true, marketStatus: true, options: false };
   }
 
   async getQuote(symbol: string, assetClass: AssetClass, now = new Date()): Promise<PortfolioQuote> {
@@ -75,7 +76,7 @@ export class NoPortfolioMarketDataProvider implements PortfolioMarketDataProvide
   id = "portfolio-market-data-disabled";
 
   capabilities() {
-    return { assetClasses: [] as AssetClass[], fixture: false, live: false, historical: false, latestQuote: false, search: false, marketStatus: false, options: false };
+    return { assetClasses: [] as AssetClass[], capabilities: [] as PortfolioMarketDataCapability[], fixture: false, live: false, historical: false, latestQuote: false, search: false, marketStatus: false, options: false };
   }
 
   async getQuote(symbol: string): Promise<PortfolioQuote> {
@@ -93,7 +94,7 @@ export class AlphaVantagePortfolioMarketDataProvider implements PortfolioMarketD
   }
 
   capabilities() {
-    return { assetClasses: ["equity", "etf", "index_proxy"] as AssetClass[], fixture: false, live: true, historical: true, latestQuote: true, search: true, marketStatus: true, options: false };
+    return { assetClasses: ["equity", "etf", "index_proxy", "option"] as AssetClass[], capabilities: ["QUOTE", "HISTORICAL_OHLCV", "INSTRUMENT_SEARCH", "REFERENCE_DATA", "CORPORATE_ACTIONS", "OPTIONS_CHAIN", "OPTION_QUOTES", "MARKET_STATUS", "INDEX_DATA", "ETF_DATA"] as PortfolioMarketDataCapability[], fixture: false, live: true, historical: true, latestQuote: true, search: true, marketStatus: true, options: true };
   }
 
   async getQuote(symbol: string, assetClass: AssetClass, now = new Date()): Promise<PortfolioQuote> {
@@ -155,7 +156,20 @@ export class AlphaVantagePortfolioMarketDataProvider implements PortfolioMarketD
     return mapped.length ? mapped : [{ market: "unknown", region: "unknown", primaryExchanges: [], status: "unknown", reason: "provider_unavailable", observedAt: now.toISOString(), nextOpenAt: null, nextCloseAt: null, source: this.id }];
   }
 
+  async getOptionChain(underlying: string, input: { expiration?: string; contract?: string; historicalDate?: string; requireGreeks?: boolean; now?: Date } = {}): Promise<PortfolioOptionContract[]> {
+    const params: Record<string, string> = { symbol: underlying.toUpperCase() };
+    if (input.expiration) params.expiration = input.expiration;
+    if (input.contract) params.contract = input.contract;
+    if (input.requireGreeks) params.require_greeks = "true";
+    if (input.historicalDate) params.date = input.historicalDate;
+    const functionName = input.historicalDate ? "HISTORICAL_OPTIONS" : "REALTIME_OPTIONS";
+    const data = await this.query(functionName, params, `options:${functionName}:${underlying.toUpperCase()}:${input.expiration ?? "all"}:${input.contract ?? "all"}:${input.historicalDate ?? "current"}:${input.requireGreeks ? "greeks" : "nogreeks"}`);
+    const rows = Array.isArray(data.data) ? data.data : Array.isArray(data.options) ? data.options : [];
+    return rows.map((item: unknown) => mapAlphaOption(object(item), underlying.toUpperCase(), this.id, input.now ?? new Date()));
+  }
+
   private requireSupported(assetClass: AssetClass) {
+    if (assetClass === "option") throw providerError("unsupported_asset", "Use getOptionChain for option contracts.");
     if (!this.capabilities().assetClasses.includes(assetClass)) throw providerError("unsupported_asset", `Alpha Vantage provider does not support ${assetClass} in Portfolio mode.`);
   }
 
@@ -190,9 +204,70 @@ export class AlphaVantagePortfolioMarketDataProvider implements PortfolioMarketD
 export function createPortfolioMarketDataProvider(kind: "alpha_vantage" | "fixture" | "none", config?: PortfolioConfig): PortfolioMarketDataProvider {
   if (kind === "alpha_vantage") {
     if (!config) throw new Error("PortfolioConfig is required for Alpha Vantage market data.");
-    return new AlphaVantagePortfolioMarketDataProvider(config);
+    return new PortfolioMarketDataRouter([new AlphaVantagePortfolioMarketDataProvider(config)]);
   }
   return kind === "fixture" ? new FixturePortfolioMarketDataProvider() : new NoPortfolioMarketDataProvider();
+}
+
+export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
+  id = "portfolio-market-data-router";
+  constructor(private readonly providers: PortfolioMarketDataProvider[], private readonly production = process.env.NODE_ENV === "production") {}
+
+  capabilities() {
+    const usable = this.usableProviders();
+    return {
+      assetClasses: unique(usable.flatMap((provider) => provider.capabilities().assetClasses)),
+      capabilities: unique(usable.flatMap((provider) => provider.capabilities().capabilities)),
+      fixture: false,
+      live: usable.some((provider) => provider.capabilities().live),
+      historical: usable.some((provider) => provider.capabilities().historical),
+      latestQuote: usable.some((provider) => provider.capabilities().latestQuote),
+      search: usable.some((provider) => provider.capabilities().search),
+      marketStatus: usable.some((provider) => provider.capabilities().marketStatus),
+      options: usable.some((provider) => provider.capabilities().options),
+    };
+  }
+
+  async getQuote(symbol: string, assetClass: AssetClass, now?: Date) {
+    return this.providerFor("QUOTE", assetClass).getQuote(symbol, assetClass, now);
+  }
+
+  async getHistoricalBars(symbol: string, assetClass: AssetClass, input?: { outputSize?: "compact" | "full"; now?: Date }) {
+    const provider = this.providerFor("HISTORICAL_OHLCV", assetClass);
+    if (!provider.getHistoricalBars) throw providerError("capability_unavailable", "Historical OHLCV unavailable.");
+    return provider.getHistoricalBars(symbol, assetClass, input);
+  }
+
+  async searchInstruments(keywords: string) {
+    const provider = this.providerFor("INSTRUMENT_SEARCH");
+    if (!provider.searchInstruments) throw providerError("capability_unavailable", "Instrument search unavailable.");
+    return provider.searchInstruments(keywords);
+  }
+
+  async getMarketStatus(now?: Date) {
+    const provider = this.providerFor("MARKET_STATUS");
+    if (!provider.getMarketStatus) throw providerError("capability_unavailable", "Market status unavailable.");
+    return provider.getMarketStatus(now);
+  }
+
+  async getOptionChain(underlying: string, input?: { expiration?: string; contract?: string; historicalDate?: string; requireGreeks?: boolean; now?: Date }) {
+    const provider = this.providerFor("OPTIONS_CHAIN", "option");
+    if (!provider.getOptionChain) throw providerError("capability_unavailable", "Options chain unavailable.");
+    return provider.getOptionChain(underlying, input);
+  }
+
+  providerFor(capability: PortfolioMarketDataCapability, assetClass?: AssetClass) {
+    const provider = this.usableProviders().find((candidate) => {
+      const capabilities = candidate.capabilities();
+      return capabilities.capabilities.includes(capability) && (!assetClass || capabilities.assetClasses.includes(assetClass));
+    });
+    if (!provider) throw providerError("capability_unavailable", `No real provider is configured for ${capability}${assetClass ? `/${assetClass}` : ""}.`);
+    return provider;
+  }
+
+  private usableProviders() {
+    return this.providers.filter((provider) => !(this.production && provider.capabilities().fixture));
+  }
 }
 
 function instrument(symbol: string, displayName: string, assetClass: AssetClass, provider: string, extra: Partial<PortfolioInstrument> = {}): PortfolioInstrument {
@@ -235,4 +310,41 @@ function providerError(code: string, message: string) {
   const error = new Error(message) as Error & { code: string };
   error.code = code;
   return error;
+}
+
+function mapAlphaOption(row: Record<string, unknown>, underlying: string, source: string, now: Date): PortfolioOptionContract {
+  const expiration = string(row.expiration) || string(row.expirationDate);
+  const contractId = string(row.contractID) || string(row.contract) || string(row.symbol);
+  const typeValue = string(row.type || row.option_type || row.optionType).toLowerCase();
+  if (!contractId || !expiration) throw providerError("malformed_response", "Option contract response missing contract ID or expiration.");
+  return {
+    contractId,
+    underlying,
+    optionType: typeValue === "put" ? "put" : "call",
+    strike: requiredNumber(row.strike, `option strike ${contractId}`),
+    expiration,
+    multiplier: 100,
+    bid: number(row.bid),
+    ask: number(row.ask),
+    last: number(row.last) ?? number(row.mark),
+    volume: number(row.volume),
+    openInterest: number(row.open_interest ?? row.openInterest),
+    impliedVolatility: number(row.implied_volatility ?? row.impliedVolatility),
+    observedAt: now.toISOString(),
+    lifecycle: optionLifecycle(expiration, now),
+    source,
+    fixture: false,
+  };
+}
+
+function optionLifecycle(expiration: string, now: Date): PortfolioOptionContract["lifecycle"] {
+  const expiry = Date.parse(`${expiration}T21:00:00.000Z`);
+  if (!Number.isFinite(expiry)) return "ACTIVE";
+  if (now.getTime() > expiry) return "EXPIRED";
+  if (expiry - now.getTime() <= 3 * 86_400_000) return "EXPIRING";
+  return "ACTIVE";
+}
+
+function unique<T>(values: T[]) {
+  return [...new Set(values)];
 }

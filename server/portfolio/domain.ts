@@ -163,6 +163,39 @@ export type PortfolioMarketStatus = {
   source: string;
 };
 
+export type PortfolioMarketDataCapability =
+  | "QUOTE"
+  | "HISTORICAL_OHLCV"
+  | "INSTRUMENT_SEARCH"
+  | "REFERENCE_DATA"
+  | "CORPORATE_ACTIONS"
+  | "OPTIONS_CHAIN"
+  | "OPTION_QUOTES"
+  | "MARKET_STATUS"
+  | "INDEX_DATA"
+  | "ETF_DATA"
+  | "FIXED_INCOME_DATA"
+  | "FX_DATA";
+
+export type PortfolioOptionContract = {
+  contractId: string;
+  underlying: string;
+  optionType: "call" | "put";
+  strike: number;
+  expiration: string;
+  multiplier: number;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  volume: number | null;
+  openInterest: number | null;
+  impliedVolatility: number | null;
+  observedAt: string;
+  lifecycle: "ACTIVE" | "EXPIRING" | "EXPIRED";
+  source: string;
+  fixture: boolean;
+};
+
 export type PortfolioSummary = {
   portfolioId: string;
   strategyId: string;
