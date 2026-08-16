@@ -6,6 +6,16 @@ export function registerPortfolioRoutes(app: Express) {
     res.json(await portfolioPlatformService.health());
   });
 
+  app.get("/api/portfolio/readiness", async (_req, res) => {
+    const health = await portfolioPlatformService.health();
+    res.json(health.readiness);
+  });
+
+  app.get("/api/portfolio/provider", async (_req, res) => {
+    const health = await portfolioPlatformService.health();
+    res.json({ providerHealth: health.providerHealth, lastSuccessfulMarketDataRefresh: health.lastSuccessfulMarketDataRefresh, marketDataAgeSeconds: health.marketDataAgeSeconds, fallbacks: health.fallbacks, blockers: health.blockers });
+  });
+
   app.get("/api/portfolio/summary", async (_req, res) => {
     res.json({ portfolios: await portfolioPlatformService.summaries() });
   });

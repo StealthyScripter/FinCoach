@@ -8,6 +8,7 @@ import { structuredLogger } from "../structuredLogger";
 import { VirtualPortfolioBroker } from "./broker";
 import { accountingSnapshot } from "./accounting";
 import { PortfolioResearchEngine, researchAllocation } from "./research";
+import { portfolioReadiness } from "./readiness";
 
 type RankedSummary = PortfolioSummary & { score: number; confidence: number };
 export type PortfolioPlatformLike = Pick<PortfolioPlatformService, "summaries" | "health">;
@@ -197,7 +198,7 @@ export class PortfolioPlatformService {
       fallbacks: this.config.marketDataProvider === "fixture" ? [{ code: "portfolio_fixture_market_data", expected: true, action: "Configure a production market-data provider before relying on live valuations." }] : [],
       marketDataAgeSeconds: this.lastRefresh ? Math.max(0, Math.round((now.getTime() - Date.parse(this.lastRefresh)) / 1000)) : null,
       schedulerHealth: this.config.autostart ? "idle" : "disabled",
-      readiness: readiness(this.config, this.marketData, this.blockers),
+      readiness: portfolioReadiness({ config: this.config, provider: this.marketData, blockers: this.blockers }),
     };
   }
 
@@ -208,7 +209,7 @@ export class PortfolioPlatformService {
     const { nav, marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct, monthlyPnl, monthlyPct, allTimePnl, allTimePct } = snapshot;
     await this.repository.saveNav({ portfolioId: portfolio.id, nav, cash: portfolio.cash, marketValue, realizedPnl: snapshot.realizedPnl, unrealizedPnl: snapshot.unrealizedPnl, dailyPnl, weeklyPnl, source: this.marketData.id, stale: positions.some((item) => item.stale), observedAt: now.toISOString(), idempotencyKey: `${portfolio.id}:${now.toISOString().slice(0, 13)}` });
     const confidence = confidenceFor(strategy);
-    const readinessStatus = readiness(this.config, this.marketData, this.blockers).status;
+    const readinessStatus = portfolioReadiness({ config: this.config, provider: this.marketData, blockers: this.blockers }).status;
     return { portfolioId: portfolio.id, strategyId: strategy.id, shortName: strategy.shortName, name: strategy.name, description: strategy.description, riskLevel: strategy.riskLevel, riskLabel: strategy.riskLabel, mandate: strategy.mandate, lifecycleState: strategy.lifecycleState, rank: null, nav, cash: round(portfolio.cash), marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct, monthlyPnl, monthlyPct, allTimePnl, allTimePct, stale: positions.some((item) => item.stale), providerSource: this.marketData.id, benchmarkSymbol: strategy.benchmarkSymbol, readinessStatus, score: allTimePct - strategy.riskLevel * 0.05 + confidence, confidence };
   }
 
@@ -292,22 +293,4 @@ function round(value: number) {
 function isWeekend(now: Date) {
   const day = now.getUTCDay();
   return day === 0 || day === 6;
-}
-
-function readiness(config: PortfolioConfig, marketData: PortfolioMarketDataProvider, blockers: Array<Record<string, unknown>>) {
-  const capabilities = marketData.capabilities();
-  const marketDataReady = config.enabled && capabilities.live && !capabilities.fixture;
-  const baseBlockers = [...blockers.map((item) => ({ code: String(item.code ?? "portfolio_blocker"), action: String(item.action ?? "Resolve Portfolio blocker.") }))];
-  if (!marketDataReady) baseBlockers.push({ code: "portfolio_market_data_not_production_ready", action: "Configure FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER=alpha_vantage with ALPHA_VANTAGE_API_KEY." });
-  return {
-    status: marketDataReady ? "ready" as const : "not_ready" as const,
-    marketDataReady,
-    researchReady: marketDataReady,
-    validationReady: marketDataReady,
-    virtualForwardReady: marketDataReady,
-    authReady: process.env.FINCOACH_AUTH_REQUIRED !== "false",
-    persistenceReady: Boolean(process.env.DATABASE_URL),
-    liveExecutionBlocked: true as const,
-    blockers: baseBlockers,
-  };
 }
