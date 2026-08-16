@@ -29,11 +29,14 @@ type PortfolioSummary = {
   dailyPct: number;
   weeklyPnl: number;
   weeklyPct: number;
+  monthlyPnl: number;
+  monthlyPct: number;
   allTimePnl: number;
   allTimePct: number;
   stale: boolean;
   providerSource: string;
   benchmarkSymbol: string;
+  readinessStatus?: "ready" | "not_ready";
 };
 
 type PortfolioDetail = PortfolioSummary & {
@@ -44,6 +47,9 @@ type PortfolioDetail = PortfolioSummary & {
   benchmark: { symbol: string; available: boolean; reason?: string };
   lineage: { strategyVersion: number; researchHypothesis: string; parameters: Record<string, unknown> };
 };
+
+type PortfolioOrder = { id: string; side: string; symbol: string | null; quantity: number | null; status: string; reason: string; submittedAt: string; filledAt: string | null };
+type PortfolioTransaction = { id: string; side: string; symbol: string; quantity: number; price: number; fee: number; realizedPnl: number; executedAt: string };
 
 export default function PortfolioLab() {
   const params = useParams<{ id?: string }>();
@@ -101,11 +107,11 @@ function PortfolioOverview() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Rank</TableHead><TableHead>Strategy</TableHead><TableHead>NAV</TableHead><TableHead>Daily</TableHead><TableHead>Weekly</TableHead><TableHead>Risk</TableHead><TableHead>Status</TableHead>
+                  <TableHead>Rank</TableHead><TableHead>Strategy</TableHead><TableHead>NAV</TableHead><TableHead>Daily</TableHead><TableHead>Weekly</TableHead><TableHead>Monthly</TableHead><TableHead>All-time</TableHead><TableHead>Risk</TableHead><TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {isLoading && <TableRow><TableCell colSpan={7}>Loading portfolios...</TableCell></TableRow>}
+                {isLoading && <TableRow><TableCell colSpan={9}>Loading portfolios...</TableCell></TableRow>}
                 {portfolios.map((portfolio) => (
                   <TableRow key={portfolio.portfolioId}>
                     <TableCell>{portfolio.rank ?? "-"}</TableCell>
@@ -116,8 +122,10 @@ function PortfolioOverview() {
                     <TableCell>{currency(portfolio.nav)}</TableCell>
                     <TableCell className={pnlClass(portfolio.dailyPnl)}>{signedCurrency(portfolio.dailyPnl)} ({signedPct(portfolio.dailyPct)})</TableCell>
                     <TableCell className={pnlClass(portfolio.weeklyPnl)}>{signedCurrency(portfolio.weeklyPnl)}</TableCell>
+                    <TableCell className={pnlClass(portfolio.monthlyPnl)}>{signedPct(portfolio.monthlyPct)}</TableCell>
+                    <TableCell className={pnlClass(portfolio.allTimePnl)}>{signedPct(portfolio.allTimePct)}</TableCell>
                     <TableCell>{portfolio.riskLevel} {portfolio.riskLabel}</TableCell>
-                    <TableCell><Badge variant={portfolio.stale ? "destructive" : "secondary"}>{portfolio.stale ? "stale" : portfolio.lifecycleState}</Badge></TableCell>
+                    <TableCell><Badge variant={portfolio.readinessStatus === "ready" && !portfolio.stale ? "secondary" : "destructive"}>{portfolio.stale ? "stale" : portfolio.readinessStatus ?? portfolio.lifecycleState}</Badge></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -131,6 +139,8 @@ function PortfolioOverview() {
 
 function PortfolioDetailPage({ portfolioId }: { portfolioId: string }) {
   const { data, isLoading } = useQuery<PortfolioDetail>({ queryKey: [`/api/portfolio/strategies/${portfolioId}`] });
+  const { data: orders } = useQuery<{ orders: PortfolioOrder[] }>({ queryKey: [`/api/portfolio/strategies/${portfolioId}/orders`] });
+  const { data: transactions } = useQuery<{ transactions: PortfolioTransaction[] }>({ queryKey: [`/api/portfolio/strategies/${portfolioId}/transactions`] });
   const rebalance = async () => {
     await apiRequest("POST", `/api/portfolio/strategies/${portfolioId}/rebalance`);
     await queryClient.invalidateQueries({ queryKey: ["/api/portfolio/summary"] });
@@ -198,6 +208,33 @@ function PortfolioDetailPage({ portfolioId }: { portfolioId: string }) {
                   <p className="mt-2 text-sm text-muted-foreground">{event.reason}</p>
                 </div>
               ))}
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader><CardTitle className="text-white">Virtual Orders</CardTitle></CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader><TableRow><TableHead>Side</TableHead><TableHead>Symbol</TableHead><TableHead>Qty</TableHead><TableHead>Status</TableHead><TableHead>Submitted</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {(orders?.orders ?? []).length === 0 && <TableRow><TableCell colSpan={5}>No orders.</TableCell></TableRow>}
+                  {(orders?.orders ?? []).slice(0, 20).map((order) => <TableRow key={order.id}><TableCell>{order.side}</TableCell><TableCell>{order.symbol ?? "-"}</TableCell><TableCell>{order.quantity?.toFixed(4) ?? "-"}</TableCell><TableCell>{order.status}</TableCell><TableCell>{new Date(order.submittedAt).toLocaleString()}</TableCell></TableRow>)}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle className="text-white">Transactions</CardTitle></CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader><TableRow><TableHead>Side</TableHead><TableHead>Symbol</TableHead><TableHead>Qty</TableHead><TableHead>Price</TableHead><TableHead>Fee</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {(transactions?.transactions ?? []).length === 0 && <TableRow><TableCell colSpan={5}>No transactions.</TableCell></TableRow>}
+                  {(transactions?.transactions ?? []).slice(0, 20).map((tx) => <TableRow key={tx.id}><TableCell>{tx.side}</TableCell><TableCell>{tx.symbol}</TableCell><TableCell>{tx.quantity.toFixed(4)}</TableCell><TableCell>{currency(tx.price)}</TableCell><TableCell>{currency(tx.fee)}</TableCell></TableRow>)}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
         </div>

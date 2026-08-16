@@ -177,10 +177,11 @@ export class PortfolioPlatformService {
     const positions = await this.valuedPositions(portfolio, now, portfolio.startingCapital);
     const transactions = await this.repository.listTransactions(portfolio.id, 500);
     const snapshot = accountingSnapshot({ portfolio, positions, transactions, now });
-    const { nav, marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct, allTimePnl, allTimePct } = snapshot;
+    const { nav, marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct, monthlyPnl, monthlyPct, allTimePnl, allTimePct } = snapshot;
     await this.repository.saveNav({ portfolioId: portfolio.id, nav, cash: portfolio.cash, marketValue, realizedPnl: snapshot.realizedPnl, unrealizedPnl: snapshot.unrealizedPnl, dailyPnl, weeklyPnl, source: this.marketData.id, stale: positions.some((item) => item.stale), observedAt: now.toISOString(), idempotencyKey: `${portfolio.id}:${now.toISOString().slice(0, 13)}` });
     const confidence = confidenceFor(strategy);
-    return { portfolioId: portfolio.id, strategyId: strategy.id, shortName: strategy.shortName, name: strategy.name, description: strategy.description, riskLevel: strategy.riskLevel, riskLabel: strategy.riskLabel, mandate: strategy.mandate, lifecycleState: strategy.lifecycleState, rank: null, nav, cash: round(portfolio.cash), marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct, allTimePnl, allTimePct, stale: positions.some((item) => item.stale), providerSource: this.marketData.id, benchmarkSymbol: strategy.benchmarkSymbol, score: allTimePct - strategy.riskLevel * 0.05 + confidence, confidence };
+    const readinessStatus = readiness(this.config, this.marketData, this.blockers).status;
+    return { portfolioId: portfolio.id, strategyId: strategy.id, shortName: strategy.shortName, name: strategy.name, description: strategy.description, riskLevel: strategy.riskLevel, riskLabel: strategy.riskLabel, mandate: strategy.mandate, lifecycleState: strategy.lifecycleState, rank: null, nav, cash: round(portfolio.cash), marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct, monthlyPnl, monthlyPct, allTimePnl, allTimePct, stale: positions.some((item) => item.stale), providerSource: this.marketData.id, benchmarkSymbol: strategy.benchmarkSymbol, readinessStatus, score: allTimePct - strategy.riskLevel * 0.05 + confidence, confidence };
   }
 
   private async valuedPositions(portfolio: PortfolioAccount, now: Date, nav: number): Promise<PortfolioDetail["positions"]> {

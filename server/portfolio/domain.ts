@@ -181,11 +181,14 @@ export type PortfolioSummary = {
   dailyPct: number;
   weeklyPnl: number;
   weeklyPct: number;
+  monthlyPnl: number;
+  monthlyPct: number;
   allTimePnl: number;
   allTimePct: number;
   stale: boolean;
   providerSource: string;
   benchmarkSymbol: string;
+  readinessStatus?: "ready" | "not_ready";
 };
 
 export type PortfolioDetail = PortfolioSummary & {
