@@ -19,7 +19,7 @@ export class PortfolioPlatformService {
   constructor(
     private readonly config: PortfolioConfig = loadPortfolioConfig(),
     private readonly repository: PortfolioRepository = createPortfolioRepository(),
-    private readonly marketData: PortfolioMarketDataProvider = createPortfolioMarketDataProvider(config.marketDataProvider),
+    private readonly marketData: PortfolioMarketDataProvider = createPortfolioMarketDataProvider(config.marketDataProvider, config),
     private readonly blockerService = new OperationalBlockerService(),
   ) {
     if ((this.config as { liveExecutionEnabled?: boolean }).liveExecutionEnabled === true) {
@@ -145,7 +145,7 @@ export class PortfolioPlatformService {
       runtimeState: !this.config.enabled ? "disabled" : this.blockers.length ? "degraded" : "healthy",
       activePortfolios: this.config.enabled ? (await this.repository.listPortfolios()).length : 0,
       experimentalStrategies: strategies.filter((item) => item.riskLevel >= 10 || item.lifecycleState === "RESEARCH").length,
-      providerHealth: !this.config.enabled ? "disabled" : this.config.marketDataProvider === "fixture" ? "degraded" : "degraded",
+      providerHealth: !this.config.enabled ? "disabled" : this.marketData.capabilities().live ? "healthy" : "degraded",
       lastSuccessfulMarketDataRefresh: this.lastRefresh,
       lastRebalance: this.lastRebalance,
       lastResearchCycle: this.lastResearchCycle,
@@ -153,6 +153,7 @@ export class PortfolioPlatformService {
       fallbacks: this.config.marketDataProvider === "fixture" ? [{ code: "portfolio_fixture_market_data", expected: true, action: "Configure a production market-data provider before relying on live valuations." }] : [],
       marketDataAgeSeconds: this.lastRefresh ? Math.max(0, Math.round((now.getTime() - Date.parse(this.lastRefresh)) / 1000)) : null,
       schedulerHealth: this.config.autostart ? "idle" : "disabled",
+      readiness: readiness(this.config, this.marketData, this.blockers),
     };
   }
 
@@ -250,4 +251,22 @@ function round(value: number) {
 function isWeekend(now: Date) {
   const day = now.getUTCDay();
   return day === 0 || day === 6;
+}
+
+function readiness(config: PortfolioConfig, marketData: PortfolioMarketDataProvider, blockers: Array<Record<string, unknown>>) {
+  const capabilities = marketData.capabilities();
+  const marketDataReady = config.enabled && capabilities.live && !capabilities.fixture;
+  const baseBlockers = [...blockers.map((item) => ({ code: String(item.code ?? "portfolio_blocker"), action: String(item.action ?? "Resolve Portfolio blocker.") }))];
+  if (!marketDataReady) baseBlockers.push({ code: "portfolio_market_data_not_production_ready", action: "Configure FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER=alpha_vantage with ALPHA_VANTAGE_API_KEY." });
+  return {
+    status: marketDataReady ? "ready" as const : "not_ready" as const,
+    marketDataReady,
+    researchReady: marketDataReady,
+    validationReady: marketDataReady,
+    virtualForwardReady: marketDataReady,
+    authReady: process.env.FINCOACH_AUTH_REQUIRED !== "false",
+    persistenceReady: Boolean(process.env.DATABASE_URL),
+    liveExecutionBlocked: true as const,
+    blockers: baseBlockers,
+  };
 }

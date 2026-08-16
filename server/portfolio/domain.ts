@@ -57,6 +57,60 @@ export type PortfolioQuote = {
   fixture: boolean;
 };
 
+export type PortfolioHistoricalBar = {
+  symbol: string;
+  assetClass: AssetClass;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  adjustedClose: number | null;
+  volume: number;
+  dividendAmount: number | null;
+  splitCoefficient: number | null;
+  observedAt: string;
+  source: string;
+  fixture: boolean;
+};
+
+export type PortfolioInstrument = {
+  instrumentId: string;
+  symbol: string;
+  displayName: string;
+  assetClass: AssetClass;
+  subtype: string | null;
+  exchange: string | null;
+  currency: "USD";
+  country: string | null;
+  sector: string | null;
+  industry: string | null;
+  marketCalendar: string;
+  tickSize: number | null;
+  lotSize: number | null;
+  contractMultiplier: number | null;
+  underlying: string | null;
+  optionStrike: number | null;
+  optionExpiration: string | null;
+  optionType: "call" | "put" | null;
+  bondMaturity: string | null;
+  coupon: number | null;
+  providerMappings: Record<string, string>;
+  benchmarkEligible: boolean;
+  status: "active" | "unsupported" | "delisted";
+};
+
+export type PortfolioMarketStatus = {
+  market: string;
+  region: string;
+  primaryExchanges: string[];
+  status: "open" | "closed" | "unknown";
+  reason: "regular" | "holiday" | "outside_hours" | "provider_unavailable" | "unsupported";
+  observedAt: string;
+  nextOpenAt: string | null;
+  nextCloseAt: string | null;
+  source: string;
+};
+
 export type PortfolioSummary = {
   portfolioId: string;
   strategyId: string;
@@ -131,4 +185,17 @@ export type PortfolioHealth = {
   fallbacks: Array<Record<string, unknown>>;
   marketDataAgeSeconds: number | null;
   schedulerHealth: "disabled" | "idle";
+  readiness?: PortfolioReadiness;
+};
+
+export type PortfolioReadiness = {
+  status: "ready" | "not_ready";
+  marketDataReady: boolean;
+  researchReady: boolean;
+  validationReady: boolean;
+  virtualForwardReady: boolean;
+  authReady: boolean;
+  persistenceReady: boolean;
+  liveExecutionBlocked: true;
+  blockers: Array<{ code: string; action: string }>;
 };

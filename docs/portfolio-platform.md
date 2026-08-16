@@ -39,9 +39,10 @@ Bootstrap creates 20 independent virtual portfolios spanning capital preservatio
 The provider abstraction supports multiple asset classes. The first implementation supports:
 
 - `none`: production-safe unavailable provider that records blockers instead of inventing prices.
-- `fixture`: deterministic test/development provider. It is marked as fixture/non-live and should not be used as live market evidence.
+- `alpha_vantage`: real provider for equity/ETF/index-proxy quote, historical daily OHLCV, symbol search, and broad market status. Requires `ALPHA_VANTAGE_API_KEY`.
+- `fixture`: deterministic test/development provider. It is marked as fixture/non-live and is rejected for production Portfolio activation.
 
-No live equity/ETF/options prices are fabricated. Unsupported instruments are reported as unavailable/degraded.
+No live equity/ETF/options prices are fabricated. Unsupported instruments, including options in the first real provider, are reported as unavailable/degraded.
 
 ## Virtual Broker And Accounting
 
