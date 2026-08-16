@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import { loadPortfolioConfig, type PortfolioConfig } from "./config";
 import type { AssetClass, PortfolioAccount, PortfolioDecisionEvent, PortfolioDetail, PortfolioHealth, PortfolioPosition, PortfolioSummary, PortfolioStrategy } from "./domain";
 import { createPortfolioMarketDataProvider, type PortfolioMarketDataProvider } from "./marketData";
@@ -6,6 +5,8 @@ import { createPortfolioRepository, type PortfolioRepository } from "./repositor
 import { instantiateSeedStrategies } from "./strategies";
 import { OperationalBlockerService } from "../operationalBlockerService";
 import { structuredLogger } from "../structuredLogger";
+import { VirtualPortfolioBroker } from "./broker";
+import { accountingSnapshot } from "./accounting";
 
 type RankedSummary = PortfolioSummary & { score: number; confidence: number };
 
@@ -93,7 +94,7 @@ export class PortfolioPlatformService {
       decisions,
       metrics: metrics(summary, positions),
       equityCurve,
-      benchmark: { symbol: strategy.benchmarkSymbol, available: this.config.marketDataProvider === "fixture", reason: this.config.marketDataProvider === "fixture" ? undefined : "No production portfolio market-data provider configured." },
+      benchmark: { symbol: strategy.benchmarkSymbol, available: this.marketData.capabilities().latestQuote, reason: this.marketData.capabilities().latestQuote ? undefined : "No production portfolio market-data provider configured." },
       lineage: { parentStrategyId: strategy.parentStrategyId, strategyVersion: strategy.strategyVersion, researchHypothesis: strategy.researchHypothesis, parameters: strategy.parameters },
     };
   }
@@ -124,13 +125,14 @@ export class PortfolioPlatformService {
     }
     const deltaValue = targetInvest - currentValue;
     const side = deltaValue > 0 ? "BUY" : "SELL";
-    const quantity = Math.abs(deltaValue) / quote.ask!;
-    const fee = Math.max(1, Math.abs(deltaValue) * 0.0005);
-    if (side === "BUY" && portfolio.cash < Math.abs(deltaValue) + fee) return { ok: false as const, reason: "insufficient_cash" };
-    const nextQuantity = side === "BUY" ? (current?.quantity ?? 0) + quantity : Math.max(0, (current?.quantity ?? 0) - quantity);
-    await this.repository.savePosition({ id: current?.id ?? randomUUID(), portfolioId: portfolio.id, symbol, assetClass: "etf", quantity: nextQuantity, averageCost: quote.ask!, currency: "USD", updatedAt: now.toISOString() });
-    await this.repository.savePortfolio({ ...portfolio, cash: side === "BUY" ? portfolio.cash - Math.abs(deltaValue) - fee : portfolio.cash + Math.abs(deltaValue) - fee, updatedAt: now.toISOString() });
-    await this.repository.addDecision(decision(side === "BUY" ? "BUY" : "SELL", portfolio.id, strategy.id, symbol, `Rebalance toward ${strategy.shortName} mandate.`, { currentValue, cash: portfolio.cash }, { targetInvest, estimatedTradeValue: deltaValue }, { driftPct, quoteSource: quote.source, fixture: quote.fixture }, now));
+    const quantity = Math.abs(deltaValue) / (quote.ask ?? quote.last);
+    const broker = new VirtualPortfolioBroker(this.repository, this.marketData);
+    const fill = await broker.submitOrder({ portfolioId: portfolio.id, idempotencyKey: `rebalance:${portfolio.id}:${strategy.strategyVersion}:${symbol}:${now.toISOString().slice(0, 13)}`, side, symbol, assetClass: "etf", quantity, reason: `Rebalance toward ${strategy.shortName} mandate.`, now });
+    if (!fill.ok) {
+      await this.recordBlocker(`portfolio_${fill.reason}`, `rebalance ${portfolio.id}`, fill.reason, "filled virtual order", "FINCOACH_PORTFOLIO_REBALANCE_THRESHOLD_PCT", false);
+      return { ok: false as const, reason: fill.reason };
+    }
+    await this.repository.addDecision(decision(side === "BUY" ? "BUY" : "SELL", portfolio.id, strategy.id, symbol, `Rebalance toward ${strategy.shortName} mandate.`, { currentValue, cash: portfolio.cash }, { targetInvest, estimatedTradeValue: deltaValue }, { driftPct, quoteSource: quote.source, fixture: quote.fixture, orderId: fill.order.id }, now));
     this.lastRebalance = now.toISOString();
     structuredLogger.audit({ level: "info", event: "portfolio_rebalance_completed", message: "Portfolio virtual rebalance completed", portfolioId, strategyId: strategy.id, liveExecutionBlocked: true });
     return { ok: true as const, action: side, driftPct };
@@ -159,16 +161,12 @@ export class PortfolioPlatformService {
 
   private async summary(strategy: PortfolioStrategy, portfolio: PortfolioAccount, now: Date): Promise<RankedSummary> {
     const positions = await this.valuedPositions(portfolio, now, portfolio.startingCapital);
-    const marketValue = round(positions.reduce((sum, item) => sum + item.marketValue, 0));
-    const nav = round(portfolio.cash + marketValue);
-    const allTimePnl = round(nav - portfolio.startingCapital);
-    const allTimePct = pct(allTimePnl, portfolio.startingCapital);
-    const weeklyPnl = allTimePnl;
-    const dailyPnl = isWeekend(now) ? 0 : allTimePnl;
-    const dailyPct = isWeekend(now) ? 0 : allTimePct;
-    await this.repository.saveNav({ portfolioId: portfolio.id, nav, cash: portfolio.cash, marketValue, realizedPnl: 0, unrealizedPnl: allTimePnl, dailyPnl, weeklyPnl, source: this.marketData.id, stale: positions.some((item) => item.stale), observedAt: now.toISOString(), idempotencyKey: `${portfolio.id}:${now.toISOString().slice(0, 13)}` });
+    const transactions = await this.repository.listTransactions(portfolio.id, 500);
+    const snapshot = accountingSnapshot({ portfolio, positions, transactions, now });
+    const { nav, marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct, allTimePnl, allTimePct } = snapshot;
+    await this.repository.saveNav({ portfolioId: portfolio.id, nav, cash: portfolio.cash, marketValue, realizedPnl: snapshot.realizedPnl, unrealizedPnl: snapshot.unrealizedPnl, dailyPnl, weeklyPnl, source: this.marketData.id, stale: positions.some((item) => item.stale), observedAt: now.toISOString(), idempotencyKey: `${portfolio.id}:${now.toISOString().slice(0, 13)}` });
     const confidence = confidenceFor(strategy);
-    return { portfolioId: portfolio.id, strategyId: strategy.id, shortName: strategy.shortName, name: strategy.name, description: strategy.description, riskLevel: strategy.riskLevel, riskLabel: strategy.riskLabel, mandate: strategy.mandate, lifecycleState: strategy.lifecycleState, rank: null, nav, cash: round(portfolio.cash), marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct: pct(weeklyPnl, portfolio.startingCapital), allTimePnl, allTimePct, stale: positions.some((item) => item.stale), providerSource: this.marketData.id, benchmarkSymbol: strategy.benchmarkSymbol, score: allTimePct - strategy.riskLevel * 0.05 + confidence, confidence };
+    return { portfolioId: portfolio.id, strategyId: strategy.id, shortName: strategy.shortName, name: strategy.name, description: strategy.description, riskLevel: strategy.riskLevel, riskLabel: strategy.riskLabel, mandate: strategy.mandate, lifecycleState: strategy.lifecycleState, rank: null, nav, cash: round(portfolio.cash), marketValue, dailyPnl, dailyPct, weeklyPnl, weeklyPct, allTimePnl, allTimePct, stale: positions.some((item) => item.stale), providerSource: this.marketData.id, benchmarkSymbol: strategy.benchmarkSymbol, score: allTimePct - strategy.riskLevel * 0.05 + confidence, confidence };
   }
 
   private async valuedPositions(portfolio: PortfolioAccount, now: Date, nav: number): Promise<PortfolioDetail["positions"]> {

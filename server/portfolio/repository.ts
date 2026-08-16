@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { Pool } from "pg";
-import type { PortfolioAccount, PortfolioDecisionEvent, PortfolioPosition, PortfolioStrategy } from "./domain";
+import type { PortfolioAccount, PortfolioDecisionEvent, PortfolioOrder, PortfolioPosition, PortfolioStrategy, PortfolioTransaction } from "./domain";
 
 export type PortfolioRepository = {
   listStrategies(): Promise<PortfolioStrategy[]>;
@@ -11,6 +11,10 @@ export type PortfolioRepository = {
   getPortfolio(id: string): Promise<PortfolioAccount | null>;
   listPositions(portfolioId: string): Promise<PortfolioPosition[]>;
   savePosition(position: PortfolioPosition): Promise<void>;
+  saveOrder(order: PortfolioOrder): Promise<void>;
+  listOrders(portfolioId: string, limit?: number): Promise<PortfolioOrder[]>;
+  saveTransaction(transaction: PortfolioTransaction): Promise<void>;
+  listTransactions(portfolioId: string, limit?: number): Promise<PortfolioTransaction[]>;
   addDecision(event: PortfolioDecisionEvent): Promise<void>;
   listDecisions(portfolioId?: string, limit?: number): Promise<PortfolioDecisionEvent[]>;
   saveNav(input: { portfolioId: string; nav: number; cash: number; marketValue: number; realizedPnl: number; unrealizedPnl: number; dailyPnl: number; weeklyPnl: number; source: string; stale: boolean; observedAt: string; idempotencyKey: string }): Promise<void>;
@@ -21,6 +25,8 @@ export class InMemoryPortfolioRepository implements PortfolioRepository {
   private strategies = new Map<string, PortfolioStrategy>();
   private portfolios = new Map<string, PortfolioAccount>();
   private positions = new Map<string, PortfolioPosition>();
+  private orders = new Map<string, PortfolioOrder>();
+  private transactions = new Map<string, PortfolioTransaction>();
   private decisions: PortfolioDecisionEvent[] = [];
   private navRows: Array<{ portfolioId: string; observedAt: string; nav: number; idempotencyKey: string }> = [];
 
@@ -32,6 +38,10 @@ export class InMemoryPortfolioRepository implements PortfolioRepository {
   async getPortfolio(id: string) { return this.portfolios.get(id) ?? null; }
   async listPositions(portfolioId: string) { return [...this.positions.values()].filter((item) => item.portfolioId === portfolioId); }
   async savePosition(position: PortfolioPosition) { this.positions.set(`${position.portfolioId}:${position.symbol}`, position); }
+  async saveOrder(order: PortfolioOrder) { if (![...this.orders.values()].some((item) => item.idempotencyKey === order.idempotencyKey)) this.orders.set(order.id, order); }
+  async listOrders(portfolioId: string, limit = 100) { return [...this.orders.values()].filter((item) => item.portfolioId === portfolioId).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt)).slice(0, limit); }
+  async saveTransaction(transaction: PortfolioTransaction) { if (![...this.transactions.values()].some((item) => item.idempotencyKey === transaction.idempotencyKey)) this.transactions.set(transaction.id, transaction); }
+  async listTransactions(portfolioId: string, limit = 100) { return [...this.transactions.values()].filter((item) => item.portfolioId === portfolioId).sort((a, b) => b.executedAt.localeCompare(a.executedAt)).slice(0, limit); }
   async addDecision(event: PortfolioDecisionEvent) { if (!this.decisions.some((item) => item.id === event.id)) this.decisions.unshift(event); }
   async listDecisions(portfolioId?: string, limit = 100) { return this.decisions.filter((item) => !portfolioId || item.portfolioId === portfolioId).slice(0, limit); }
   async saveNav(input: { portfolioId: string; nav: number; observedAt: string; idempotencyKey: string }) {
@@ -104,6 +114,34 @@ export class PgPortfolioRepository implements PortfolioRepository {
     );
   }
 
+  async saveOrder(order: PortfolioOrder) {
+    await this.pool.query(
+      `INSERT INTO portfolio_orders (id, portfolio_id, idempotency_key, side, symbol, asset_class, quantity, status, reason, submitted_at, filled_at, evidence)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (idempotency_key) DO NOTHING`,
+      [order.id, order.portfolioId, order.idempotencyKey, order.side, order.symbol, order.assetClass, order.quantity, order.status, order.reason, order.submittedAt, order.filledAt, JSON.stringify(order.evidence)],
+    );
+  }
+
+  async listOrders(portfolioId: string, limit = 100) {
+    const result = await this.pool.query("SELECT * FROM portfolio_orders WHERE portfolio_id = $1 ORDER BY submitted_at DESC LIMIT $2", [portfolioId, limit]);
+    return result.rows.map(mapOrder);
+  }
+
+  async saveTransaction(transaction: PortfolioTransaction) {
+    await this.pool.query(
+      `INSERT INTO portfolio_transactions (id, portfolio_id, idempotency_key, side, symbol, asset_class, quantity, price, fee, realized_pnl, reason, evidence, executed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (idempotency_key) DO NOTHING`,
+      [transaction.id, transaction.portfolioId, transaction.idempotencyKey, transaction.side, transaction.symbol, transaction.assetClass, transaction.quantity, transaction.price, transaction.fee, transaction.realizedPnl, transaction.reason, JSON.stringify(transaction.evidence), transaction.executedAt],
+    );
+  }
+
+  async listTransactions(portfolioId: string, limit = 100) {
+    const result = await this.pool.query("SELECT * FROM portfolio_transactions WHERE portfolio_id = $1 ORDER BY executed_at DESC LIMIT $2", [portfolioId, limit]);
+    return result.rows.map(mapTransaction);
+  }
+
   async addDecision(event: PortfolioDecisionEvent) {
     await this.pool.query(
       `INSERT INTO portfolio_decision_journal
@@ -173,6 +211,14 @@ function mapPosition(row: Record<string, unknown>): PortfolioPosition {
 
 function mapDecision(row: Record<string, unknown>): PortfolioDecisionEvent {
   return { id: String(row.id), portfolioId: row.portfolio_id ? String(row.portfolio_id) : null, strategyId: row.strategy_id ? String(row.strategy_id) : null, eventType: String(row.event_type), symbol: row.symbol ? String(row.symbol) : null, reason: String(row.reason), beforeState: object(row.before_state), afterState: object(row.after_state), evidence: object(row.evidence), expectedEffect: object(row.expected_effect), actualEffect: object(row.actual_effect), createdAt: new Date(String(row.created_at)).toISOString() };
+}
+
+function mapOrder(row: Record<string, unknown>): PortfolioOrder {
+  return { id: String(row.id), portfolioId: String(row.portfolio_id), idempotencyKey: String(row.idempotency_key), side: String(row.side) as PortfolioOrder["side"], symbol: row.symbol ? String(row.symbol) : null, assetClass: row.asset_class ? String(row.asset_class) as PortfolioOrder["assetClass"] : null, quantity: row.quantity === null || row.quantity === undefined ? null : Number(row.quantity), status: String(row.status) as PortfolioOrder["status"], reason: String(row.reason), submittedAt: new Date(String(row.submitted_at)).toISOString(), filledAt: row.filled_at ? new Date(String(row.filled_at)).toISOString() : null, evidence: object(row.evidence) };
+}
+
+function mapTransaction(row: Record<string, unknown>): PortfolioTransaction {
+  return { id: String(row.id), portfolioId: String(row.portfolio_id), idempotencyKey: String(row.idempotency_key), side: String(row.side) as PortfolioTransaction["side"], symbol: String(row.symbol), assetClass: String(row.asset_class) as PortfolioTransaction["assetClass"], quantity: Number(row.quantity), price: Number(row.price), fee: Number(row.fee), realizedPnl: Number(row.realized_pnl), reason: String(row.reason), evidence: object(row.evidence), executedAt: new Date(String(row.executed_at)).toISOString() };
 }
 
 function object(value: unknown): Record<string, unknown> {

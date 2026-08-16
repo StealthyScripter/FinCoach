@@ -44,6 +44,37 @@ export type PortfolioPosition = {
   updatedAt: string;
 };
 
+export type PortfolioTransaction = {
+  id: string;
+  portfolioId: string;
+  idempotencyKey: string;
+  side: "BUY" | "SELL";
+  symbol: string;
+  assetClass: AssetClass;
+  quantity: number;
+  price: number;
+  fee: number;
+  realizedPnl: number;
+  reason: string;
+  evidence: Record<string, unknown>;
+  executedAt: string;
+};
+
+export type PortfolioOrder = {
+  id: string;
+  portfolioId: string;
+  idempotencyKey: string;
+  side: "BUY" | "SELL" | "HOLD" | "REBALANCE";
+  symbol: string | null;
+  assetClass: AssetClass | null;
+  quantity: number | null;
+  status: "accepted" | "filled" | "rejected" | "cancelled";
+  reason: string;
+  submittedAt: string;
+  filledAt: string | null;
+  evidence: Record<string, unknown>;
+};
+
 export type PortfolioQuote = {
   symbol: string;
   assetClass: AssetClass;
@@ -97,6 +128,27 @@ export type PortfolioInstrument = {
   providerMappings: Record<string, string>;
   benchmarkEligible: boolean;
   status: "active" | "unsupported" | "delisted";
+};
+
+export type PortfolioAccountingSnapshot = {
+  portfolioId: string;
+  cash: number;
+  marketValue: number;
+  nav: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  totalPnl: number;
+  dailyPnl: number;
+  weeklyPnl: number;
+  monthlyPnl: number;
+  allTimePnl: number;
+  dailyPct: number;
+  weeklyPct: number;
+  monthlyPct: number;
+  allTimePct: number;
+  fees: number;
+  turnover: number;
+  observedAt: string;
 };
 
 export type PortfolioMarketStatus = {
