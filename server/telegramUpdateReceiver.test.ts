@@ -1,0 +1,86 @@
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import { TelegramUpdateReceiver } from "./telegram/updateReceiver";
+import { InMemoryTelegramRepository } from "./telegram/repository";
+import { TelegramUpdateCursor } from "./telegram/updateCursor";
+
+const root = mkdtempSync(join(tmpdir(), "fincoach-telegram-receiver-"));
+const lockPath = join(root, "poll.lock");
+const originalLockPath = process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH;
+process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH = lockPath;
+
+try {
+  {
+    writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
+    const receiver = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), okFetch());
+    receiver.start();
+    const health = receiver.health();
+    assert.equal(health.running, false);
+    assert.equal(health.ownershipState, "blocked");
+    assert.equal(health.lastPollError, "telegram_poll_lock_held");
+    await receiver.stop();
+    rmSync(lockPath, { force: true });
+  }
+
+  {
+    const receiver = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), conflictFetch());
+    receiver.start();
+    await waitFor(() => receiver.health().ownershipState === "conflict");
+    const health = receiver.health();
+    assert.equal(health.running, false);
+    assert.equal(health.stopped, true);
+    assert.equal(health.lastPollError, "Telegram getUpdates failed with HTTP 409; another bot update consumer is active");
+    assert.equal(existsSync(lockPath), false);
+    await receiver.stop();
+  }
+} finally {
+  if (originalLockPath === undefined) delete process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH;
+  else process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH = originalLockPath;
+  rmSync(root, { recursive: true, force: true });
+}
+
+function config() {
+  return {
+    botToken: "test-token",
+    allowedUserId: "operator",
+    chatId: "chat",
+    signalChatId: null,
+    webhookSecret: null,
+    webhookUrl: null,
+    notificationsEnabled: true,
+    signalsEnabled: false,
+    dailySummaryHourUtc: 22,
+    weeklySummaryDay: 0,
+    weeklySummaryHourUtc: 22,
+    marketSessionAlerts: false,
+    minSignalConfidence: 75,
+    minSignalEvidenceScore: 0.75,
+    signalCooldownMinutes: 60,
+    signalSigningSecret: null,
+  };
+}
+
+function transport() {
+  return { handle: async () => undefined };
+}
+
+function okFetch(): typeof fetch {
+  return (async () => new Response(JSON.stringify({ ok: true, result: [] }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+}
+
+function conflictFetch(): typeof fetch {
+  return (async () => new Response(JSON.stringify({ ok: false, description: "Conflict" }), { status: 409, headers: { "content-type": "application/json" } })) as typeof fetch;
+}
+
+async function waitFor(predicate: () => boolean) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail("condition not reached");
+}
+
+console.log("telegram update receiver ownership tests passed");
