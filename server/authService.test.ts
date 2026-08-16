@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AuthService, InMemoryAuthRepository, normalizeEmail } from "./auth/service";
+import { AuthService, InMemoryAuthRepository, normalizeEmail, requireAuthenticatedRequest } from "./auth/service";
 
 process.env.TELEGRAM_NOTIFICATIONS_ENABLED = "false";
 
@@ -49,3 +49,27 @@ for (let attempt = 0; attempt < 5; attempt += 1) {
 const rateLimited = await rateLimitedService.signin("rate@example.com", "WrongPassword123!");
 assert.equal(rateLimited.ok, false);
 assert.equal(rateLimited.reason, "rate_limited");
+
+let nextCalled = false;
+requireAuthenticatedRequest(
+  { originalUrl: "/api/telegram/webhook", path: "/telegram/webhook", method: "POST", session: {}, get: () => undefined } as never,
+  { status: () => ({ json: () => undefined }) } as never,
+  () => { nextCalled = true; },
+);
+assert.equal(nextCalled, true);
+
+let rejectedStatus = 0;
+requireAuthenticatedRequest(
+  { originalUrl: "/api/portfolio/summary", path: "/portfolio/summary", method: "GET", session: {}, get: () => undefined } as never,
+  { status: (code: number) => { rejectedStatus = code; return { json: () => undefined }; } } as never,
+  () => { throw new Error("protected request unexpectedly allowed"); },
+);
+assert.equal(rejectedStatus, 401);
+
+nextCalled = false;
+requireAuthenticatedRequest(
+  { originalUrl: "/api/portfolio/summary", path: "/portfolio/summary", method: "POST", session: { userId: "user-1", csrfToken: "token-1" }, get: (name: string) => name === "x-fincoach-csrf-token" ? "token-1" : undefined } as never,
+  { status: () => ({ json: () => undefined }) } as never,
+  () => { nextCalled = true; },
+);
+assert.equal(nextCalled, true);

@@ -12,6 +12,7 @@ const timeSeriesMigration = readFileSync("migrations/0009_time_series_persistenc
 const strategyEvidenceMigration = readFileSync("migrations/0010_strategy_evidence_persistence.sql", "utf-8");
 const v2OperationalMigration = readFileSync("migrations/0014_v2_operational_persistence.sql", "utf-8");
 const v2EvidenceMigration = readFileSync("migrations/0015_v2_evidence_persistence.sql", "utf-8");
+const authPortfolioMigration = readFileSync("migrations/0020_auth_and_portfolio_platform.sql", "utf-8");
 
 const requiredTables = [
   "users",
@@ -261,5 +262,42 @@ assert.match(v2EvidenceMigration, /idempotency_key text NOT NULL UNIQUE/i);
 assert.match(v2EvidenceMigration, /lineage_event_ids jsonb NOT NULL/i);
 assert.match(v2EvidenceMigration, /BEGIN;/i);
 assert.match(v2EvidenceMigration, /COMMIT;/i);
+
+for (const table of [
+  "auth_users",
+  "portfolio_strategies",
+  "portfolios",
+  "portfolio_positions",
+  "portfolio_transactions",
+  "portfolio_nav_history",
+  "portfolio_decision_journal",
+  "portfolio_rankings",
+]) {
+  assert.match(authPortfolioMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+for (const index of [
+  "idx_auth_users_email",
+  "idx_auth_users_status",
+  "idx_portfolio_strategies_lifecycle",
+  "idx_portfolio_transactions_portfolio_time",
+  "idx_portfolio_nav_history_portfolio_time",
+  "idx_portfolio_decision_journal_portfolio_time",
+  "idx_portfolio_rankings_leaderboard_time",
+]) {
+  assert.match(authPortfolioMigration, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+for (const constraint of [
+  "UNIQUE(strategy_id)",
+  "UNIQUE(portfolio_id, symbol)",
+  "idempotency_key text NOT NULL UNIQUE",
+  "risk_level integer NOT NULL CHECK (risk_level BETWEEN 1 AND 10)",
+]) {
+  assert.match(authPortfolioMigration, new RegExp(constraint.replace(/[()]/g, "\\$&").replaceAll(" ", "\\s+"), "i"));
+}
+assert.match(authPortfolioMigration, /REFERENCES portfolio_strategies\(id\)/i);
+assert.match(authPortfolioMigration, /REFERENCES portfolios\(id\) ON DELETE CASCADE/i);
+assert.doesNotMatch(authPortfolioMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
+assert.match(authPortfolioMigration, /BEGIN;/i);
+assert.match(authPortfolioMigration, /COMMIT;/i);
 
 console.log("schema migration smoke tests passed");
