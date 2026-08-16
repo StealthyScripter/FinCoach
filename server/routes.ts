@@ -105,12 +105,15 @@ import { auditExportService } from "./execution/auditExportService";
 import { telegramBotService } from "./telegramService";
 import { registerTelegramOperationsRoutes } from "./telegram";
 import { registerV2OperationsRoutes } from "./v2/operations";
+import { registerAuthRoutes, requireAuthenticatedRequest } from "./auth/service";
+import { registerPortfolioRoutes } from "./portfolio/routes";
 import { demoRunService } from "./demoRunService";
 import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
 import { historicalDataImportService } from "./historicalDataImportService";
 import { researchAccelerationService } from "./researchAccelerationService";
 import { oandaHistoricalBackfillService } from "./historicalDataBackfillService";
 import { deploymentMetadata } from "./deploymentMetadata";
+import { portfolioPlatformService } from "./portfolio/service";
 
 const emergencyControlService = new EmergencyControlService(
   executionRiskService,
@@ -136,11 +139,21 @@ export async function registerRoutes(
   app.get("/api/health", async (_req, res) => {
     const storageHealth = getStorageHealth();
     const providers = providerRegistryService.getSnapshot();
+    const portfolioHealth = await portfolioPlatformService.health().catch((error) => ({
+      enabled: false,
+      runtimeState: "degraded",
+      error: error instanceof Error ? error.message : "portfolio health unavailable",
+      liveExecutionBlocked: true,
+    }));
     res.json({
       status: storageHealth.status === "unavailable" ? "degraded" : "healthy",
       generatedAt: new Date().toISOString(),
       storageMode: storageHealth.mode,
       providers: providers.providers.length,
+      subsystems: {
+        fx: "available",
+        portfolio: portfolioHealth,
+      },
       liveExecutionBlocked: true,
       deployedRevision: deploymentMetadata(),
     });
@@ -154,8 +167,11 @@ export async function registerRoutes(
     res.json(providerRegistryService.getSnapshot());
   });
 
+  registerAuthRoutes(app);
+  app.use("/api", requireAuthenticatedRequest);
   registerTelegramOperationsRoutes(app);
   registerV2OperationsRoutes(app);
+  registerPortfolioRoutes(app);
 
   app.get("/api/marketpilot/demo-run/status", async (_req, res) => {
     res.json(await demoRunService.status());

@@ -14,6 +14,7 @@ import { structuredLogger } from "./structuredLogger";
 import { deploymentMetadata } from "./deploymentMetadata";
 import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
 import { getStorageHealth } from "./storageMode";
+import { configureAuth } from "./auth/service";
 
 const app = express();
 const httpServer = createServer(app);
@@ -33,6 +34,7 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+configureAuth(app);
 app.use("/api", createApiRateLimiter());
 
 export function log(message: string, source = "express") {

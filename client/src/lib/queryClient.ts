@@ -1,5 +1,11 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+let csrfToken: string | null = null;
+
+export function setCsrfToken(token: string | null | undefined) {
+  csrfToken = token ?? null;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -14,7 +20,10 @@ export async function apiRequest(
 ): Promise<Response> {
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers: {
+      ...(data ? { "Content-Type": "application/json" } : {}),
+      ...(csrfToken ? { "x-fincoach-csrf-token": csrfToken } : {}),
+    },
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });

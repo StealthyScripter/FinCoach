@@ -1,9 +1,10 @@
 import { Link, useLocation } from "wouter";
-import { TrendingUp, Menu, X, ShieldCheck, NotebookText, Settings, FlaskConical, LayoutDashboard, Microscope, Radio } from "lucide-react";
+import { TrendingUp, Menu, X, ShieldCheck, NotebookText, Settings, FlaskConical, LayoutDashboard, Microscope, Radio, PieChart, LogOut } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import MarketTicker from "@/components/market-ticker";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient, setCsrfToken } from "@/lib/queryClient";
+import { Button } from "@/components/ui/button";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
@@ -13,6 +14,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { href: "/", icon: LayoutDashboard, label: "Dashboard" },
     { href: "/research", icon: Microscope, label: "Research Lab" },
     { href: "/strategy-lab", icon: FlaskConical, label: "Strategy Lab" },
+    { href: "/portfolio", icon: PieChart, label: "Portfolio Lab" },
     { href: "/forward-testing", icon: Radio, label: "Forward Testing" },
     { href: "/journal", icon: NotebookText, label: "Journal" },
     { href: "/system", icon: Settings, label: "System" },
@@ -48,7 +50,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <p className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Main</p>
               {navItems.map((item) => {
                 const Icon = item.icon;
-                const isActive = location === item.href;
+                const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
 
                 return (
                   <Link key={item.href} href={item.href}>
@@ -70,7 +72,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <p className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Learn Topics</p>
               {domains.map((item) => {
                 const Icon = item.icon;
-                const isActive = location === item.href;
+                const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href));
 
                 return (
                   <Link key={item.href} href={item.href}>
@@ -91,7 +93,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="p-4 border-t border-border/50">
-            <div className="bg-card p-4 rounded-lg border border-border/50">
+            <div className="space-y-3 bg-card p-4 rounded-lg border border-border/50">
               <p className="text-xs text-muted-foreground mb-1">Daily Streak</p>
               <div className="flex items-center gap-2">
                 <div className="h-2 flex-1 bg-secondary rounded-full overflow-hidden">
@@ -99,6 +101,19 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 </div>
                 <span className="text-sm font-mono text-white">12d</span>
               </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start"
+                onClick={async () => {
+                  await apiRequest("POST", "/api/auth/signout").catch(() => undefined);
+                  setCsrfToken(null);
+                  await queryClient.invalidateQueries({ queryKey: ["/api/auth/session"] });
+                }}
+              >
+                <LogOut className="mr-2 h-4 w-4" /> Sign out
+              </Button>
             </div>
           </div>
         </aside>
