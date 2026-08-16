@@ -69,6 +69,25 @@ const health = await unavailable.health(start);
 assert.equal(health.runtimeState, "degraded");
 assert.ok(health.blockers.some((item) => item.code === "portfolio_market_data_unavailable"));
 
+const restartedAtCapacity = new PortfolioPlatformService(enabledConfig, repository, new FixturePortfolioMarketDataProvider());
+await restartedAtCapacity.initialize(new Date("2026-08-14T21:00:00.000Z"));
+const restartedHealth = await restartedAtCapacity.health(new Date("2026-08-14T21:00:00.000Z"));
+assert.equal(restartedHealth.runtimeState, "healthy");
+assert.equal((await repository.listStrategies()).length, 20);
+
+const overCapacityRepository = new InMemoryPortfolioRepository();
+for (const strategy of strategies) await overCapacityRepository.saveStrategy(strategy);
+await overCapacityRepository.saveStrategy({
+  ...strategies[0],
+  id: "portfolio-strategy-over-capacity",
+  shortName: "OVERCAP",
+});
+const overCapacity = new PortfolioPlatformService(enabledConfig, overCapacityRepository, new FixturePortfolioMarketDataProvider());
+await overCapacity.initialize(start);
+const overCapacityHealth = await overCapacity.health(start);
+assert.equal(overCapacityHealth.runtimeState, "degraded");
+assert.ok(overCapacityHealth.blockers.some((item) => item.code === "portfolio_max_active_strategies_reached"));
+
 assert.throws(() => new PortfolioPlatformService({
   ...enabledConfig,
   liveExecutionEnabled: true as never,

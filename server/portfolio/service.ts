@@ -43,10 +43,11 @@ export class PortfolioPlatformService {
 
   async bootstrap(now = new Date()) {
     const existing = await this.repository.listStrategies();
-    if (existing.length >= this.config.maxActiveStrategies) {
+    if (existing.length > this.config.maxActiveStrategies) {
       await this.recordBlocker("portfolio_max_active_strategies_reached", "portfolio strategy bootstrap", existing.length, this.config.maxActiveStrategies, "FINCOACH_PORTFOLIO_MAX_ACTIVE_STRATEGIES", true);
       return existing;
     }
+    if (existing.length === this.config.maxActiveStrategies) return existing;
     const seeds = instantiateSeedStrategies(this.config.startingCapital, now).slice(0, this.config.maxActiveStrategies);
     for (const strategy of seeds) {
       await this.repository.saveStrategy(strategy);

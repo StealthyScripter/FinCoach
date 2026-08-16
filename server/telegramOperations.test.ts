@@ -1,4 +1,7 @@
 import assert from "assert";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { TelegramClient, loadTelegramConfig, validateTelegramConfig } from "./telegram/telegramClient";
 import { InMemoryTelegramRepository } from "./telegram/repository";
 import { TelegramSignalPublisher } from "./telegram/signalPublisher";
@@ -39,6 +42,15 @@ const baseEnv = {
   TELEGRAM_SIGNAL_COOLDOWN_MINUTES: "60",
   TELEGRAM_SIGNAL_SIGNING_SECRET: "dedicated-signing-secret",
 };
+
+const telegramTestRoot = mkdtempSync(join(tmpdir(), "fincoach-telegram-operations-"));
+const originalTelegramPollLockPath = process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH;
+process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH = join(telegramTestRoot, `poll-${process.pid}.lock`);
+process.once("exit", () => {
+  if (originalTelegramPollLockPath === undefined) delete process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH;
+  else process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH = originalTelegramPollLockPath;
+  rmSync(telegramTestRoot, { recursive: true, force: true });
+});
 
 class UniqueSummaryRepository extends InMemoryTelegramRepository {
   async saveSummary(record: TelegramSummaryRecord) {

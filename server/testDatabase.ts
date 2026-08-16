@@ -24,6 +24,7 @@ const TEST_MIGRATIONS = [
   "migrations/0020_auth_and_portfolio_platform.sql",
   "migrations/0021_portfolio_orders_and_instruments.sql",
   "migrations/0022_portfolio_research_validation.sql",
+  "migrations/0023_auth_sessions.sql",
 ] as const;
 
 const TEST_MIGRATION_LOCK_ID = 71420260809;

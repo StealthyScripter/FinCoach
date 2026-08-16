@@ -305,8 +305,17 @@ function sessionStore() {
   const PgSession = connectPgSimple(session);
   return new PgSession({
     conString: process.env.DATABASE_URL,
-    createTableIfMissing: true,
+    createTableIfMissing: false,
     tableName: "auth_sessions",
+    errorLog: (message: unknown, error?: unknown) => {
+      structuredLogger.application({
+        level: "error",
+        module: "auth",
+        event: "auth_session_store_error",
+        message: String(message),
+        error,
+      });
+    },
   });
 }
 
