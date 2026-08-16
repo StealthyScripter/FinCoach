@@ -7,6 +7,7 @@ import { OperationalBlockerService } from "../operationalBlockerService";
 import { structuredLogger } from "../structuredLogger";
 import { VirtualPortfolioBroker } from "./broker";
 import { accountingSnapshot } from "./accounting";
+import { PortfolioResearchEngine, researchAllocation } from "./research";
 
 type RankedSummary = PortfolioSummary & { score: number; confidence: number };
 export type PortfolioPlatformLike = Pick<PortfolioPlatformService, "summaries" | "health">;
@@ -115,6 +116,33 @@ export class PortfolioPlatformService {
   async rankings(now = new Date()) {
     const { rankLeaderboards } = await import("./analytics");
     return rankLeaderboards(await this.summaries(now));
+  }
+
+  async research(limit = 5, now = new Date()) {
+    await this.initialize(now);
+    if (!this.config.enabled || !this.config.researchEnabled) return { ok: false as const, reason: "portfolio_research_disabled" };
+    const strategies = researchAllocation(await this.repository.listStrategies(), limit);
+    const engine = new PortfolioResearchEngine(this.repository, this.marketData);
+    const results = [];
+    for (const strategy of strategies) {
+      try {
+        results.push(await engine.researchStrategy(strategy, now));
+      } catch (error) {
+        await this.recordBlocker("portfolio_research_failed", `research ${strategy.shortName}`, error instanceof Error ? error.message : "research failed", "provider-backed historical data", "FINCOACH_PORTFOLIO_RESEARCH_ENABLED", false);
+        results.push({ ok: false as const, strategyId: strategy.id, reason: error instanceof Error ? error.message : "research_failed" });
+      }
+    }
+    this.lastResearchCycle = now.toISOString();
+    return { ok: true as const, results };
+  }
+
+  async researchArtifacts(strategyId?: string, limit = 100) {
+    return {
+      hypotheses: await this.repository.listResearchHypotheses(strategyId, limit),
+      backtests: await this.repository.listBacktests(strategyId, limit),
+      walkForward: await this.repository.listWalkForward(strategyId, limit),
+      forwardTests: await this.repository.listForwardTests(undefined, limit),
+    };
   }
 
   async rebalance(portfolioId: string, now = new Date()) {

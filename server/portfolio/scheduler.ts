@@ -33,6 +33,7 @@ export class PortfolioScheduler {
     this.running = true;
     try {
       await this.service.summaries(new Date());
+      if ("research" in this.service && typeof this.service.research === "function") await this.service.research(5, new Date());
       this.lastRunAt = new Date().toISOString();
       this.lastError = null;
       return { ok: true as const, trigger };

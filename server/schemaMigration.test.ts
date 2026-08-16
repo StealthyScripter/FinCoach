@@ -14,6 +14,7 @@ const v2OperationalMigration = readFileSync("migrations/0014_v2_operational_pers
 const v2EvidenceMigration = readFileSync("migrations/0015_v2_evidence_persistence.sql", "utf-8");
 const authPortfolioMigration = readFileSync("migrations/0020_auth_and_portfolio_platform.sql", "utf-8");
 const portfolioOrdersMigration = readFileSync("migrations/0021_portfolio_orders_and_instruments.sql", "utf-8");
+const portfolioResearchMigration = readFileSync("migrations/0022_portfolio_research_validation.sql", "utf-8");
 
 const requiredTables = [
   "users",
@@ -318,5 +319,26 @@ assert.match(portfolioOrdersMigration, /REFERENCES portfolios\(id\) ON DELETE CA
 assert.doesNotMatch(portfolioOrdersMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
 assert.match(portfolioOrdersMigration, /BEGIN;/i);
 assert.match(portfolioOrdersMigration, /COMMIT;/i);
+
+for (const table of [
+  "portfolio_research_hypotheses",
+  "portfolio_backtests",
+  "portfolio_walk_forward_results",
+  "portfolio_forward_tests",
+]) {
+  assert.match(portfolioResearchMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "i"));
+}
+for (const index of [
+  "idx_portfolio_research_hypotheses_strategy_time",
+  "idx_portfolio_backtests_strategy_time",
+  "idx_portfolio_walk_forward_strategy_time",
+  "idx_portfolio_forward_tests_portfolio_time",
+]) {
+  assert.match(portfolioResearchMigration, new RegExp(`CREATE INDEX IF NOT EXISTS ${index}\\b`, "i"));
+}
+assert.match(portfolioResearchMigration, /UNIQUE\(strategy_id, portfolio_id, observed_at, symbol\)/i);
+assert.doesNotMatch(portfolioResearchMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
+assert.match(portfolioResearchMigration, /BEGIN;/i);
+assert.match(portfolioResearchMigration, /COMMIT;/i);
 
 console.log("schema migration smoke tests passed");

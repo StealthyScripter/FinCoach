@@ -254,3 +254,63 @@ export type PortfolioReadiness = {
   liveExecutionBlocked: true;
   blockers: Array<{ code: string; action: string }>;
 };
+
+export type PortfolioResearchHypothesis = {
+  id: string;
+  strategyId: string;
+  hypothesis: string;
+  symbols: string[];
+  evidenceWindowStart: string;
+  evidenceWindowEnd: string;
+  status: "created" | "validated" | "rejected" | "blocked";
+  evidence: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type PortfolioBacktestResult = {
+  id: string;
+  strategyId: string;
+  hypothesisId: string;
+  trainStart: string;
+  trainEnd: string;
+  validationStart: string;
+  validationEnd: string;
+  totalReturnPct: number;
+  benchmarkReturnPct: number;
+  maxDrawdownPct: number;
+  volatilityPct: number | null;
+  sharpe: number | null;
+  turnoverPct: number;
+  observations: number;
+  passed: boolean;
+  rejectionReason: string | null;
+  evidence: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type PortfolioWalkForwardResult = {
+  id: string;
+  strategyId: string;
+  backtestId: string;
+  windows: Array<{ trainStart: string; trainEnd: string; validateStart: string; validateEnd: string; returnPct: number; maxDrawdownPct: number }>;
+  stabilityScore: number;
+  passed: boolean;
+  rejectionReason: string | null;
+  createdAt: string;
+};
+
+export type PortfolioForwardTestRecord = {
+  id: string;
+  strategyId: string;
+  portfolioId: string;
+  observedAt: string;
+  decision: "BUY" | "SELL" | "HOLD" | "REBALANCE";
+  symbol: string;
+  observedPrice: number;
+  assumedFillPrice: number | null;
+  quantity: number | null;
+  nav: number;
+  cash: number;
+  riskState: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+};
