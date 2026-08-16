@@ -12,7 +12,7 @@ export function portfolioReadiness(input: { config: PortfolioConfig; provider: P
   const env = input.env ?? process.env;
   const capabilities = input.provider.capabilities();
   const softwareCapabilities = ["QUOTE", "HISTORICAL_OHLCV", "INSTRUMENT_SEARCH", "OPTIONS_CHAIN", "MARKET_STATUS"] as const;
-  const codeReady = softwareCapabilities.every((capability) => capabilities.capabilities.includes(capability) || capability === "OPTIONS_CHAIN");
+  const codeReady = softwareCapabilities.every((capability) => capabilities.capabilities.includes(capability));
   const authReady = env.FINCOACH_AUTH_REQUIRED !== "false";
   const configReady = input.config.enabled
     && input.config.liveExecutionEnabled === false

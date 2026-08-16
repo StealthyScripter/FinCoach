@@ -74,7 +74,22 @@ assert.ok(recoveredSummary);
 assert.ok(recoveredSummary.decisions.length >= 1);
 assert.ok((await repository.listForwardTests(portfolio.id)).length === 1);
 
-const softwareReady = portfolioReadiness({ config: { ...config, marketDataProvider: "alpha_vantage", alphaVantageApiKey: "SET" }, provider: { ...provider, capabilities: () => ({ ...provider.capabilities(), fixture: false, live: true, options: true }) }, blockers: [], env: { FINCOACH_AUTH_REQUIRED: "true", DATABASE_URL: "postgres://local/test" } as NodeJS.ProcessEnv });
+const softwareReady = portfolioReadiness({
+  config: { ...config, marketDataProvider: "alpha_vantage", alphaVantageApiKey: "SET" },
+  provider: {
+    ...provider,
+    capabilities: () => ({
+      ...provider.capabilities(),
+      capabilities: [...provider.capabilities().capabilities, "REFERENCE_DATA", "CORPORATE_ACTIONS", "OPTIONS_CHAIN", "OPTION_QUOTES", "INDEX_DATA", "ETF_DATA"],
+      assetClasses: [...provider.capabilities().assetClasses, "option"],
+      fixture: false,
+      live: true,
+      options: true,
+    }),
+  },
+  blockers: [],
+  env: { FINCOACH_AUTH_REQUIRED: "true", DATABASE_URL: "postgres://local/test" } as NodeJS.ProcessEnv,
+});
 assert.equal(softwareReady.codeReady, true);
 assert.equal(softwareReady.liveExecutionBlocked, true);
 const localFixtureReadiness = portfolioReadiness({ config, provider, blockers: [], env: {} as NodeJS.ProcessEnv });

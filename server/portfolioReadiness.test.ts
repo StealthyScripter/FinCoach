@@ -20,7 +20,22 @@ const base = {
 };
 
 const realProvider = new FixturePortfolioMarketDataProvider();
-const ready = portfolioReadiness({ config: base, provider: { ...realProvider, capabilities: () => ({ ...realProvider.capabilities(), fixture: false, live: true, options: true }) }, blockers: [], env: { FINCOACH_AUTH_REQUIRED: "true", DATABASE_URL: "postgres://local/test" } as NodeJS.ProcessEnv });
+const ready = portfolioReadiness({
+  config: base,
+  provider: {
+    ...realProvider,
+    capabilities: () => ({
+      ...realProvider.capabilities(),
+      capabilities: [...realProvider.capabilities().capabilities, "REFERENCE_DATA", "CORPORATE_ACTIONS", "OPTIONS_CHAIN", "OPTION_QUOTES", "INDEX_DATA", "ETF_DATA"],
+      assetClasses: [...realProvider.capabilities().assetClasses, "option"],
+      fixture: false,
+      live: true,
+      options: true,
+    }),
+  },
+  blockers: [],
+  env: { FINCOACH_AUTH_REQUIRED: "true", DATABASE_URL: "postgres://local/test" } as NodeJS.ProcessEnv,
+});
 assert.equal(ready.codeReady, true);
 assert.equal(ready.configReady, true);
 assert.equal(ready.providerReady, true);

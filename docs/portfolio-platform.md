@@ -22,7 +22,10 @@ Required deployment additions:
 - `FINCOACH_AUTH_SESSION_SECRET=<strong random secret>`
 - `FINCOACH_PORTFOLIO_ENABLED=true` only when the operator wants Portfolio online
 - `FINCOACH_PORTFOLIO_STARTING_CAPITAL=100000`
+- `FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER=alpha_vantage`
+- `ALPHA_VANTAGE_API_KEY=<provider secret>`
 - `FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED=false`
+- `FINCOACH_PORTFOLIO_ALLOW_FIXTURE_PROVIDER=false`
 
 Safe defaults leave Portfolio disabled and live execution blocked.
 
@@ -36,13 +39,17 @@ Bootstrap creates 20 independent virtual portfolios spanning capital preservatio
 
 ## Market Data
 
-The provider abstraction supports multiple asset classes. The first implementation supports:
+The provider abstraction supports capability-driven routing across market-data providers. Strategies ask for capabilities such as quote, historical OHLCV, search, reference data, corporate actions, options chain, options quotes, market status, ETF, index, fixed-income, FX, or commodity data; the router selects an eligible real provider, applies cache freshness and request budgets, and reports unsupported capabilities instead of inventing data.
+
+Current implementations:
 
 - `none`: production-safe unavailable provider that records blockers instead of inventing prices.
-- `alpha_vantage`: real provider for equity/ETF/index-proxy quote, historical daily OHLCV, symbol search, and broad market status. Requires `ALPHA_VANTAGE_API_KEY`.
+- `alpha_vantage`: real provider for equity/ETF/index-proxy quote, historical daily OHLCV, symbol search, broad market status, and observed options chain/quote data where the provider account supports it. Requires `ALPHA_VANTAGE_API_KEY`.
 - `fixture`: deterministic test/development provider. It is marked as fixture/non-live and is rejected for production Portfolio activation.
 
-No live equity/ETF/options prices are fabricated. Unsupported instruments, including options in the first real provider, are reported as unavailable/degraded.
+No live equity/ETF/options prices are fabricated. Unsupported instruments and provider capability gaps are reported as unavailable/degraded.
+
+Options support uses observed provider contracts: contract id, underlying, call/put, strike, expiration, bid, ask, last, volume, open interest, implied volatility, multiplier, and ACTIVE/EXPIRING/EXPIRED lifecycle. Expired virtual options require observed underlying settlement input; settlement is blocked if the required market observation is unavailable.
 
 ## Virtual Broker And Accounting
 
@@ -58,9 +65,11 @@ Existing FX safety gates are unchanged.
 
 ## Operations
 
-Portfolio health is exposed at:
+Portfolio health and readiness are exposed at:
 
 - `GET /api/portfolio/health`
+- `GET /api/portfolio/readiness`
+- `GET /api/portfolio/provider`
 - process health includes `subsystems.portfolio`
 
 Portfolio routes are authenticated:
@@ -68,6 +77,8 @@ Portfolio routes are authenticated:
 - `GET /api/portfolio/summary`
 - `GET /api/portfolio/strategies/:portfolioId`
 - `GET /api/portfolio/activity`
+- `GET /api/portfolio/research`
+- `POST /api/portfolio/research/run`
 - `POST /api/portfolio/strategies/:portfolioId/rebalance`
 
 Config and provider blockers are recorded through the canonical operational blocker service. Telegram delivery uses existing dedupe/reminder behavior when operator notification configuration is enabled.
@@ -85,7 +96,9 @@ Migration `0020_auth_and_portfolio_platform.sql` is additive and creates:
 - `portfolio_decision_journal`
 - `portfolio_rankings`
 
-The migration uses idempotent `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` statements inside a transaction. It does not update, delete, truncate, or destructively rewrite existing rows.
+Migration `0021_portfolio_extended_tables.sql` adds durable orders, strategy versions, benchmarks, rebalances, allocations, and market-data cache tables. Migration `0022_portfolio_research_validation.sql` adds durable research hypotheses, backtests, walk-forward validation, and virtual forward-test evidence tables.
+
+These migrations use idempotent `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` statements inside transactions. They do not update, delete, truncate, or destructively rewrite existing rows.
 
 ## Deployment
 
