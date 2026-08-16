@@ -43,6 +43,9 @@ const READ_ONLY_COMMANDS = new Set([
   "/pipeline",
   "/research_blockers",
   "/open_exchanges",
+  "/config_blockers",
+  "/fallbacks",
+  "/limits",
   "/markets_open",
   "/market_status",
   "/market_snapshot",
@@ -126,6 +129,7 @@ export class TelegramCommandRouter {
       "/observations /hypotheses /experiments /backtests",
       "/strategies /leaderboard /strategy <rank|id|symbol> /sessions /detectors",
       "/pipeline /blockers /data /trading /risk /daily /why <metric>",
+      "/config_blockers /fallbacks /limits",
       "/court_cases /strategy_leaderboard /strategy_portfolio /forward_tests /signals /evaluator_results /lessons /strategy_health",
       "Confirmation required: /pause_demo /resume_demo /disable_automation /kill",
       "Live trading commands are blocked.",
@@ -187,8 +191,11 @@ export class TelegramCommandRouter {
       }
       case "/research_blockers":
       case "/blockers":
+      case "/config_blockers":
+      case "/fallbacks":
+      case "/limits":
       case "/readiness": {
-        return operationsReportingService.telegramMessage("/blockers");
+        return operationsReportingService.telegramMessage(command === "/readiness" ? "/blockers" : command);
       }
       case "/coverage":
         return operationsReportingService.telegramMessage("/coverage");

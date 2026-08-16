@@ -52,6 +52,7 @@ import { emitResearchCycleObserverSummaries, emitSafetyStateSnapshot, type Marke
 import { createDomainEvent, type DomainEvent } from "../contracts";
 import { OrchestrationV2EventTypes } from "../orchestration/events";
 import { marketSnapshotService } from "../../marketSnapshotService";
+import { envState, operationalBlockerService, type OperationalBlockerEvent } from "../../operationalBlockerService";
 import { resolveResearchInstrument, validateResearchUniverse } from "../researchUniverse";
 import { activeFxResearchSession, type FxResearchSessionId } from "../fxResearchSessions";
 import { classifyRegimeFromObservation, instantiateStrategyTemplates } from "../strategyTemplates";
@@ -60,7 +61,7 @@ type V2Repositories = ReturnType<typeof createRepositories>;
 type WeeklyTransitionNotifier = (input: { kind: "open" | "close"; boundaryAt: string; window: WeeklyResearchWindowState; aggregate: AggregateTradableWindow }) => Promise<unknown>;
 let weeklyTransitionNotifier: WeeklyTransitionNotifier | null = null;
 
-export type V2RuntimeState = "disabled" | "initialized" | "running" | "idle" | "blocked" | "failed" | "stopping" | "stopped" | "scheduled_closed" | "suspended_waiting_for_market" | "starting_for_week" | "stopping_for_week" | "calendar_unavailable" | "configuration_blocked";
+export type V2RuntimeState = "disabled" | "initialized" | "running" | "idle" | "blocked" | "failed" | "stopping" | "stopped" | "scheduled_closed" | "suspended_waiting_for_market" | "starting_for_week" | "stopping_for_week" | "calendar_unavailable" | "configuration_blocked" | "POST_CLOSE_OBSERVATION" | "WEEKEND_DORMANT" | "PRE_OPEN_READINESS";
 
 export class FinCoachV2Runtime {
   private pool: Pool | null = null;
@@ -81,6 +82,8 @@ export class FinCoachV2Runtime {
   private pendingWeeklyTransitionKind: "lead" | "open" | "close" | null = null;
   private pendingWeeklyTransitionSource: string | null = null;
   private pendingWeeklyTransitionReason: string | null = null;
+  private weekendLifecycleState: "RUNNING" | "POST_CLOSE_OBSERVATION" | "WEEKEND_DORMANT" | "PRE_OPEN_READINESS" = "RUNNING";
+  private lastWeekendLifecycleState: string | null = null;
 
   constructor(
     private readonly env: NodeJS.ProcessEnv = process.env,
@@ -104,6 +107,7 @@ export class FinCoachV2Runtime {
         configuration: { ok: validation.ok, errors: validation.errors, warnings: validation.warnings, config: redactedConfig(validation.config) },
       });
       this.logSafetyStateSnapshot("configuration_checked");
+      await operationalBlockerService.recordMany(configurationBlockers(validation, this.env, this.bootId));
       if (validation.config.runtimeEnabled) throw new Error(`V2 runtime configuration failed: ${validation.errors.join("; ")}`);
       return this.status();
     }
@@ -112,6 +116,21 @@ export class FinCoachV2Runtime {
       configureV2OperationsService(this.createOperationsService(null));
       structuredLogger.v2({ level: "info", event: "v2_runtime_disabled", message: "V2 runtime disabled by configuration", runtimeInstanceId: this.bootId, configuration: { config: redactedConfig(validation.config), warnings: validation.warnings } });
       this.logSafetyStateSnapshot("runtime_disabled");
+      await operationalBlockerService.record({
+        kind: "configuration",
+        code: "v2_runtime_disabled",
+        title: "⚠️ Runtime blocked: V2 runtime disabled",
+        whatBlocked: "V2 research runtime",
+        reason: "FINCOACH_V2_RUNTIME_ENABLED is false or unset",
+        currentValue: validation.config.runtimeEnabled,
+        limitValue: "true required to run V2 runtime",
+        configKey: "FINCOACH_V2_RUNTIME_ENABLED",
+        configValueState: envState(this.env, "FINCOACH_V2_RUNTIME_ENABLED"),
+        scope: { component: "v2-runtime" },
+        expected: true,
+        action: "Set FINCOACH_V2_RUNTIME_ENABLED=true only after database and provider readiness are verified.",
+        effect: "No V2 research or trading workflow is admitted.",
+      });
       return this.status();
     }
     structuredLogger.v2({ level: "info", event: "v2_runtime_initializing", message: "V2 runtime initialization started", runtimeInstanceId: this.bootId, configuration: { config: redactedConfig(validation.config), warnings: validation.warnings } });
@@ -171,6 +190,21 @@ export class FinCoachV2Runtime {
       this.state = this.config.runtimeEnabled ? "blocked" : "disabled";
       this.lastError = blockedReason(this.config);
       this.lastRunResult = { completed: false, reason: this.lastError };
+      await operationalBlockerService.record({
+        kind: "configuration",
+        code: this.lastError,
+        title: "⚠️ Research blocked: runtime gate disabled",
+        whatBlocked: "research cycle admission",
+        reason: this.lastError,
+        currentValue: { runtimeEnabled: this.config.runtimeEnabled, researchEnabled: this.config.researchEnabled, pilotEnabled: this.config.pilotEnabled },
+        limitValue: "runtime, research, and pilot enabled",
+        configKey: this.lastError === "v2_research_disabled" ? "FINCOACH_V2_RESEARCH_ENABLED" : this.lastError === "v2_pilot_disabled" ? "FINCOACH_V2_PILOT_ENABLED" : "FINCOACH_V2_RUNTIME_ENABLED",
+        configValueState: this.lastError === "v2_research_disabled" ? envState(this.env, "FINCOACH_V2_RESEARCH_ENABLED") : this.lastError === "v2_pilot_disabled" ? envState(this.env, "FINCOACH_V2_PILOT_ENABLED") : envState(this.env, "FINCOACH_V2_RUNTIME_ENABLED"),
+        scope: { component: "v2-runtime" },
+        expected: true,
+        action: "Enable only the intended runtime gates after confirming database/provider readiness and preserving live-execution blocks.",
+        effect: "No V2 research cycle runs.",
+      });
       structuredLogger.v2({
         level: "warn",
         event: "research_cycle_blocked",
@@ -194,10 +228,40 @@ export class FinCoachV2Runtime {
         nextWindowOpensAt: aggregate.nextTradableOpenAt,
         liveExecutionBlocked: true,
       };
+      await operationalBlockerService.record({
+        kind: "lifecycle",
+        code: "weekly_market_window_closed",
+        title: "⚠️ Research blocked: weekly market window closed",
+        whatBlocked: "research cycle admission",
+        reason: "weekly_market_window_closed",
+        currentValue: aggregate.anyConfiguredInstrumentTradable,
+        limitValue: "configured instrument tradable window open",
+        configKey: "FINCOACH_WEEKLY_RESEARCH_*",
+        configValueState: "N/A",
+        scope: { component: "market-session-clock" },
+        expected: true,
+        action: "Wait for the canonical weekly market/research window to reopen.",
+        effect: "Manual or scheduled research cycle was skipped.",
+      });
       this.logAggregateWindowState(aggregate);
       return this.lastRunResult;
     }
     if (this.activeCycle) {
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: "research_cycle_already_active",
+        title: "⚠️ Research blocked: cycle already active",
+        whatBlocked: "concurrent research cycle admission",
+        reason: "cycle_already_active",
+        currentValue: 1,
+        limitValue: 1,
+        configKey: "FINCOACH_V2_LEASE_TTL_MS",
+        configValueState: envState(this.env, "FINCOACH_V2_LEASE_TTL_MS"),
+        scope: { component: "v2-runtime" },
+        expected: true,
+        action: "Wait for the active cycle to finish; inspect leases only if it exceeds FINCOACH_V2_CYCLE_TIMEOUT_MS.",
+        effect: "Duplicate cycle request was suppressed.",
+      });
       structuredLogger.v2({ level: "warn", event: "research_cycle_suppressed", message: "V2 research cycle suppressed because one is already active", runtimeInstanceId: this.bootId, requestedBy: input.requestedBy ?? "manual" });
       return { completed: false, reason: "cycle_already_active" };
     }
@@ -207,7 +271,42 @@ export class FinCoachV2Runtime {
     const now = new Date();
     const recovered = await recoverStaleCycles(repositories.orchestration, { now, staleAfterMs: this.config.cycleTimeoutMs + this.config.leaseTtlMs, correlationId });
     if (recovered.length) {
+      await operationalBlockerService.record({
+        kind: "dependency",
+        code: "stale_cycles_recovered",
+        title: "🟡 Runtime degraded: stale cycles recovered",
+        whatBlocked: "previous running cycle completion",
+        reason: "stale_cycle_recovered",
+        currentValue: recovered.length,
+        limitValue: `${this.config.cycleTimeoutMs + this.config.leaseTtlMs}ms stale threshold`,
+        configKey: "FINCOACH_V2_CYCLE_TIMEOUT_MS",
+        configValueState: envState(this.env, "FINCOACH_V2_CYCLE_TIMEOUT_MS"),
+        scope: { component: "orchestration" },
+        expected: false,
+        action: "Inspect prior process health, database latency, and lease renewal failures.",
+        effect: "Stale running cycles were marked recoverable before admitting new work.",
+        count: recovered.length,
+        now,
+      });
       structuredLogger.v2({ level: "warn", event: "stale_cycle_recovered", message: "Recovered stale V2 running cycles", correlationId, runtimeInstanceId: this.bootId, recoveredCycles: recovered.map(cycle => cycle.cycleId) });
+    }
+    if (this.config.researchDataMode === "synthetic") {
+      await operationalBlockerService.record({
+        kind: "fallback",
+        code: "synthetic_research_data_active",
+        title: "🟡 Provider fallback active",
+        whatBlocked: "provider-backed research output",
+        reason: "FINCOACH_V2_RESEARCH_DATA_MODE is synthetic or provider mode is not required outside production",
+        currentValue: "deterministic/demo data",
+        limitValue: "provider-backed candles",
+        configKey: "FINCOACH_V2_RESEARCH_DATA_MODE",
+        configValueState: envState(this.env, "FINCOACH_V2_RESEARCH_DATA_MODE"),
+        scope: { component: "market-data-provider" },
+        expected: this.env.NODE_ENV !== "production",
+        action: "Configure provider mode and OANDA practice credentials when provider-backed research is required.",
+        effect: "Research output is not provider-backed.",
+        now,
+      });
     }
     const scheduledWindowStart = scheduledWindow(now, this.config.cadenceMs);
     const idempotencyKey = input.requestedBy?.startsWith("v2-autostart") ? `v2-cycle:${scheduledWindowStart}` : `v2-cycle:${input.requestedBy ?? "manual"}:${scheduledWindowStart}`;
@@ -221,6 +320,22 @@ export class FinCoachV2Runtime {
     if (!admission.admitted) {
       this.lastError = admission.reason ?? "cycle_admission_rejected";
       this.lastRunResult = { completed: false, reason: this.lastError, idempotencyKey, admissionDate: admission.admissionDate, admittedCount: admission.admittedCount, maxCyclesPerDay: admission.limit, liveExecutionBlocked: true };
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: this.lastError,
+        title: "⚠️ Research blocked: maximum cycles per day reached",
+        whatBlocked: "research cycle admission",
+        reason: this.lastError,
+        currentValue: admission.admittedCount,
+        limitValue: admission.limit,
+        configKey: "FINCOACH_V2_MAX_CYCLES_PER_DAY",
+        configValueState: envState(this.env, "FINCOACH_V2_MAX_CYCLES_PER_DAY"),
+        scope: { cycleId, component: "orchestration" },
+        expected: true,
+        action: "Wait for the next UTC admission day or intentionally revise the cycle cap after capacity review.",
+        effect: "Requested cycle was rejected before any research/provider work.",
+        now,
+      });
       structuredLogger.v2({ level: "warn", event: admission.reason === "daily_limit_reached" ? "cycle_daily_limit_reached" : "cycle_admission_rejected", message: "V2 research cycle admission rejected", cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, reason: this.lastError, admissionDate: admission.admissionDate, admittedCount: admission.admittedCount, limit: admission.limit });
       return this.lastRunResult;
     }
@@ -232,6 +347,22 @@ export class FinCoachV2Runtime {
       this.lastError = "runtime_lease_unavailable";
       await repositories.orchestration.updateCycleStatus({ cycleId: admittedCycle.cycleId, status: "failed", reason: "lease_unavailable" }).catch(() => undefined);
       this.lastRunResult = { cycleId: admittedCycle.cycleId, completed: false, reason: this.lastError, liveExecutionBlocked: true };
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: "runtime_lease_unavailable",
+        title: "⚠️ Research blocked: runtime lease unavailable",
+        whatBlocked: "research cycle execution",
+        reason: "lease_unavailable",
+        currentValue: "held or unavailable",
+        limitValue: "exclusive runtime lease",
+        configKey: "FINCOACH_V2_LEASE_TTL_MS",
+        configValueState: envState(this.env, "FINCOACH_V2_LEASE_TTL_MS"),
+        scope: { cycleId: admittedCycle.cycleId, component: "orchestration" },
+        expected: true,
+        action: "Wait for the active worker or inspect stale leases if this persists beyond the TTL.",
+        effect: "Admitted cycle failed before research work began.",
+        now,
+      });
       structuredLogger.v2({ level: "warn", event: "lease_acquisition_rejected", message: "V2 research cycle could not acquire runtime lease", cycleId: admittedCycle.cycleId, correlationId, runtimeInstanceId: this.bootId, requestedBy: input.requestedBy ?? "manual", reason: this.lastError });
       return this.lastRunResult;
     }
@@ -269,6 +400,22 @@ export class FinCoachV2Runtime {
       this.lastError = reason;
       this.lastRunResult = { cycleId: admittedCycle.cycleId, completed: false, reason, liveExecutionBlocked: true };
       this.state = "failed";
+      await operationalBlockerService.record({
+        kind: reason === "cycle_timeout" ? "limit" : "dependency",
+        code: reason,
+        title: reason === "cycle_timeout" ? "⚠️ Research blocked: cycle timeout reached" : "🟡 Runtime degraded: research cycle failed",
+        whatBlocked: "research cycle completion",
+        reason,
+        currentValue: Date.now() - startedAt,
+        limitValue: this.config.cycleTimeoutMs,
+        configKey: reason === "cycle_timeout" ? "FINCOACH_V2_CYCLE_TIMEOUT_MS" : "FINCOACH_V2_RETRY_BUDGET",
+        configValueState: reason === "cycle_timeout" ? envState(this.env, "FINCOACH_V2_CYCLE_TIMEOUT_MS") : envState(this.env, "FINCOACH_V2_RETRY_BUDGET"),
+        scope: { cycleId: admittedCycle.cycleId, component: "orchestration" },
+        expected: reason === "cycle_timeout",
+        action: reason === "cycle_timeout" ? "Inspect provider/database latency and raise timeout only if capacity supports longer cycles." : "Inspect the failed dependency and retry budget before resuming.",
+        effect: "Cycle ended without completing the full research path.",
+        now: new Date(),
+      });
       structuredLogger.v2Error({ level: "error", event: reason === "cycle_timeout" ? "cycle_timed_out" : reason === "lease_lost" ? "lease_lost" : "research_cycle_failed", message: "Research cycle failed", cycleId: admittedCycle.cycleId, correlationId, requestedBy: input.requestedBy ?? "manual", runtimeInstanceId: this.bootId, durationMs: Date.now() - startedAt, retryAttempt: 1, nextRetryAt, reason, error });
       return this.lastRunResult;
     } finally {
@@ -358,6 +505,12 @@ export class FinCoachV2Runtime {
       },
       lastWeeklyTransition: this.lastWeeklyTransition,
       weeklyNotificationDeliveryState: this.lastWeeklyTransition,
+      weekendLifecycle: {
+        enabled: this.config.weekendDormancy.enabled,
+        state: this.weekendLifecycleState,
+        postCloseObservationHours: this.config.weekendDormancy.postCloseObservationHours,
+        preOpenWakeMinutes: this.config.weekendDormancy.preOpenWakeMinutes,
+      },
       marketSnapshotScheduler: marketSnapshotService.status(),
       liveExecutionBlocked: true,
       deployedRevision: deploymentMetadata(this.env),
@@ -402,10 +555,14 @@ export class FinCoachV2Runtime {
         leaseTtlMs: this.config.leaseTtlMs,
         leaseRenewIntervalMs: this.config.leaseRenewIntervalMs,
         liveExecutionBlocked: true,
+        weekendDormancyEnabled: this.config.weekendDormancy.enabled,
+        postCloseObservationHours: this.config.weekendDormancy.postCloseObservationHours,
+        preOpenWakeMinutes: this.config.weekendDormancy.preOpenWakeMinutes,
       },
       orchestrationSafety: orchestrationSafetyStatus(this.config, this.configValidation, this.lastError),
       economicEvidenceState: "available_empty",
       providerHealth: this.config.researchEnabled ? "available" : "disabled",
+      weekendLifecycleState: this.weekendLifecycleState,
     }));
   }
 
@@ -480,9 +637,11 @@ export class FinCoachV2Runtime {
     const deferReasons: Record<string, string> = {};
     const cycleStartedAt = Date.now();
 
-    const tradableResearchSymbols = marketSessionsService.instrumentSessions(this.config.symbols, input.now)
-      .filter(session => session.status === "open" && resolveResearchInstrument(session.symbol))
-      .map(session => session.symbol);
+    const tradableResearchSymbols = this.config.weeklyResearchSchedule.enabled
+      ? marketSessionsService.instrumentSessions(this.config.symbols, input.now)
+        .filter(session => session.status === "open" && resolveResearchInstrument(session.symbol))
+        .map(session => session.symbol)
+      : this.config.symbols.filter(symbol => resolveResearchInstrument(symbol));
     const activeFxSession = activeFxResearchSession(input.now, tradableResearchSymbols);
     const prioritySymbols = activeFxSession?.prioritySymbols.length ? activeFxSession.prioritySymbols : activeFxSession?.compatibleConfiguredSymbols ?? [];
     const orderedResearchSymbols = prioritySymbols.length
@@ -492,10 +651,48 @@ export class FinCoachV2Runtime {
     const plans = buildObservationPlan(this.config, orderedResearchSymbols, input.cycleId);
     const plannedKeys = new Set(plans.map(observationPlanKey));
     const cycleBudgetSkipped = theoreticalPlans.filter(plan => !plannedKeys.has(observationPlanKey(plan)));
+    if (cycleBudgetSkipped.length) {
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: "max_observations_per_cycle_reached",
+        title: "⚠️ Research blocked: maximum observations reached",
+        whatBlocked: "remaining detector observation candidates",
+        reason: "cycle_budget",
+        currentValue: plans.length,
+        limitValue: this.config.maxObservationsPerCycle,
+        configKey: "FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE",
+        configValueState: envState(this.env, "FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE"),
+        scope: { cycleId: input.cycleId, sessionId: activeFxSession?.sessionId, component: "v2-runtime" },
+        expected: true,
+        action: "Increase the limit only if provider and database capacity supports the additional observations.",
+        effect: `${cycleBudgetSkipped.length} detector evaluations deferred.`,
+        count: cycleBudgetSkipped.length,
+        now: input.now,
+      });
+    }
     for (const plan of cycleBudgetSkipped) {
       await guarded(input.guard, "detector_evaluation_skipped", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol: plan.symbol, timeframe: plan.timeframe, detectorId: plan.detector.detectorId, detectorVersion: plan.detector.detectorVersion, strategyFamily: plan.detector.capability?.strategyFamily, status: "skipped", reason: "cycle_budget", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
     }
     const providerPlan = planProviderRequests(this.config, plans);
+    if (providerPlan.deferred.length) {
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: "provider_call_budget_reached",
+        title: "⚠️ Research blocked: provider call budget reached",
+        whatBlocked: "market-data provider requests",
+        reason: "provider_budget",
+        currentValue: providerPlan.plannedProviderRequests,
+        limitValue: this.config.providerCallBudget,
+        configKey: "FINCOACH_V2_PROVIDER_CALL_BUDGET",
+        configValueState: envState(this.env, "FINCOACH_V2_PROVIDER_CALL_BUDGET"),
+        scope: { cycleId: input.cycleId, sessionId: activeFxSession?.sessionId, component: "market-data-provider" },
+        expected: true,
+        action: "Raise the provider budget only when OANDA rate limits and account capacity permit it.",
+        effect: `${providerPlan.deferred.length} symbol/timeframe provider requests deferred.`,
+        count: providerPlan.deferred.length,
+        now: input.now,
+      });
+    }
     for (const request of providerPlan.deferred) {
       deferReasons[request.symbol] = "provider_budget";
       for (const plan of request.plans) {
@@ -513,6 +710,22 @@ export class FinCoachV2Runtime {
         candles = await researchCandles(this.config, this.env, symbol, timeframe, input.now, Math.max(80, ...request.plans.map(plan => plan.detector.capability?.requiredCandles ?? 0)));
       } catch (error) {
         const reason = sanitizedProviderFailureReason(error);
+        await operationalBlockerService.record({
+          kind: "dependency",
+          code: reason,
+          title: "🟡 Provider data degraded",
+          whatBlocked: "provider-backed detector evaluation",
+          reason,
+          currentValue: providerDiagnostic(error) ?? reason,
+          limitValue: "authoritative completed candles",
+          configKey: reason === "provider_credentials_missing" ? "OANDA_API_TOKEN" : "OANDA_BASE_URL",
+          configValueState: reason === "provider_credentials_missing" ? envState(this.env, "OANDA_API_TOKEN") : envState(this.env, "OANDA_BASE_URL"),
+          scope: { cycleId: input.cycleId, symbol, sessionId: activeFxSession?.sessionId, component: "oanda-candles" },
+          expected: false,
+          action: reason === "provider_credentials_missing" ? "Configure OANDA_API_TOKEN and OANDA_ACCOUNT_ID for provider-backed research." : "Inspect provider reachability, credentials, rate limits, and candle availability.",
+          effect: "Detector evaluations for this symbol/timeframe were skipped; synthetic data was not substituted.",
+          now: input.now,
+        });
         blockers.push(blocker("warning", "research_market_data_unavailable", "observations", "Detector evaluation skipped because authoritative provider research data was unavailable.", symbol, "provider candles", "Restore the configured provider; do not substitute synthetic candles.", input.now));
         deferReasons[symbol] = reason;
         for (const plan of request.plans) {
@@ -532,6 +745,20 @@ export class FinCoachV2Runtime {
       const lastCandle = candles.at(-1)!;
       recordCoverageSuccess(marketDataCoverage, symbol, timeframe, activeFxSession?.sessionId ?? "unknown", lastCandle.source.provider, lastCandle.timestamp, input.now);
       if (!lastCandle.complete) {
+        await operationalBlockerService.record({
+          kind: "dependency",
+          code: "incomplete_latest_candle",
+          title: "⚠️ Research blocked: latest candle incomplete",
+          whatBlocked: "detector evaluation on incomplete market data",
+          reason: "incomplete_latest_candle",
+          currentValue: lastCandle.timestamp,
+          limitValue: "completed candle required",
+          scope: { cycleId: input.cycleId, symbol, sessionId: activeFxSession?.sessionId, component: "market-data" },
+          expected: true,
+          action: "Wait for the completed candle boundary before evaluating this timeframe.",
+          effect: "Detector evaluations for the incomplete candle were skipped.",
+          now: input.now,
+        });
         blockers.push(blocker("warning", "incomplete_candle_skipped", "observations", "Detector evaluation skipped because latest candle is incomplete.", false, true, "Wait for completed candle boundary.", input.now));
         for (const plan of request.plans) {
           const { detector } = plan;
@@ -669,6 +896,22 @@ export class FinCoachV2Runtime {
       structuredLogger.v2({ level: "info", event: "hypothesis_candidate_evaluated", message: "V2 hypothesis candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload });
       if (support.length < this.config.minIndependentHypothesisOccurrences || independentOccurrenceCount(support) < this.config.minIndependentHypothesisOccurrences) {
         hypothesesBlocked += 1;
+        await operationalBlockerService.record({
+          kind: "limit",
+          code: "minimum_independent_hypothesis_occurrences_not_met",
+          title: "⚠️ Hypothesis blocked: minimum evidence not met",
+          whatBlocked: "hypothesis creation",
+          reason: "insufficient_independent_occurrences",
+          currentValue: independentOccurrenceCount(support),
+          limitValue: this.config.minIndependentHypothesisOccurrences,
+          configKey: "FINCOACH_V2_MIN_INDEPENDENT_HYPOTHESIS_OCCURRENCES",
+          configValueState: envState(this.env, "FINCOACH_V2_MIN_INDEPENDENT_HYPOTHESIS_OCCURRENCES"),
+          scope: { cycleId: input.cycleId, symbol: candidate.symbol, sessionId: activeFxSession?.sessionId, component: "hypothesis" },
+          expected: true,
+          action: "Allow more complete independent observations or revise the requirement only with evidence policy approval.",
+          effect: "Candidate remained below hypothesis promotion threshold.",
+          now: input.now,
+        });
         blockers.push(blocker("critical", "hypothesis_insufficient_independent_occurrences", "hypothesis", "Not enough distinct candle windows to create hypothesis.", independentOccurrenceCount(support), this.config.minIndependentHypothesisOccurrences, "Collect another complete candle occurrence with full lineage.", input.now));
         structuredLogger.v2({ level: "warn", event: "hypothesis_insufficient_independent_occurrences", message: "V2 hypothesis candidate blocked", cycleId: input.cycleId, correlationId: input.correlationId, ...commonPayload, blocker: "insufficient_independent_occurrences" });
         continue;
@@ -743,8 +986,14 @@ export class FinCoachV2Runtime {
         }
         for (const strategyInput of strategyInputs) {
           const family = String(strategyInput.filters.find(rule => rule.field === "primaryFamily")?.value ?? "unknown");
-          if ((strategyCandidatesByFamily.get(family) ?? 0) >= this.config.maxCandidatesPerFamilyPerCycle) continue;
-          if ((strategyCandidatesBySymbol.get(candidate.symbol) ?? 0) >= this.config.maxCandidatesPerSymbolPerCycle) continue;
+          if ((strategyCandidatesByFamily.get(family) ?? 0) >= this.config.maxCandidatesPerFamilyPerCycle) {
+            await operationalBlockerService.record(limitEvent("strategy_family_candidate_cap_reached", "⚠️ Strategy blocked: family candidate cap reached", "strategy candidate creation", "family_candidate_cap", strategyCandidatesByFamily.get(family) ?? 0, this.config.maxCandidatesPerFamilyPerCycle, "FINCOACH_V2_MAX_CANDIDATES_PER_FAMILY_PER_CYCLE", input.cycleId, candidate.symbol, sessionId, "Wait for the next cycle or intentionally revise the per-family cap.", input.now));
+            continue;
+          }
+          if ((strategyCandidatesBySymbol.get(candidate.symbol) ?? 0) >= this.config.maxCandidatesPerSymbolPerCycle) {
+            await operationalBlockerService.record(limitEvent("strategy_symbol_candidate_cap_reached", "⚠️ Strategy blocked: symbol candidate cap reached", "strategy candidate creation", "symbol_candidate_cap", strategyCandidatesBySymbol.get(candidate.symbol) ?? 0, this.config.maxCandidatesPerSymbolPerCycle, "FINCOACH_V2_MAX_CANDIDATES_PER_SYMBOL_PER_CYCLE", input.cycleId, candidate.symbol, sessionId, "Wait for the next cycle or intentionally revise the per-symbol cap.", input.now));
+            continue;
+          }
           const compiled = rulesV2Compiler.compile(strategyInput);
           if (!compiled.strategy) continue;
           const compiledStrategy = compiled.strategy;
@@ -917,10 +1166,31 @@ export class FinCoachV2Runtime {
     if (window.reason === "configuration_invalid" || aggregate.calendarQuality === "unavailable") {
       this.suspendCadence("weekly_schedule_configuration_invalid");
       this.state = aggregate.calendarQuality === "unavailable" ? "calendar_unavailable" : "configuration_blocked";
+      await operationalBlockerService.record({
+        kind: "configuration",
+        code: "weekly_market_calendar_unavailable",
+        title: "⚠️ Research blocked: market calendar unavailable",
+        whatBlocked: "weekly research admission",
+        reason: aggregate.calendarQuality === "unavailable" ? "calendar_unavailable" : "weekly_schedule_configuration_invalid",
+        currentValue: aggregate.calendarQuality,
+        limitValue: "valid market/session calendar",
+        configKey: "FINCOACH_WEEKLY_RESEARCH_*",
+        configValueState: "INVALID",
+        scope: { component: "market-session-clock" },
+        expected: false,
+        action: "Fix the weekly research schedule or configured instrument universe before admitting research.",
+        effect: "No research cycle is admitted.",
+      });
       this.scheduleWeeklyTimer(window);
       return;
     }
     if (aggregate.anyConfiguredInstrumentTradable) {
+      if (this.config.weekendDormancy.enabled && this.weekendLifecycleState === "PRE_OPEN_READINESS") {
+        await this.transitionWeekendLifecycle("RUNNING", "🟢 FinCoach weekly operations resumed", aggregate.nextTradableOpenAt ?? new Date().toISOString());
+      } else {
+        this.weekendLifecycleState = "RUNNING";
+        operationalBlockerService.setDormant(false);
+      }
       this.state = "starting_for_week";
       const openBoundary = aggregate.openInstrumentSessions.map((session) => session.openedAt).filter(Boolean).sort()[0] ?? aggregate.nextTradableOpenAt;
       if (aggregate.anyConfiguredInstrumentTradable && openBoundary) {
@@ -930,17 +1200,88 @@ export class FinCoachV2Runtime {
       this.startCadence(trigger === "startup" ? "v2-weekly-startup" : "v2-weekly-open");
     } else if (insideLead) {
       this.suspendCadence("weekly_market_start_lead_waiting_for_open");
-      this.state = "starting_for_week";
+      if (this.config.weekendDormancy.enabled) {
+        await this.transitionWeekendLifecycle("PRE_OPEN_READINESS", "🌅 FinCoach pre-open readiness", aggregate.nextTradableOpenAt ?? window.nextWindowOpensAt ?? new Date().toISOString());
+        this.state = "PRE_OPEN_READINESS";
+      } else {
+        this.state = "starting_for_week";
+      }
     } else {
-      this.state = "stopping_for_week";
+      await this.applyWeekendClosedState(trigger, window, aggregate);
+      if (this.state !== "POST_CLOSE_OBSERVATION" && this.state !== "WEEKEND_DORMANT" && this.state !== "PRE_OPEN_READINESS") this.state = "stopping_for_week";
       if (trigger === "weekly_transition") {
         const boundaryAt = this.pendingWeeklyTransitionAt ?? aggregate.finalWeeklyCloseAt ?? previousCloseBoundary(window);
         const result = await weeklyTransitionNotifier?.({ kind: "close", boundaryAt, window, aggregate }) ?? { skipped: true, reason: "weekly_transition_notifier_not_configured" };
         this.lastWeeklyTransition = { kind: "close", boundaryAt, delivery: result };
       }
-      this.suspendCadence("weekly_market_window_closed");
+      if (this.state !== "POST_CLOSE_OBSERVATION" && this.state !== "WEEKEND_DORMANT" && this.state !== "PRE_OPEN_READINESS") this.suspendCadence("weekly_market_window_closed");
     }
     this.scheduleWeeklyTimer(window);
+  }
+
+  private async applyWeekendClosedState(trigger: string, window: WeeklyResearchWindowState, aggregate: AggregateTradableWindow) {
+    this.suspendCadence("weekly_market_window_closed");
+    if (!this.config.weekendDormancy.enabled) return;
+    const now = new Date();
+    const closeAt = aggregate.finalWeeklyCloseAt ?? previousFinalFridayCloseAt(now) ?? previousWeeklyCloseAt(this.config.weeklyResearchSchedule) ?? previousCloseBoundary(window);
+    const nextOpenAt = aggregate.nextTradableOpenAt ?? window.nextWindowOpensAt;
+    const closeMs = closeAt ? Date.parse(closeAt) : NaN;
+    const observationUntil = Number.isFinite(closeMs) ? closeMs + this.config.weekendDormancy.postCloseObservationHours * 3_600_000 : NaN;
+    const preOpenAt = nextOpenAt ? Date.parse(nextOpenAt) - this.config.weekendDormancy.preOpenWakeMinutes * 60_000 : NaN;
+    if (Number.isFinite(preOpenAt) && now.getTime() >= preOpenAt && nextOpenAt && now.getTime() < Date.parse(nextOpenAt)) {
+      await this.transitionWeekendLifecycle("PRE_OPEN_READINESS", "🌅 FinCoach pre-open readiness", nextOpenAt);
+      this.state = "PRE_OPEN_READINESS";
+      await this.startDormantServicesForReadiness();
+      return;
+    }
+    if (trigger === "weekly_transition" || (Number.isFinite(observationUntil) && now.getTime() < observationUntil)) {
+      await this.transitionWeekendLifecycle("POST_CLOSE_OBSERVATION", "🌙 FinCoach entering post-close observation", closeAt ?? now.toISOString());
+      this.state = "POST_CLOSE_OBSERVATION";
+      return;
+    }
+    await this.transitionWeekendLifecycle("WEEKEND_DORMANT", "💤 FinCoach weekend dormant", closeAt ?? now.toISOString());
+    this.state = "WEEKEND_DORMANT";
+    await this.stopDormantServices();
+  }
+
+  private async transitionWeekendLifecycle(state: "RUNNING" | "POST_CLOSE_OBSERVATION" | "WEEKEND_DORMANT" | "PRE_OPEN_READINESS", title: string, boundaryAt: string) {
+    if (this.lastWeekendLifecycleState === state) return;
+    this.weekendLifecycleState = state;
+    this.lastWeekendLifecycleState = state;
+    operationalBlockerService.setDormant(state === "WEEKEND_DORMANT");
+    await operationalBlockerService.record({
+      kind: "lifecycle",
+      code: `weekend_${state.toLowerCase()}`,
+      title,
+      whatBlocked: state === "RUNNING" || state === "PRE_OPEN_READINESS" ? "normal operations transition" : "new research/trading work",
+      reason: state.toLowerCase(),
+      currentValue: state,
+      limitValue: boundaryAt,
+      configKey: "FINCOACH_WEEKEND_DORMANCY_ENABLED",
+      configValueState: envState(this.env, "FINCOACH_WEEKEND_DORMANCY_ENABLED"),
+      scope: { component: "weekend-lifecycle" },
+      expected: true,
+      action: weekendAction(state),
+      effect: weekendEffect(state),
+      severity: "info",
+    });
+  }
+
+  private async stopDormantServices() {
+    marketSnapshotService.stop();
+    const telegram = await import("../../telegram");
+    telegram.telegramScheduler.stop();
+    await telegram.telegramUpdateReceiver.stop().catch(() => undefined);
+  }
+
+  private async startDormantServicesForReadiness() {
+    operationalBlockerService.setDormant(false);
+    if (this.env.FINCOACH_TELEGRAM_TRANSPORT === "long_polling") {
+      const telegram = await import("../../telegram");
+      telegram.telegramScheduler.start();
+      telegram.telegramUpdateReceiver.start();
+    }
+    marketSnapshotService.start();
   }
 
   private scheduleWeeklyTimer(window: WeeklyResearchWindowState) {
@@ -951,6 +1292,9 @@ export class FinCoachV2Runtime {
       aggregate,
       configuredWeeklyCloseAt: window.currentWindowClosesAt ?? window.nextWindowClosesAt,
       startLeadMinutes: this.config.weeklyResearchSchedule.startLeadMinutes,
+      weekendDormancy: this.config.weekendDormancy,
+      lifecycleState: this.weekendLifecycleState,
+      previousCloseAt: previousFinalFridayCloseAt(now) ?? previousWeeklyCloseAt(this.config.weeklyResearchSchedule, now),
       now,
     });
     const next = target?.at ?? null;
@@ -998,7 +1342,7 @@ function isInsideAggregateLead(minutes: number, nextOpenAt: string | null, now: 
   return delta > 0 && delta <= minutes * 60_000;
 }
 
-function nextWeeklyWakeTarget(input: { aggregate: AggregateTradableWindow; configuredWeeklyCloseAt: string | null; startLeadMinutes: number; now: Date }): { at: string; kind: "lead" | "open" | "close"; source: string; reason: string } | null {
+function nextWeeklyWakeTarget(input: { aggregate: AggregateTradableWindow; configuredWeeklyCloseAt: string | null; startLeadMinutes: number; weekendDormancy: V2RuntimeConfig["weekendDormancy"]; lifecycleState: "RUNNING" | "POST_CLOSE_OBSERVATION" | "WEEKEND_DORMANT" | "PRE_OPEN_READINESS"; previousCloseAt: string | null; now: Date }): { at: string; kind: "lead" | "open" | "close"; source: string; reason: string } | null {
   if (input.aggregate.anyConfiguredInstrumentTradable) {
     if (input.aggregate.finalWeeklyCloseAt) {
       return {
@@ -1013,12 +1357,27 @@ function nextWeeklyWakeTarget(input: { aggregate: AggregateTradableWindow; confi
     return input.configuredWeeklyCloseAt ? { at: input.configuredWeeklyCloseAt, kind: "close", source: "configured_weekly_close_fallback", reason: "aggregate_close_unavailable" } : null;
   }
   if (!input.aggregate.nextTradableOpenAt) return null;
+  if (input.weekendDormancy.enabled && input.lifecycleState === "POST_CLOSE_OBSERVATION" && input.previousCloseAt) {
+    const observationEnd = Date.parse(input.previousCloseAt) + input.weekendDormancy.postCloseObservationHours * 3_600_000;
+    if (Number.isFinite(observationEnd) && observationEnd > input.now.getTime()) {
+      return { at: new Date(observationEnd).toISOString(), kind: "close", source: "post_close_observation_expiry", reason: "enter_weekend_dormant_after_observation_window" };
+    }
+  }
   const openMs = Date.parse(input.aggregate.nextTradableOpenAt);
-  const leadMs = openMs - Math.max(0, input.startLeadMinutes) * 60_000;
-  if (input.startLeadMinutes > 0 && leadMs > input.now.getTime()) {
-    return { at: new Date(leadMs).toISOString(), kind: "lead", source: "aggregate_next_tradable_open_lead", reason: "wake_before_open_without_admitting_research" };
+  const leadMinutes = input.weekendDormancy.enabled ? Math.max(input.startLeadMinutes, input.weekendDormancy.preOpenWakeMinutes) : input.startLeadMinutes;
+  const leadMs = openMs - Math.max(0, leadMinutes) * 60_000;
+  if (leadMinutes > 0 && leadMs > input.now.getTime()) {
+    return { at: new Date(leadMs).toISOString(), kind: "lead", source: "aggregate_next_tradable_open_lead", reason: input.weekendDormancy.enabled ? "wake_for_pre_open_readiness" : "wake_before_open_without_admitting_research" };
   }
   return { at: input.aggregate.nextTradableOpenAt, kind: "open", source: "aggregate_next_tradable_open", reason: "wake_at_actual_tradable_open" };
+}
+
+function previousWeeklyCloseAt(config: V2RuntimeConfig["weeklyResearchSchedule"], now = new Date()) {
+  return weeklyResearchWindowState(config, new Date(now.getTime() - 7 * 24 * 60 * 60_000)).nextWindowClosesAt;
+}
+
+function previousFinalFridayCloseAt(now = new Date()) {
+  return weeklyResearchWindowState({ enabled: true, timezone: "America/New_York", openDay: 0, openTime: "17:00", closeDay: 5, closeTime: "17:00", startLeadMinutes: 0 }, new Date(now.getTime() - 7 * 24 * 60 * 60_000)).nextWindowClosesAt;
 }
 
 export function createFinCoachV2Runtime(env: NodeJS.ProcessEnv = process.env) {
@@ -1114,6 +1473,69 @@ function blockedReason(config: V2RuntimeConfig) {
   if (!config.researchEnabled) return "v2_research_disabled";
   if (!config.pilotEnabled) return "v2_pilot_disabled";
   return "runtime_blocked";
+}
+
+function configurationBlockers(validation: V2RuntimeConfigValidation, env: NodeJS.ProcessEnv, bootId: string): OperationalBlockerEvent[] {
+  return validation.errors.map((error) => {
+    const key = configKeyFromValidationError(error);
+    return {
+      kind: "configuration",
+      code: validationCode(error),
+      title: "⚠️ Runtime blocked: invalid configuration",
+      whatBlocked: "V2 runtime initialization",
+      reason: error,
+      currentValue: key ? envState(env, key) : "INVALID",
+      limitValue: "valid runtime configuration",
+      configKey: key,
+      configValueState: key ? envState(env, key) : "INVALID",
+      scope: { component: "v2-runtime", cycleId: bootId },
+      expected: false,
+      action: "Correct the configuration and restart after verifying live execution remains disabled.",
+      effect: "Runtime fails closed; no research, forward testing, signal publication, or execution is enabled.",
+      severity: "critical",
+    };
+  });
+}
+
+function configKeyFromValidationError(error: string) {
+  return error.match(/\b[A-Z][A-Z0-9_]{2,}\b/)?.[0];
+}
+
+function validationCode(error: string) {
+  return error.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "invalid_configuration";
+}
+
+function limitEvent(code: string, title: string, whatBlocked: string, reason: string, currentValue: unknown, limitValue: unknown, configKey: string, cycleId: string, symbol: string | undefined, sessionId: string | undefined, action: string, now: Date): OperationalBlockerEvent {
+  return {
+    kind: "limit",
+    code,
+    title,
+    whatBlocked,
+    reason,
+    currentValue,
+    limitValue,
+    configKey,
+    configValueState: envState(process.env, configKey),
+    scope: { cycleId, symbol, sessionId, component: "v2-runtime" },
+    expected: true,
+    action,
+    effect: "Candidate progression deferred by configured cap.",
+    now,
+  };
+}
+
+function weekendAction(state: "RUNNING" | "POST_CLOSE_OBSERVATION" | "WEEKEND_DORMANT" | "PRE_OPEN_READINESS") {
+  if (state === "POST_CLOSE_OBSERVATION") return "Use read-only health/status/reporting APIs for final reconciliation; do not start new research or broker activity.";
+  if (state === "WEEKEND_DORMANT") return "Leave the process online for maintenance, or patch via read-only diagnostics; normal polling resumes at pre-open readiness.";
+  if (state === "PRE_OPEN_READINESS") return "Verify dependencies and readiness before the canonical weekly market window opens.";
+  return "Monitor resumed operations; live execution remains blocked.";
+}
+
+function weekendEffect(state: "RUNNING" | "POST_CLOSE_OBSERVATION" | "WEEKEND_DORMANT" | "PRE_OPEN_READINESS") {
+  if (state === "POST_CLOSE_OBSERVATION") return "New research/trading cycles are stopped; read-only inspection and final reporting remain available.";
+  if (state === "WEEKEND_DORMANT") return "Provider polling, Telegram polling, snapshots, summaries, research cadence, broker polling, and normal alerts are stopped.";
+  if (state === "PRE_OPEN_READINESS") return "Schedulers and read-only checks wake early, but cycles resume only at the canonical market open.";
+  return "Weekly research cadence may resume only inside the canonical market window.";
 }
 
 function redactedConfig(config: V2RuntimeConfig) {
@@ -1341,6 +1763,7 @@ function providerRequestKey(symbol: string, timeframe: V2Timeframe) {
 
 export function sanitizedProviderFailureReason(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
+  if (/OANDA_API_TOKEN.*not configured|credential/i.test(message)) return "provider_credentials_missing";
   if (/HTTP 401\b/.test(message)) return "provider_http_401";
   if (/HTTP 403\b/.test(message)) return "provider_http_403";
   if (/HTTP 429\b/.test(message)) return "provider_http_429";
@@ -1428,16 +1851,62 @@ export async function createForwardTestsFromRanking(input: {
   guard?: CycleLeaseGuard;
 }) {
   if (!input.config.forwardTestingEnabled) {
+    await operationalBlockerService.record({
+      kind: "configuration",
+      code: "forward_testing_disabled",
+      title: "⚠️ Forward testing blocked: disabled by configuration",
+      whatBlocked: "forward-test creation",
+      reason: "forward_testing_disabled",
+      currentValue: false,
+      limitValue: "explicit true",
+      configKey: "FINCOACH_V2_FORWARD_TESTING_ENABLED",
+      configValueState: envState(process.env, "FINCOACH_V2_FORWARD_TESTING_ENABLED"),
+      scope: { cycleId: input.cycleId, component: "forward-testing" },
+      expected: true,
+      action: "Leave disabled unless forward testing has been intentionally approved for this deployment.",
+      effect: "Ranked strategies are not promoted into active forward tests.",
+      now: input.now,
+    });
     structuredLogger.v2({ level: "info", event: "forward_test_creation_skipped", message: "V2 forward-test creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, reason: "forward_testing_disabled" });
     return 0;
   }
   const limit = input.config.maxActiveForwardTests;
   if (limit <= 0) {
+    await operationalBlockerService.record({
+      kind: "limit",
+      code: "max_active_forward_tests_zero",
+      title: "⚠️ Forward testing blocked: max active forward tests is zero",
+      whatBlocked: "forward-test creation",
+      reason: "forward_test_budget_zero",
+      currentValue: 0,
+      limitValue: "> 0 required",
+      configKey: "FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS",
+      configValueState: envState(process.env, "FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS"),
+      scope: { cycleId: input.cycleId, component: "forward-testing" },
+      expected: true,
+      action: "Set a positive cap only if forward testing is intentionally enabled and capacity exists.",
+      effect: "No forward tests can be started.",
+      now: input.now,
+    });
     structuredLogger.v2({ level: "info", event: "forward_test_creation_skipped", message: "V2 forward-test creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, reason: "forward_test_budget_zero" });
     return 0;
   }
   const repository = input.repositories.forwardTesting;
   if (!repository || typeof repository.save !== "function") {
+    await operationalBlockerService.record({
+      kind: "dependency",
+      code: "forward_test_repository_unavailable",
+      title: "⚠️ Forward testing blocked: repository unavailable",
+      whatBlocked: "forward-test persistence",
+      reason: "forward_test_persistence_unavailable",
+      currentValue: "unavailable",
+      limitValue: "durable repository",
+      scope: { cycleId: input.cycleId, component: "forward-testing" },
+      expected: false,
+      action: "Inspect PostgreSQL connectivity, migrations, and repository wiring.",
+      effect: "Forward-test candidates are skipped rather than persisted in memory.",
+      now: input.now,
+    });
     structuredLogger.v2({ level: "error", event: "forward_test_persistence_unavailable", message: "V2 forward-test repository is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId });
     return 0;
   }
@@ -1446,6 +1915,22 @@ export async function createForwardTestsFromRanking(input: {
   let inserted = 0;
   for (const candidate of input.ranking.candidates) {
     if (inserted >= limit) {
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: "max_active_forward_tests_reached",
+        title: "⚠️ Forward testing blocked: maximum active forward tests reached",
+        whatBlocked: "additional forward-test candidates",
+        reason: "forward_test_budget_exhausted",
+        currentValue: inserted,
+        limitValue: limit,
+        configKey: "FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS",
+        configValueState: envState(process.env, "FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS"),
+        scope: { cycleId: input.cycleId, component: "forward-testing" },
+        expected: true,
+        action: "Wait for existing forward tests to complete or intentionally revise the cap.",
+        effect: "Remaining ranked candidates are deferred.",
+        now: input.now,
+      });
       structuredLogger.v2({ level: "info", event: "forward_test_budget_exhausted", message: "V2 forward-test insertion budget exhausted", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, limit });
       break;
     }
@@ -1473,8 +1958,22 @@ export async function createForwardTestsFromRanking(input: {
       causationId: input.rankingEventId,
     });
     if (!created.record) {
-      const reason = created.events[0]?.payload && typeof created.events[0].payload === "object" ? (created.events[0].payload as { reason?: string }).reason : "forward_test_gate_blocked";
+      const reason = created.events[0]?.payload && typeof created.events[0].payload === "object" ? (created.events[0].payload as { reason?: string }).reason ?? "forward_test_gate_blocked" : "forward_test_gate_blocked";
       const verdictEligibility = forwardTestVerdictEligibility(candidate.courtVerdict);
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: "forward_test_candidate_rejected",
+        title: "⚠️ Forward test rejected: eligibility gate blocked candidate",
+        whatBlocked: "forward-test candidate",
+        reason,
+        currentValue: candidate.courtVerdict,
+        limitValue: "eligible court verdict and safety state",
+        scope: { cycleId: input.cycleId, strategyId: candidate.strategyId, component: "forward-testing" },
+        expected: true,
+        action: "Let the strategy collect stronger evidence or inspect the courtroom verdict before changing policy.",
+        effect: "Candidate was not started as a forward test.",
+        now: input.now,
+      });
       structuredLogger.v2({ level: "info", event: "forward_test_candidate_rejected", message: "V2 forward-test candidate rejected", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, verdict: candidate.courtVerdict, normalizedEligibilityResult: verdictEligibility, reason });
       continue;
     }
@@ -1533,26 +2032,102 @@ export async function createSignalsFromForwardTests(input: {
   guard?: CycleLeaseGuard;
 }) {
   if (!input.config.researchSignalEnabled) {
+    await operationalBlockerService.record({
+      kind: "configuration",
+      code: "research_signal_creation_disabled",
+      title: "⚠️ Signal creation blocked: disabled by configuration",
+      whatBlocked: "research signal creation",
+      reason: "research_signal_disabled",
+      currentValue: false,
+      limitValue: "explicit true",
+      configKey: "FINCOACH_V2_RESEARCH_SIGNAL_ENABLED",
+      configValueState: envState(process.env, "FINCOACH_V2_RESEARCH_SIGNAL_ENABLED"),
+      scope: { cycleId: input.cycleId, component: "signals" },
+      expected: true,
+      action: "Leave disabled unless research signal publication has been explicitly approved.",
+      effect: "Forward tests are not converted into signals.",
+      now: input.now,
+    });
     structuredLogger.v2({ level: "info", event: "signal_creation_skipped", message: "V2 signal creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, reason: "research_signal_disabled" });
     return 0;
   }
   const limit = input.config.maxActiveResearchSignals;
   if (limit <= 0) {
+    await operationalBlockerService.record({
+      kind: "limit",
+      code: "max_active_research_signals_zero",
+      title: "⚠️ Signal creation blocked: max active research signals is zero",
+      whatBlocked: "research signal creation",
+      reason: "active_signal_limit_zero",
+      currentValue: 0,
+      limitValue: "> 0 required",
+      configKey: "FINCOACH_V2_MAX_ACTIVE_RESEARCH_SIGNALS",
+      configValueState: envState(process.env, "FINCOACH_V2_MAX_ACTIVE_RESEARCH_SIGNALS"),
+      scope: { cycleId: input.cycleId, component: "signals" },
+      expected: true,
+      action: "Set a positive cap only if signal creation is intentionally enabled.",
+      effect: "No research signals can be created.",
+      now: input.now,
+    });
     structuredLogger.v2({ level: "info", event: "signal_creation_skipped", message: "V2 signal creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, reason: "active_signal_limit_zero" });
     return 0;
   }
   const sourceRepository = input.repositories.forwardTesting;
   const signalRepository = input.repositories.signals;
   if (!sourceRepository || typeof sourceRepository.eligibleForSignal !== "function") {
+    await operationalBlockerService.record({
+      kind: "dependency",
+      code: "signal_source_repository_unavailable",
+      title: "⚠️ Signal creation blocked: forward-test source unavailable",
+      whatBlocked: "research signal candidate scan",
+      reason: "signal_source_unavailable",
+      currentValue: "unavailable",
+      limitValue: "forward-test repository with eligibleForSignal",
+      scope: { cycleId: input.cycleId, component: "signals" },
+      expected: false,
+      action: "Inspect repository wiring and PostgreSQL migrations before enabling signals.",
+      effect: "Signals are skipped fail-closed.",
+      now: input.now,
+    });
     structuredLogger.v2({ level: "error", event: "signal_source_unavailable", message: "V2 signal source repository is unavailable", cycleId: input.cycleId, correlationId: input.correlationId });
     return 0;
   }
   if (!signalRepository || typeof signalRepository.save !== "function") {
+    await operationalBlockerService.record({
+      kind: "dependency",
+      code: "signal_repository_unavailable",
+      title: "⚠️ Signal creation blocked: signal repository unavailable",
+      whatBlocked: "research signal persistence",
+      reason: "signal_persistence_unavailable",
+      currentValue: "unavailable",
+      limitValue: "durable signal repository",
+      scope: { cycleId: input.cycleId, component: "signals" },
+      expected: false,
+      action: "Inspect repository wiring and PostgreSQL migrations.",
+      effect: "Signals are skipped fail-closed.",
+      now: input.now,
+    });
     structuredLogger.v2({ level: "error", event: "signal_persistence_unavailable", message: "V2 signal repository is unavailable", cycleId: input.cycleId, correlationId: input.correlationId });
     return 0;
   }
   const activeSignals = signalRepository.listPage ? Number((await signalRepository.listPage({ limit: 1, offset: 0 })).total ?? 0) : 0;
   if (activeSignals >= limit) {
+    await operationalBlockerService.record({
+      kind: "limit",
+      code: "max_active_research_signals_reached",
+      title: "⚠️ Signal creation blocked: maximum active research signals reached",
+      whatBlocked: "additional research signals",
+      reason: "active_signal_limit_reached",
+      currentValue: activeSignals,
+      limitValue: limit,
+      configKey: "FINCOACH_V2_MAX_ACTIVE_RESEARCH_SIGNALS",
+      configValueState: envState(process.env, "FINCOACH_V2_MAX_ACTIVE_RESEARCH_SIGNALS"),
+      scope: { cycleId: input.cycleId, component: "signals" },
+      expected: true,
+      action: "Wait for active signals to expire/resolve or intentionally revise the cap.",
+      effect: "Eligible forward tests are deferred from signal creation.",
+      now: input.now,
+    });
     structuredLogger.v2({ level: "info", event: "signal_active_limit_reached", message: "V2 active signal limit reached", cycleId: input.cycleId, correlationId: input.correlationId, activeSignals, limit });
     return 0;
   }
@@ -1564,10 +2139,40 @@ export async function createSignalsFromForwardTests(input: {
     const eligibility = evaluateSignalEligibility(forwardTest, { now: input.now });
     structuredLogger.v2({ level: "info", event: "signal_candidate_evaluated", message: "V2 signal candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, forwardTestStatus: forwardTest.status, eligibility });
     if (!eligibility.eligible) {
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: "signal_candidate_rejected",
+        title: "⚠️ Signal rejected: eligibility gate blocked candidate",
+        whatBlocked: "research signal candidate",
+        reason: eligibility.reason,
+        currentValue: forwardTest.status,
+        limitValue: "eligible forward-test status and fresh snapshot",
+        scope: { cycleId: input.cycleId, strategyId: forwardTest.strategyId, symbol: forwardTest.snapshot.symbol, component: "signals" },
+        expected: true,
+        action: "Let forward-test evidence mature or inspect freshness/status before changing the gate.",
+        effect: "Candidate was not converted to a signal.",
+        now: input.now,
+      });
       structuredLogger.v2({ level: "info", event: "signal_candidate_rejected", message: "V2 signal candidate rejected", cycleId: input.cycleId, correlationId: input.correlationId, forwardTestId: forwardTest.forwardTestId, rankingId: forwardTest.rankingId, forwardTestStatus: forwardTest.status, eligibility, reason: eligibility.reason });
       continue;
     }
     if (activeSignals + inserted >= limit) {
+      await operationalBlockerService.record({
+        kind: "limit",
+        code: "signal_cycle_budget_reached",
+        title: "⚠️ Signal creation blocked: cycle signal budget reached",
+        whatBlocked: "additional research signals this cycle",
+        reason: "signal_cycle_budget_reached",
+        currentValue: activeSignals + inserted,
+        limitValue: limit,
+        configKey: "FINCOACH_V2_MAX_ACTIVE_RESEARCH_SIGNALS",
+        configValueState: envState(process.env, "FINCOACH_V2_MAX_ACTIVE_RESEARCH_SIGNALS"),
+        scope: { cycleId: input.cycleId, component: "signals" },
+        expected: true,
+        action: "Wait for active signals to resolve or intentionally revise the active signal cap.",
+        effect: "Remaining eligible forward tests are deferred.",
+        now: input.now,
+      });
       structuredLogger.v2({ level: "info", event: "signal_cycle_budget_reached", message: "V2 signal insertion budget reached", cycleId: input.cycleId, correlationId: input.correlationId, activeSignals, inserted, limit });
       break;
     }

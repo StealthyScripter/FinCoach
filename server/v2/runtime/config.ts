@@ -58,6 +58,7 @@ export type V2RuntimeConfig = {
   continuousMarketWeeklyPause: ContinuousMarketWeeklyPauseConfig;
   marketSnapshot: MarketSnapshotConfig;
   researchDataMode: "provider" | "synthetic";
+  weekendDormancy: WeekendDormancyConfig;
 };
 
 export type V2RuntimeConfigValidation = {
@@ -95,6 +96,12 @@ export type MarketSnapshotConfig = {
   includeWeekends: boolean;
   maxEvents: number;
   lookaheadHours: number;
+};
+
+export type WeekendDormancyConfig = {
+  enabled: boolean;
+  postCloseObservationHours: number;
+  preOpenWakeMinutes: number;
 };
 
 const DEFAULT_SYMBOLS = DEFAULT_RESEARCH_SYMBOLS;
@@ -180,6 +187,11 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
       lookaheadHours: Math.min(168, int(env.FINCOACH_MARKET_SNAPSHOT_LOOKAHEAD_HOURS, 24)),
     },
     researchDataMode: env.FINCOACH_V2_RESEARCH_DATA_MODE?.trim().toLowerCase() === "provider" || env.NODE_ENV === "production" ? "provider" : "synthetic",
+    weekendDormancy: {
+      enabled: bool(env.FINCOACH_WEEKEND_DORMANCY_ENABLED, true),
+      postCloseObservationHours: Math.max(0, num(env.FINCOACH_POST_CLOSE_OBSERVATION_HOURS, 2)),
+      preOpenWakeMinutes: Math.max(0, int(env.FINCOACH_PRE_OPEN_WAKE_MINUTES, 30)),
+    },
   };
 
   const errors: string[] = [];
@@ -213,6 +225,8 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.leaseRenewIntervalMs >= config.leaseTtlMs) errors.push("FINCOACH_V2_LEASE_RENEW_INTERVAL_MS must be less than FINCOACH_V2_LEASE_TTL_MS.");
   if (config.telegramTransport === "webhook" && env.TELEGRAM_LONG_POLLING_ENABLED === "true") errors.push("Webhook and long polling cannot both be active.");
   if (config.telegramTransport === "long_polling" && env.TELEGRAM_WEBHOOK_ENABLED === "true") errors.push("Long polling and webhook cannot both be active.");
+  if (config.weekendDormancy.enabled && config.weekendDormancy.postCloseObservationHours > 48) errors.push("FINCOACH_POST_CLOSE_OBSERVATION_HOURS must be <= 48.");
+  if (config.weekendDormancy.enabled && config.weekendDormancy.preOpenWakeMinutes > 24 * 60) errors.push("FINCOACH_PRE_OPEN_WAKE_MINUTES must be <= 1440.");
   if (config.weeklyResearchSchedule.enabled) {
     const weeklyErrors = validateWeeklyResearchSchedule(config.weeklyResearchSchedule);
     errors.push(...weeklyErrors);

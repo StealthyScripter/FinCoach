@@ -186,10 +186,11 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
     const runtime = createFinCoachV2Runtime(autostartEnv());
     (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
     const boot = await runtime.start();
-    assert.equal(boot.state, "suspended_waiting_for_market");
+    assert.equal(boot.state, "WEEKEND_DORMANT");
+    assert.equal(boot.weekendLifecycle.state, "WEEKEND_DORMANT");
     assert.equal(boot.weeklyResearchSchedule.timerActive, true);
     assert.equal(boot.weeklyResearchSchedule.nextWakeKind, "lead");
-    assert.equal(boot.weeklyResearchSchedule.nextWakeAt, "2026-08-09T20:55:00.000Z");
+    assert.equal(boot.weeklyResearchSchedule.nextWakeAt, "2026-08-09T20:30:00.000Z");
     assert.equal(boot.researchSchedulerActive, false);
     assert.equal(boot.researchCadenceActive, false);
     assert.equal(boot.nextScheduledCycleAt, null);
@@ -208,8 +209,9 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
     (runtime as unknown as { repositories: unknown }).repositories = counters.repositories;
     await runtime.start();
     const status = runtime.status();
-    assert.equal(status.state, "suspended_waiting_for_market");
-    assert.equal(status.weeklyResearchSchedule.nextWakeKind, "lead");
+    assert.equal(status.state, "PRE_OPEN_READINESS");
+    assert.equal(status.weekendLifecycle.state, "PRE_OPEN_READINESS");
+    assert.equal(status.weeklyResearchSchedule.nextWakeKind, "open");
     assert.equal(status.researchCadence.active, false);
     assert.deepEqual(counters.snapshot(), { cycles: 0, leases: 0, detectorEvaluations: 0, observations: 0 });
     await runtime.stop("test");
@@ -219,14 +221,15 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
 }
 
 {
-  const restoreClock = useFakeClock("2026-08-09T20:55:00.000Z");
+  const restoreClock = useFakeClock("2026-08-09T20:30:00.000Z");
   try {
     const counters = countedRepositories();
     const runtime = createFinCoachV2Runtime(autostartEnv());
     (runtime as unknown as { repositories: unknown }).repositories = counters.repositories;
     await runtime.start();
     const lead = runtime.status();
-    assert.equal(lead.state, "starting_for_week");
+    assert.equal(lead.state, "PRE_OPEN_READINESS");
+    assert.equal(lead.weekendLifecycle.state, "PRE_OPEN_READINESS");
     assert.equal(lead.weeklyResearchSchedule.nextWakeKind, "open");
     assert.equal(lead.weeklyResearchSchedule.nextWakeAt, "2026-08-09T21:00:00.000Z");
     assert.equal(lead.researchSchedulerActive, false);
@@ -247,7 +250,8 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
     (runtime as unknown as { repositories: unknown }).repositories = counters.repositories;
     await runtime.start();
     const lead = runtime.status();
-    assert.equal(lead.state, "starting_for_week");
+    assert.equal(lead.state, "PRE_OPEN_READINESS");
+    assert.equal(lead.weekendLifecycle.state, "PRE_OPEN_READINESS");
     assert.equal(lead.weeklyResearchSchedule.nextWakeKind, "open");
     assert.deepEqual(counters.snapshot(), { cycles: 0, leases: 0, detectorEvaluations: 0, observations: 0 });
     await runtime.stop("test");
@@ -291,10 +295,10 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
 {
   for (const [iso, expectation] of [
     ["2026-08-14T20:59:00.000Z", { open: true, wake: "2026-08-14T21:00:00.000Z", kind: "close", source: "aggregate_final_tradable_close" }],
-    ["2026-08-14T21:00:00.000Z", { open: false, wake: "2026-08-16T20:55:00.000Z", kind: "lead", source: "aggregate_next_tradable_open_lead" }],
-    ["2026-08-14T21:59:00.000Z", { open: false, wake: "2026-08-16T20:55:00.000Z", kind: "lead", source: "aggregate_next_tradable_open_lead" }],
-    ["2026-08-14T22:00:00.000Z", { open: false, wake: "2026-08-16T20:55:00.000Z", kind: "lead", source: "aggregate_next_tradable_open_lead" }],
-    ["2026-08-14T22:01:00.000Z", { open: false, wake: "2026-08-16T20:55:00.000Z", kind: "lead", source: "aggregate_next_tradable_open_lead" }],
+    ["2026-08-14T21:00:00.000Z", { open: false, wake: "2026-08-14T23:00:00.000Z", kind: "close", source: "post_close_observation_expiry" }],
+    ["2026-08-14T21:59:00.000Z", { open: false, wake: "2026-08-14T23:00:00.000Z", kind: "close", source: "post_close_observation_expiry" }],
+    ["2026-08-14T22:00:00.000Z", { open: false, wake: "2026-08-14T23:00:00.000Z", kind: "close", source: "post_close_observation_expiry" }],
+    ["2026-08-14T22:01:00.000Z", { open: false, wake: "2026-08-14T23:00:00.000Z", kind: "close", source: "post_close_observation_expiry" }],
   ] as const) {
     const restoreClock = useFakeClock(iso);
     try {
@@ -346,12 +350,12 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
 }
 
 for (const [iso, expected] of [
-  ["2026-08-08T19:00:00.000Z", { state: "suspended_waiting_for_market", cadence: false, wakeKind: "lead" }],
-  ["2026-08-09T20:57:00.000Z", { state: "starting_for_week", cadence: false, wakeKind: "open" }],
+  ["2026-08-08T19:00:00.000Z", { state: "WEEKEND_DORMANT", cadence: false, wakeKind: "lead" }],
+  ["2026-08-09T20:57:00.000Z", { state: "PRE_OPEN_READINESS", cadence: false, wakeKind: "open" }],
   ["2026-08-09T21:00:00.000Z", { state: "running", cadence: true, wakeKind: "close" }],
   ["2026-08-09T21:10:00.000Z", { state: "running", cadence: true, wakeKind: "close" }],
   ["2026-08-10T14:00:00.000Z", { state: "running", cadence: true, wakeKind: "close" }],
-  ["2026-08-14T21:01:00.000Z", { state: "suspended_waiting_for_market", cadence: false, wakeKind: "lead" }],
+  ["2026-08-14T21:01:00.000Z", { state: "POST_CLOSE_OBSERVATION", cadence: false, wakeKind: "close" }],
 ] as const) {
   const restoreClock = useFakeClock(iso);
   try {
@@ -381,7 +385,7 @@ for (const [iso, expected] of [
     (runtime as unknown as { repositories: unknown }).repositories = minimalRepositories();
     const status = await runtime.start();
     assert.equal(status.weeklyResearchSchedule.nextWakeKind, "lead");
-    assert.equal(status.weeklyResearchSchedule.nextWakeAt, "2026-11-01T21:55:00.000Z");
+    assert.equal(status.weeklyResearchSchedule.nextWakeAt, "2026-11-01T21:30:00.000Z");
     assert.equal(status.weeklyResearchSchedule.nextOpen, "2026-11-01T22:00:00.000Z");
     await runtime.stop("test");
   } finally {

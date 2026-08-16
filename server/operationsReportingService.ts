@@ -4,6 +4,7 @@ import { executionRiskService } from "./execution/riskControls";
 import { getFinCoachV2Runtime } from "./v2/runtime/composition";
 import { loadV2RuntimeConfig, type V2RuntimeConfig } from "./v2/runtime/config";
 import { presentationTimezone, formatPresentation } from "./timeService";
+import { operationalBlockerService } from "./operationalBlockerService";
 
 type Queryable = {
   query<T extends QueryResultRow = QueryResultRow>(sql: string, values?: unknown[]): Promise<{ rows: T[] }>;
@@ -59,6 +60,7 @@ type ReportingSnapshot = {
   risk: Record<string, unknown>;
   runtime: Record<string, unknown>;
   blockers: Array<Record<string, unknown>>;
+  operationalBlockers?: Record<string, unknown> | null;
   reconciliation: Record<string, unknown>;
   liveExecutionBlocked: true;
 };
@@ -132,7 +134,11 @@ export class OperationsReportingService {
     const paperPnl = pnlPeriods.daily.paper;
     const brokerPnl = pnlPeriods.daily.broker;
     const degraded = durable.degraded || Object.values(pnlPeriods).some(period => period.paper.degraded || period.broker.degraded);
-    const blockers = buildBlockers({ durable, config, runtime, riskSnapshot, paperPnl, brokerPnl });
+    const blockerSnapshot = await operationalBlockerService.snapshot(now).catch(() => null);
+    const blockers = [
+      ...buildBlockers({ durable, config, runtime, riskSnapshot, paperPnl, brokerPnl }),
+      ...((blockerSnapshot?.active ?? []) as unknown as Array<Record<string, unknown>>),
+    ];
     const pipeline = durable.pipeline;
     return {
       schemaVersion: "fincoach.operations-reporting.1",
@@ -201,6 +207,7 @@ export class OperationsReportingService {
         uptimeSeconds: Math.round(process.uptime()),
       },
       blockers,
+      operationalBlockers: blockerSnapshot,
       reconciliation: {
         postgresql: queryable ? "queried" : "not_configured",
         apiV2Status: "same_projection_required",
@@ -381,6 +388,17 @@ export class OperationsReportingService {
 function viewBody(snapshot: ReportingSnapshot, view: string) {
   const key = view.replace(/^\/+/, "");
   if (key === "status") return snapshot;
+  if (["blockers", "config_blockers", "fallbacks", "limits"].includes(key)) {
+    return {
+      schemaVersion: "fincoach.operations-reporting-view.1",
+      generatedAtUtc: snapshot.generatedAtUtc,
+      presentationTimestamp: snapshot.presentationTimestamp,
+      view: key,
+      data: filterBlockers(snapshot.blockers, key),
+      operationalBlockers: snapshot.operationalBlockers,
+      liveExecutionBlocked: true,
+    };
+  }
   return {
     schemaVersion: "fincoach.operations-reporting-view.1",
     generatedAtUtc: snapshot.generatedAtUtc,
@@ -394,6 +412,17 @@ function viewBody(snapshot: ReportingSnapshot, view: string) {
     data: (snapshot as unknown as Record<string, unknown>)[key] ?? null,
     liveExecutionBlocked: true,
   };
+}
+
+function filterBlockers(blockers: Array<Record<string, unknown>>, key: string) {
+  return blockers.filter(item => {
+    const kind = String(item.kind ?? "");
+    const text = String(item.code ?? item.reason ?? item.component ?? "");
+    if (key === "config_blockers") return kind === "configuration" || /config|disabled|required|unset|missing/i.test(text);
+    if (key === "fallbacks") return kind === "fallback" || kind === "dependency" || /broker|provider|data|fallback/i.test(text);
+    if (key === "limits") return kind === "limit" || /limit|budget|max|min|cap|timeout|lease|rate|threshold/i.test(text);
+    return true;
+  });
 }
 
 function formatTelegram(snapshot: ReportingSnapshot, command: string, argument: string) {
@@ -425,8 +454,12 @@ function formatTelegram(snapshot: ReportingSnapshot, command: string, argument: 
       return [...header("Detectors"), `Evaluations: ${snapshot.detectors.total}`, `Attempted/completed/skipped/duplicates/failed: ${snapshot.detectors.attempted ?? 0}/${snapshot.detectors.completed ?? 0}/${snapshot.detectors.skipped ?? 0}/${snapshot.detectors.duplicateSuppressed ?? 0}/${snapshot.detectors.failed ?? 0}`, `Current-hour reasons: ${formatObject(snapshot.detectors.currentHourByReason as Record<string, unknown>) || "none"}`, `Positive observations: ${snapshot.detectors.positiveObservations}`, `Positive rate: ${snapshot.detectors.positiveRate ?? "unavailable"}%`, `Duplicate rate: ${snapshot.detectors.duplicateRate ?? "unavailable"}%`, `Failure rate: ${snapshot.detectors.failureRate ?? "unavailable"}%`, `Warnings: ${formatList(snapshot.detectors.abnormalWarnings as unknown[]) || "none"}`].join("\n");
     case "/pipeline":
       return [...header("Pipeline"), `evaluations -> ${pipeline.evaluations}`, `observations -> ${pipeline.observations}`, `hypotheses -> ${pipeline.hypotheses}`, `strategies -> ${pipeline.strategies}`, `experiments -> ${pipeline.experiments}`, `backtests -> ${pipeline.backtests}`, `verdicts -> ${pipeline.verdicts}`, `rankings -> ${pipeline.rankings}`, `forward eligible -> ${strategies.forwardEligible}`, `forward tests -> ${pipeline.forwardTests}`, `signals -> ${pipeline.signals}`, `EXPECTED GATE: disabled execution/signal flags stay locked unless explicitly configured.`, `UNEXPECTED FAILURE: ${snapshot.projectionError ?? "none"}`].join("\n");
+    case "/research_blockers":
     case "/blockers":
-      return [...header("FinCoach Research Blockers"), ...(snapshot.blockers.length ? snapshot.blockers.map(item => `${item.status} [${item.severity}] ${item.component}: ${item.reason}; current=${item.currentValue}; required=${item.requiredValue}; next=${item.nextAction}; ${item.expected ? "EXPECTED GATE" : "UNEXPECTED FAILURE"}`) : ["No actionable blockers from canonical projection."])].join("\n");
+    case "/config_blockers":
+    case "/fallbacks":
+    case "/limits":
+      return formatBlockersTelegram(snapshot, command, header);
     case "/data":
       return [...header("Data"), `Provider reachability: ${snapshot.pnl.broker.degraded ? "degraded" : "available"}`, `Latest market data: ${snapshot.coverage.latestMarketDataTimestamp ?? "unavailable"}`, `Symbols receiving data: ${formatList(snapshot.coverage.coveredInstruments as unknown[])}`, `Timeframes: ${formatObject(snapshot.coverage.timeframeDistribution as Record<string, unknown>)}`, `Synthetic/demo data: unavailable`, `Temporal integrity: enforced`, `Future-dated violations: unavailable`].join("\n");
     case "/trading":
@@ -743,6 +776,36 @@ function coverageLine(value: Record<string, unknown>) {
 function formatTopStrategy(strategies: Record<string, unknown>) {
   const top = (strategies.top as Array<Record<string, unknown>> | undefined)?.[0];
   return top ? `${top.strategyId ?? top.id ?? "unknown"} score=${top.score ?? "unavailable"}` : "none";
+}
+
+function formatBlockersTelegram(snapshot: ReportingSnapshot, command: string, header: (title: string) => string[]) {
+  const title = command === "/fallbacks" ? "Provider/Data Fallbacks" : command === "/limits" ? "Configured Limits" : command === "/config_blockers" ? "Configuration Blockers" : "FinCoach Research Blockers";
+  const filtered = snapshot.blockers.filter(item => {
+    const kind = String(item.kind ?? "");
+    if (command === "/fallbacks") return kind === "fallback" || kind === "dependency" || /broker|provider|data/i.test(String(item.component ?? item.reason ?? ""));
+    if (command === "/limits") return kind === "limit" || /limit|budget|max|min|cap|timeout|lease|rate|threshold/i.test(String(item.code ?? item.reason ?? ""));
+    if (command === "/config_blockers") return kind === "configuration" || /config|disabled|required|unset|missing/i.test(String(item.code ?? item.reason ?? ""));
+    return true;
+  });
+  const lines = filtered.length ? filtered.slice(0, 12).map(item => {
+    const scope = [item.symbol ? `symbol=${item.symbol}` : null, item.strategyId ? `strategy=${item.strategyId}` : null, item.cycleId ? `cycle=${item.cycleId}` : null, item.scope && typeof item.scope === "object" ? compactScope(item.scope as Record<string, unknown>) : null].filter(Boolean).join("; ");
+    const current = item.currentValue ?? item.current_value ?? "unavailable";
+    const required = item.limitValue ?? item.requiredValue ?? item.limit_value ?? "unavailable";
+    const action = item.action ?? item.nextAction ?? "Inspect configuration and capacity before changing limits.";
+    const config = item.configKey ? `; config=${item.configKey}=${item.configValueState ?? "N/A"}` : "";
+    return `${item.status ?? "active"} [${item.severity ?? "warning"}] ${item.code ?? item.component ?? "blocker"}: ${item.reason}; current=${formatScalar(current)}; required=${formatScalar(required)}${config}; ${scope || "scope=global"}; ${item.expected ? "EXPECTED GATE" : "ABNORMAL FAILURE"}; action=${action}`;
+  }) : ["No matching active blockers from canonical projection."];
+  const counts = snapshot.operationalBlockers && typeof snapshot.operationalBlockers === "object" ? (snapshot.operationalBlockers.limitTriggeredCounts as Record<string, unknown> | undefined) : undefined;
+  return [...header(title), ...lines, counts ? `Limit counts: ${JSON.stringify(counts)}` : null].filter(Boolean).join("\n");
+}
+
+function compactScope(scope: Record<string, unknown>) {
+  return Object.entries(scope).filter(([, value]) => value !== undefined && value !== null && value !== "").map(([key, value]) => `${key}=${value}`).join("; ");
+}
+
+function formatScalar(value: unknown) {
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
 function formatStrategyDetail(snapshot: ReportingSnapshot, argument: string) {
