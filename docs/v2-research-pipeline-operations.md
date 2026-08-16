@@ -80,23 +80,23 @@ curl -s http://127.0.0.1:${PORT:-5000}/api/v2/research/blockers
 
 ## Weekly Research Schedule
 
-The V2 research scheduler remains inside the application process. It does not stop PM2, Express, PostgreSQL, Telegram long polling, health reporting, daily summaries, weekly summaries, or read-only Telegram commands.
+The V2 research scheduler remains inside the application process. Weekend dormancy stops normal research cadence, Telegram long polling, market snapshots, and routine summaries while keeping read-only maintenance access available.
 
 Research cycle admission is gated by the aggregate configured tradable window. FinCoach derives whether any configured instrument remains tradable from, in order, existing calendar/session services, configured instrument metadata, and labeled conservative fallback rules. Unknown configured symbols fail closed and are reported as unavailable calendar metadata.
 
-The default operator opening window is Sunday 5:00 PM `America/New_York` with a five-minute lead. The closing boundary is dynamic: research stops only after the final configured tradable instrument is no longer tradable. A single exchange close does not suspend research while another configured instrument remains tradable.
+The canonical accounting and weekly operations boundary is fixed at 21:00 UTC year-round. Presentation may still use `America/New_York`, but the operational cutoff must not drift to 22:00 UTC in winter.
 
 Continuously traded symbols such as crypto use an operator-defined weekly maintenance window so they do not prevent maintenance forever:
 
 ```env
 FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_ENABLED=true
 FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_DAY=5
-FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_TIME=18:00
+FINCOACH_CONTINUOUS_MARKET_WEEKLY_PAUSE_TIME=21:00
 FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_DAY=0
-FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_TIME=17:00
+FINCOACH_CONTINUOUS_MARKET_WEEKLY_RESUME_TIME=21:00
 ```
 
-All weekly and snapshot schedule calculations use IANA timezones such as `America/New_York`; fixed EST offsets are not used.
+Weekly research and weekend dormancy defaults use `UTC` with Sunday 21:00 open and Friday 21:00 close. Snapshot display schedules may still use IANA presentation timezones such as `America/New_York`.
 
 Read-only verification:
 

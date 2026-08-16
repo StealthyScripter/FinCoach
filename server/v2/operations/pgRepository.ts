@@ -9,14 +9,15 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 
 export type OperationsSaveResult<T> = { inserted: boolean; record: T; conflict?: "idempotent" | "conflicting" };
 
-const PIPELINE_TABLES = [
+const PIPELINE_TABLES: Array<{ key: string; alias: string; table: string; countExpression?: string }> = [
   { key: "observations", alias: "observations", table: "v2_market_observations" },
   { key: "hypotheses", alias: "hypotheses", table: "v2_research_hypotheses" },
   { key: "strategies", alias: "strategies", table: "v2_strategy_definitions" },
   { key: "experiments", alias: "experiments", table: "v2_research_experiments" },
   { key: "backtests", alias: "backtests", table: "v2_backtest_results" },
   { key: "verdicts", alias: "verdicts", table: "v2_court_verdicts" },
-  { key: "rankedCandidates", alias: "ranked_candidates", table: "v2_ranking_decisions" },
+  { key: "rankingDecisions", alias: "ranking_decisions", table: "v2_ranking_decisions" },
+  { key: "rankedCandidates", alias: "ranked_candidates", table: "v2_ranking_decisions", countExpression: "COALESCE(sum(jsonb_array_length(CASE WHEN jsonb_typeof(payload->'candidates') = 'array' THEN payload->'candidates' ELSE '[]'::jsonb END)), 0)::int" },
   { key: "forwardTests", alias: "forward_tests", table: "v2_forward_tests" },
   { key: "signals", alias: "signals", table: "v2_research_signals" },
   { key: "evaluations", alias: "evaluations", table: "v2_external_evaluations" },
@@ -59,12 +60,17 @@ export class PgV2OperationsRepository {
   async researchProgress(now = new Date()): Promise<V2ResearchProgress> {
     const generatedAt = now.toISOString();
     const currentHour = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours())).toISOString();
-    const countSql = PIPELINE_TABLES.flatMap(({ alias, table }) => [
-      `(SELECT count(*)::int FROM ${table} WHERE created_at >= $1::timestamp) AS ${alias}_current_hour`,
-      `(SELECT count(*)::int FROM ${table} WHERE created_at >= $2::timestamp - INTERVAL '24 hours') AS ${alias}_24h`,
-      `(SELECT count(*)::int FROM ${table} WHERE created_at >= $2::timestamp - INTERVAL '7 days') AS ${alias}_7d`,
-      `(SELECT count(*)::int FROM ${table}) AS ${alias}_total`,
-    ]).join(",\n        ");
+    const countSql = PIPELINE_TABLES.flatMap(({ alias, table, countExpression }) => {
+      const countFor = (where = "") => countExpression
+        ? `(SELECT ${countExpression} FROM ${table} ${where})`
+        : `(SELECT count(*)::int FROM ${table} ${where})`;
+      return [
+        `${countFor("WHERE created_at >= $1::timestamp")} AS ${alias}_current_hour`,
+        `${countFor("WHERE created_at >= $2::timestamp - INTERVAL '24 hours'")} AS ${alias}_24h`,
+        `${countFor("WHERE created_at >= $2::timestamp - INTERVAL '7 days'")} AS ${alias}_7d`,
+        `${countFor()} AS ${alias}_total`,
+      ];
+    }).join(",\n        ");
     const counts = await this.db.query(
       `SELECT
         ${countSql},
@@ -94,6 +100,7 @@ export class PgV2OperationsRepository {
       experiments: Number(windows.lifetime.experiments ?? 0),
       backtests: Number(windows.lifetime.backtests ?? 0),
       verdicts: Number(windows.lifetime.verdicts ?? 0),
+      rankingDecisions: Number(windows.lifetime.rankingDecisions ?? 0),
       rankedCandidates: Number(windows.lifetime.rankedCandidates ?? 0),
       forwardTests: Number(windows.lifetime.forwardTests ?? 0),
       signals: Number(windows.lifetime.signals ?? 0),
@@ -552,7 +559,6 @@ function sanitizeStoredReason(value: unknown) {
 function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], strategies: Map<string, Record<string, unknown>>) {
   const candidates = rankings.flatMap(ranking => Array.isArray(ranking.candidates) ? ranking.candidates as Record<string, unknown>[] : []);
   const criteria = {
-    currentCycleSourceAvailable: { passed: 0, failed: candidates.length },
     durableStrategySourceAvailable: { passed: 0, failed: 0 },
     verdictEligible: { passed: 0, failed: 0 },
     lineagePresent: { passed: 0, failed: 0 },
@@ -565,7 +571,7 @@ function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], st
   const rejectionReasons: Record<string, number> = {};
   let durableEligible = 0;
   for (const candidate of candidates) {
-    const reasons: string[] = ["current_cycle_source_missing"];
+    const reasons: string[] = [];
     const strategy = strategies.get(String(candidate.strategyId ?? ""));
     countCriterion(criteria.durableStrategySourceAvailable, Boolean(strategy), reasons, "durable_strategy_source_missing");
     const verdict = String(candidate.courtVerdict ?? "");
@@ -573,23 +579,28 @@ function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], st
     countCriterion(criteria.lineagePresent, Array.isArray(candidate.lineageEventIds) && candidate.lineageEventIds.length > 0, reasons, "missing_lineage");
     countCriterion(criteria.exitsPresent, Boolean(strategy?.stopLoss && strategy?.takeProfit), reasons, "missing_exits");
     const expectedR = Number((candidate.metrics as Record<string, unknown> | undefined)?.oosExpectancy ?? Number.NaN);
-    countCriterion(criteria.expectedRPositive, Number.isFinite(expectedR) && expectedR > 0, reasons, "invalid_risk");
+    countCriterion(criteria.expectedRPositive, Number.isFinite(expectedR) && expectedR > 0, reasons, "nonpositive_expected_r");
     const risk = Number((strategy?.positionSizing as Record<string, unknown> | undefined)?.riskFraction ?? Number.NaN);
     countCriterion(criteria.riskPositive, Number.isFinite(risk) && risk > 0, reasons, "invalid_risk");
-    const durablePass = reasons.length === 1;
+    const durablePass = reasons.length === 0;
     if (durablePass) durableEligible += 1;
     for (const reason of [...new Set(reasons)]) rejectionReasons[reason] = (rejectionReasons[reason] ?? 0) + 1;
   }
   return {
     schemaVersion: "fincoach.v2.forward-test-eligibility-projection.1",
     rankedCandidatesTotal: candidates.length,
+    sourceSemantics: {
+      rankingDecisions: rankings.length,
+      rankedCandidates: candidates.length,
+      rankedCandidatesDefinition: "sum of candidates embedded in durable v2_ranking_decisions payloads",
+    },
     criteria,
-    fullyEligibleCount: 0,
+    fullyEligibleCount: durableEligible,
     durableQualityEligibleCount: durableEligible,
     rejectionReasons,
     notes: [
-      "Forward-test creation remains disabled by configuration.",
-      "Existing persisted rankings do not carry the in-memory current-cycle source map required by automatic forward-test creation.",
+      "Forward-test creation is separately gated by FINCOACH_V2_FORWARD_TESTING_ENABLED and FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS.",
+      "Eligibility is projected from durable ranking payloads and durable strategy definitions; process-local current-cycle maps are not required for this projection.",
     ],
     liveExecutionBlocked: true as const,
   };

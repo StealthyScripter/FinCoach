@@ -46,7 +46,7 @@ const db = {
       rows: [{ payload: { strategyId: "s1", symbols: ["EUR_USD"], timeframes: ["M5"], filters: { primaryFamily: "breakout" }, session: "new-york" }, created_at: "2026-08-13T13:00:00.000Z" }],
     };
     if (sql.includes("SELECT payload, created_at FROM v2_ranking_decisions")) return {
-      rows: [{ payload: { strategyId: "s1", rank: 1, symbol: "EUR_USD", session: "new-york", family: "breakout", score: 0.82, tradeCount: 12, winRate: 0.58, profitFactor: 1.7, expectancy: 0.2, maxDrawdown: 0.08, status: "ranked" }, created_at: "2026-08-13T13:00:00.000Z" }],
+      rows: [{ payload: { candidates: [{ strategyId: "s1", rank: 1, symbol: "EUR_USD", session: "new-york", family: "breakout", score: 0.82, tradeCount: 12, winRate: 0.58, profitFactor: 1.7, expectancy: 0.2, maxDrawdown: 0.08, status: "candidate", courtVerdict: "approve_for_replay" }] }, created_at: "2026-08-13T13:00:00.000Z" }],
     };
     return { rows: [rows] };
   },

@@ -38,6 +38,7 @@ async function testDurableProgressCountsAndReadiness() {
               experiments: [0, 1, 1, 1],
               backtests: [0, 1, 1, 1],
               verdicts: [0, 1, 1, 1],
+              ranking_decisions: [0, 1, 1, 1],
               ranked_candidates: [0, 1, 1, 1],
               forward_tests: [0, 1, 1, 1],
               signals: [0, 1, 1, 1],
@@ -136,6 +137,7 @@ async function testDurableProgressCountsAndReadiness() {
   assert.equal(progress.windows?.lifetime?.observations, 4);
   assert.equal(progress.windows?.running24Hours?.hypotheses, 1);
   assert.equal(progress.pipeline.observations, 4);
+  assert.equal(progress.pipeline.rankingDecisions, 1);
   assert.equal(progress.pipeline.evaluations, 1);
   assert.equal(progress.pipeline.journalEntries, 1);
   assert.equal(progress.pipeline.lessons, 1);
@@ -171,14 +173,14 @@ async function testDurableProgressCountsAndReadiness() {
   assert.equal(progress.strategyUniverse?.legacyEvidenceClassification, "evidence_record");
   assert.equal((progress.strategyUniverse?.diversification as Record<string, Record<string, Record<string, unknown>>>).concentration.family.key, "breakout");
   assert.deepEqual((progress.forwardTestEligibility as Record<string, unknown>).rejectionReasons, {
-    current_cycle_source_missing: 2,
     court_not_approved_for_forward_test: 1,
     missing_lineage: 1,
     durable_strategy_source_missing: 1,
     missing_exits: 1,
+    nonpositive_expected_r: 1,
     invalid_risk: 1,
   });
-  assert.equal((progress.forwardTestEligibility as Record<string, unknown>).fullyEligibleCount, 0);
+  assert.equal((progress.forwardTestEligibility as Record<string, unknown>).fullyEligibleCount, 1);
   assert.equal((progress.forwardTestEligibility as Record<string, unknown>).durableQualityEligibleCount, 1);
   assert.deepEqual(progress.readiness, {
     currentStage: "lifecycle decision",

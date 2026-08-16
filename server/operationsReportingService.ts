@@ -257,6 +257,12 @@ export class OperationsReportingService {
       const hour = mapCounts(current.rows[0] ?? {});
       const strategyRows = strategies.rows.map(row => row.payload as Record<string, unknown>);
       const rankingRows = rankings.rows.map(row => row.payload as Record<string, unknown>);
+      pipeline.rankingDecisions = pipeline.rankings;
+      pipeline.rankedCandidates = rankingRows.reduce((sum, ranking) => sum + rankingCandidates(ranking).length, 0);
+      hour.rankingDecisions = hour.rankings;
+      hour.rankedCandidates = rankingRows
+        .filter((_, index) => new Date(String(rankings.rows[index]?.created_at ?? 0)).getTime() >= Date.parse(currentHour))
+        .reduce((sum, ranking) => sum + rankingCandidates(ranking).length, 0);
       const detectorRows = detectors.rows.map(row => ({ detector: String(row.detector_id ?? "unknown"), symbol: String(row.symbol ?? "unknown"), timeframe: String(row.timeframe ?? "unknown"), total: Number(row.total ?? 0), attempted: Number(row.attempted ?? 0), completed: Number(row.completed ?? 0), skipped: Number(row.skipped ?? 0), duplicateSuppressed: Number(row.duplicate_suppressed ?? 0), failed: Number(row.failed ?? 0) }));
       const evaluationTotal = detectorRows.reduce((sum, row) => sum + row.total, 0);
       const attemptedTotal = detectorRows.reduce((sum, row) => sum + row.attempted, 0);
@@ -558,11 +564,14 @@ function coverageFacts(rows: QueryResultRow[], env: NodeJS.ProcessEnv) {
 
 function strategyFacts(strategies: Record<string, unknown>[], rankings: Record<string, unknown>[], now: Date) {
   const today = accountingPeriod("daily", now);
-  const top = rankings.map((ranking, index) => ({ rank: ranking.rank ?? index + 1, strategyId: ranking.strategyId ?? ranking.id, symbol: ranking.symbol, session: ranking.session, family: ranking.family, score: ranking.score ?? ranking.compositeScore, tradeCount: ranking.tradeCount, winRate: ranking.winRate, profitFactor: ranking.profitFactor, expectancy: ranking.expectancy, maxDrawdown: ranking.maxDrawdown, status: ranking.status })).sort((left, right) => Number(left.rank ?? 999999) - Number(right.rank ?? 999999));
+  const rankedCandidates = rankings.flatMap(rankingCandidates);
+  const top = rankedCandidates.map((candidate, index) => ({ rank: candidate.rank ?? index + 1, strategyId: candidate.strategyId ?? candidate.id, symbol: firstArrayValue(candidate.symbols) ?? candidate.symbol, session: candidate.session, family: candidate.family, score: candidate.score ?? candidate.compositeScore, tradeCount: nested(candidate, "metrics", "sampleDepth") ?? candidate.tradeCount, winRate: candidate.winRate, profitFactor: candidate.profitFactor, expectancy: nested(candidate, "metrics", "oosExpectancy") ?? candidate.expectancy, maxDrawdown: nested(candidate, "metrics", "maxDrawdown") ?? candidate.maxDrawdown, status: candidate.status, courtVerdict: candidate.courtVerdict })).sort((left, right) => Number(left.rank ?? 999999) - Number(right.rank ?? 999999));
   return {
     total: strategies.length,
     createdToday: "unavailable",
-    ranked: rankings.length,
+    rankingDecisions: rankings.length,
+    ranked: rankedCandidates.length,
+    rankedCandidatesDefinition: "sum of candidates embedded in durable ranking decisions",
     validationState: rankings.length ? "available" : "configured empty",
     byFamily: countBy(strategies, strategy => String(nested(strategy, "filters", "primaryFamily") ?? strategy.family ?? "unknown")),
     bySymbol: countMulti(strategies, strategy => arrayOfStrings(strategy.symbols)),
@@ -572,9 +581,13 @@ function strategyFacts(strategies: Record<string, unknown>[], rankings: Record<s
     top,
     rejectedOrDemoted: top.filter(item => /reject|demote|blocked|paused/i.test(String(item.status ?? ""))).slice(0, 10),
     concentrationWarnings: concentrationWarnings(strategies.length),
-    forwardEligible: rankings.filter(item => /eligible|approved|ranked/i.test(String(item.status ?? ""))).length,
+    forwardEligible: rankedCandidates.filter(item => /approve_for_forward_test|approve_for_replay/i.test(String(item.courtVerdict ?? "")) && /candidate|focused_research/i.test(String(item.status ?? ""))).length,
     accountingPeriod: today,
   };
+}
+
+function rankingCandidates(ranking: Record<string, unknown>) {
+  return Array.isArray(ranking.candidates) ? ranking.candidates as Record<string, unknown>[] : [];
 }
 
 function pnlFromValues(period: ReturnType<typeof accountingPeriod>, values: number[], source: string, databaseBacked: boolean, brokerBacked: boolean, generatedAtUtc: string): PnlProjection {

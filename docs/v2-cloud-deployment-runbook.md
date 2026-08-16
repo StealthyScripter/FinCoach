@@ -49,6 +49,8 @@ cd <REPOSITORY_PATH>
 set -a
 source .env
 set +a
+export FINCOACH_BUILD_COMMIT="$(git rev-parse HEAD)"
+export FINCOACH_BUILD_ID="${FINCOACH_BUILD_ID:-$FINCOACH_BUILD_COMMIT}"
 pm2 restart fincoach --update-env
 pm2 describe fincoach
 ```

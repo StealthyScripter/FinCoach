@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
+import { execFileSync } from "child_process";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -40,6 +41,8 @@ async function buildAll() {
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
+  const buildCommit = safeExec("git", ["rev-parse", "HEAD"]) ?? "unknown";
+  const buildId = process.env.FINCOACH_BUILD_ID ?? buildCommit;
   const allDeps = [
     ...Object.keys(pkg.dependencies || {}),
     ...Object.keys(pkg.devDependencies || {}),
@@ -54,11 +57,21 @@ async function buildAll() {
     outfile: "dist/index.cjs",
     define: {
       "process.env.NODE_ENV": '"production"',
+      "__FINCOACH_BUILD_COMMIT__": JSON.stringify(buildCommit),
+      "__FINCOACH_BUILD_ID__": JSON.stringify(buildId),
     },
     minify: true,
     external: externals,
     logLevel: "info",
   });
+}
+
+function safeExec(command: string, args: string[]) {
+  try {
+    return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
 }
 
 buildAll().catch((err) => {

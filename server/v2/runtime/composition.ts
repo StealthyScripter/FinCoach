@@ -1838,9 +1838,14 @@ type ForwardTestSource = { strategy: StrategyDefinition; backtest: BacktestResul
 type ForwardTestRepositoryLike = {
   save(record: ForwardTestRecord): Promise<unknown> | unknown;
 };
+type ForwardTestSourceRepositoryLike = {
+  strategies?: { get(id: string): Promise<StrategyDefinition | null> | StrategyDefinition | null };
+  courtroom?: { get(id: string): Promise<({ backtestIds?: string[]; lineageEventIds?: string[] } & Record<string, unknown>) | null> | (({ backtestIds?: string[]; lineageEventIds?: string[] } & Record<string, unknown>) | null) };
+  backtests?: { get(id: string): Promise<BacktestResult | null> | BacktestResult | null };
+};
 
 export async function createForwardTestsFromRanking(input: {
-  repositories: { forwardTesting?: ForwardTestRepositoryLike };
+  repositories: { forwardTesting?: ForwardTestRepositoryLike } & ForwardTestSourceRepositoryLike;
   config: Pick<V2RuntimeConfig, "forwardTestingEnabled" | "maxActiveForwardTests">;
   ranking: StrategyRankingDecision & { schemaVersion?: "fincoach.v2.ranking.1"; lineageEventIds?: string[] };
   rankingEventId: string;
@@ -1934,7 +1939,7 @@ export async function createForwardTestsFromRanking(input: {
       structuredLogger.v2({ level: "info", event: "forward_test_budget_exhausted", message: "V2 forward-test insertion budget exhausted", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, limit });
       break;
     }
-    const source = input.sources.get(rankingCandidateKey(candidate));
+    const source = input.sources.get(rankingCandidateKey(candidate)) ?? await durableForwardTestSource(input.repositories, candidate);
     if (!source) {
       structuredLogger.v2({ level: "warn", event: "forward_test_candidate_skipped", message: "V2 forward-test candidate skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, reason: "current_cycle_source_missing" });
       continue;
@@ -1996,6 +2001,15 @@ export async function createForwardTestsFromRanking(input: {
 
 function rankingCandidateKey(candidate: Pick<RankingCandidateInput, "strategyId" | "strategyVersion" | "courtCaseId">) {
   return `${candidate.strategyId}:${candidate.strategyVersion}:${candidate.courtCaseId}`;
+}
+
+async function durableForwardTestSource(repositories: ForwardTestSourceRepositoryLike, candidate: RankingCandidateInput): Promise<ForwardTestSource | null> {
+  const strategy = await repositories.strategies?.get(candidate.strategyId);
+  const court = await repositories.courtroom?.get(candidate.courtCaseId);
+  const backtestId = court?.backtestIds?.[0];
+  const backtest = backtestId ? await repositories.backtests?.get(backtestId) : null;
+  if (!strategy || !backtest) return null;
+  return { strategy, backtest, courtEventId: court?.lineageEventIds?.at(-1) ?? candidate.lineageEventIds.at(-1) ?? candidate.courtCaseId };
 }
 
 function forwardSnapshot(rankingId: string, candidate: RankingCandidateInput, source: ForwardTestSource, rankingEventId: string) {

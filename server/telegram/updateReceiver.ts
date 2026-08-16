@@ -1,3 +1,5 @@
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { join } from "path";
 import type { TelegramEnvironmentConfig, TelegramNormalizedUpdate } from "./contracts";
 import { telegramMetrics } from "./metrics";
 import { telegramTransport, type TelegramTransport } from "./transport";
@@ -22,6 +24,7 @@ type TelegramApiMessage = {
 const LONG_POLL_TIMEOUT_SECONDS = 30;
 const REQUEST_TIMEOUT_MS = 35_000;
 const MAX_BACKOFF_MS = 30_000;
+const DEFAULT_LOCK_PATH = join("/tmp", "fincoach-telegram-getupdates.lock");
 
 export class TelegramUpdateReceiver {
   private running = false;
@@ -33,6 +36,8 @@ export class TelegramUpdateReceiver {
   private lastPollFailureAt: string | null = null;
   private consecutivePollFailures = 0;
   private lastPollError: string | null = null;
+  private lockPath: string | null = null;
+  private ownershipState: "unclaimed" | "owned" | "blocked" | "conflict" = "unclaimed";
 
   constructor(
     private readonly config: TelegramEnvironmentConfig = loadTelegramConfig(),
@@ -48,6 +53,15 @@ export class TelegramUpdateReceiver {
       structuredLogger.telegram({ level: "warn", event: "telegram_update_receiver_not_started", message: "Telegram update receiver not started", reason: "bot_token_or_notifications_not_configured" });
       return this;
     }
+    const lock = acquirePollingLock(process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH ?? DEFAULT_LOCK_PATH);
+    this.lockPath = lock.path;
+    if (!lock.acquired) {
+      this.ownershipState = "blocked";
+      this.lastPollError = lock.reason;
+      structuredLogger.telegram({ level: "error", event: "telegram_update_receiver_ownership_blocked", message: "Telegram update receiver not started because another local owner holds getUpdates polling", reason: lock.reason, lockPath: lock.path });
+      return this;
+    }
+    this.ownershipState = "owned";
     this.running = true;
     this.stopped = false;
     structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_started", message: "Telegram update receiver started" });
@@ -71,6 +85,8 @@ export class TelegramUpdateReceiver {
       consecutivePollFailures: this.consecutivePollFailures,
       lastPollError: this.lastPollError,
       reachabilityState: this.reachabilityState(),
+      ownershipState: this.ownershipState,
+      lockPath: this.lockPath,
     };
   }
 
@@ -79,6 +95,7 @@ export class TelegramUpdateReceiver {
     this.running = false;
     this.inFlight?.abort();
     await this.loop?.catch(() => undefined);
+    this.releaseLock();
     structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_stopped", message: "Telegram update receiver stopped" });
   }
 
@@ -120,6 +137,18 @@ export class TelegramUpdateReceiver {
         }
       } catch (error) {
         if (this.stopped && isAbortError(error)) return;
+        if (error instanceof TelegramPollingConflictError) {
+          telegramMetrics.increment("updatesFailed");
+          this.lastPollFailureAt = new Date().toISOString();
+          this.consecutivePollFailures += 1;
+          this.lastPollError = error.message;
+          this.ownershipState = "conflict";
+          this.running = false;
+          this.stopped = true;
+          this.releaseLock();
+          structuredLogger.telegram({ level: "error", event: "telegram_polling_conflict", message: "Telegram getUpdates polling conflict; receiver stopped to avoid duplicate long polling", error });
+          return;
+        }
         telegramMetrics.increment("updatesFailed");
         telegramMetrics.increment("pollingReconnects");
         const retryAfter = retryAfterSeconds(error);
@@ -157,6 +186,7 @@ export class TelegramUpdateReceiver {
         }),
         signal: this.inFlight.signal,
       });
+      if (response.status === 409) throw new TelegramPollingConflictError("Telegram getUpdates failed with HTTP 409; another bot update consumer is active");
       if (response.status === 429) throw new TelegramPollingError("Telegram rate limited getUpdates", await parseRetryAfter(response));
       if (!response.ok) throw new Error(`Telegram getUpdates failed with HTTP ${response.status}`);
       const json = await response.json().catch(() => ({})) as { ok?: boolean; result?: TelegramApiUpdate[]; description?: string; parameters?: { retry_after?: number } };
@@ -175,6 +205,10 @@ export class TelegramUpdateReceiver {
     }
   }
 
+  private releaseLock() {
+    if (this.lockPath && this.ownershipState !== "blocked") releasePollingLock(this.lockPath);
+    if (this.ownershipState === "owned") this.ownershipState = "unclaimed";
+  }
 }
 
 function normalizeUpdate(update: TelegramApiUpdate): TelegramNormalizedUpdate | null {
@@ -202,6 +236,54 @@ async function parseRetryAfter(response: Response) {
 class TelegramPollingError extends Error {
   constructor(message: string, readonly retryAfterSeconds?: number) {
     super(message);
+  }
+}
+
+class TelegramPollingConflictError extends Error {}
+
+function acquirePollingLock(path: string): { acquired: true; path: string } | { acquired: false; path: string; reason: string } {
+  const payload = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+  try {
+    const fd = openSync(path, "wx");
+    writeFileSync(fd, payload);
+    closeSync(fd);
+    return { acquired: true, path };
+  } catch {
+    if (isStaleLock(path)) {
+      try {
+        unlinkSync(path);
+        const fd = openSync(path, "wx");
+        writeFileSync(fd, payload);
+        closeSync(fd);
+        return { acquired: true, path };
+      } catch {
+        return { acquired: false, path, reason: "telegram_poll_lock_race_lost" };
+      }
+    }
+    return { acquired: false, path, reason: "telegram_poll_lock_held" };
+  }
+}
+
+function releasePollingLock(path: string) {
+  try {
+    const raw = readFileSync(path, "utf8");
+    const pid = Number((JSON.parse(raw) as { pid?: unknown }).pid);
+    if (pid === process.pid) unlinkSync(path);
+  } catch {
+    return;
+  }
+}
+
+function isStaleLock(path: string) {
+  if (!existsSync(path)) return false;
+  try {
+    const raw = readFileSync(path, "utf8");
+    const pid = Number((JSON.parse(raw) as { pid?: unknown }).pid);
+    if (!Number.isInteger(pid) || pid <= 0) return true;
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH" || (error instanceof SyntaxError);
   }
 }
 

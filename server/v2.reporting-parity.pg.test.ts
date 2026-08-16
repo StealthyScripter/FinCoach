@@ -97,21 +97,23 @@ async function seed(client: Client, suffix: string) {
   await insertMany(client, "v2_research_experiments", suffix, "fincoach.v2.experiment.1", "experiments", 2, now);
   await insertMany(client, "v2_backtest_results", suffix, "fincoach.v2.backtest.1", "backtesting", 1, now);
   await insertMany(client, "v2_court_verdicts", suffix, "fincoach.v2.court-verdict.1", "courtroom", 1, now);
-  await insertMany(client, "v2_ranking_decisions", suffix, "fincoach.v2.ranking.1", "ranking", 1, now);
+  await insertGeneric(client, "v2_ranking_decisions", suffix, "fincoach.v2.ranking.1", "ranking", 1, now, {
+    candidates: [{ strategyId: `${suffix}-strategy-1`, rank: 1, courtVerdict: "approved_for_forward_test" }],
+  });
 }
 
 async function insertMany(client: Client, table: string, suffix: string, schemaVersion: string, sourceModule: string, count: number, createdAt: string) {
   for (let i = 1; i <= count; i++) await insertGeneric(client, table, suffix, schemaVersion, sourceModule, i, createdAt);
 }
 
-async function insertGeneric(client: Client, table: string, suffix: string, schemaVersion: string, sourceModule: string, index: number, createdAt: string) {
+async function insertGeneric(client: Client, table: string, suffix: string, schemaVersion: string, sourceModule: string, index: number, createdAt: string, payload: Record<string, unknown> = {}) {
   const id = `${suffix}-${table}-${index}`;
   await client.query(
     `INSERT INTO ${table}
       (record_id, schema_version, natural_key, idempotency_key, source_module, payload, lineage_event_ids, correlation_id, causation_id, created_at)
      VALUES ($1, $2, $1, $1, $3, $4, '[]'::jsonb, $5, null, $6)
      ON CONFLICT (record_id) DO NOTHING`,
-    [id, schemaVersion, sourceModule, JSON.stringify({ schemaVersion, recordId: id, correlationId: suffix, lineageEventIds: [], createdAt }), suffix, createdAt],
+    [id, schemaVersion, sourceModule, JSON.stringify({ schemaVersion, recordId: id, correlationId: suffix, lineageEventIds: [], createdAt, ...payload }), suffix, createdAt],
   );
 }
 
@@ -133,7 +135,7 @@ async function durableCounts(client: Client) {
       (SELECT count(*)::int FROM v2_research_experiments) AS experiments,
       (SELECT count(*)::int FROM v2_backtest_results) AS backtests,
       (SELECT count(*)::int FROM v2_court_verdicts) AS verdicts,
-      (SELECT count(*)::int FROM v2_ranking_decisions) AS ranked_candidates,
+      (SELECT COALESCE(sum(jsonb_array_length(CASE WHEN jsonb_typeof(payload->'candidates') = 'array' THEN payload->'candidates' ELSE '[]'::jsonb END)), 0)::int FROM v2_ranking_decisions) AS ranked_candidates,
       (SELECT count(*)::int FROM v2_forward_tests) AS forward_tests,
       (SELECT count(*)::int FROM v2_research_signals) AS signals,
       (SELECT count(*)::int FROM v2_external_evaluations) AS evaluations,

@@ -22,6 +22,7 @@ await featureFlagDisabledBlocksCreation();
 await zeroForwardTestLimitBlocksCreation();
 await duplicateRuntimeCycleDoesNotCreateAnotherForwardTest();
 await duplicatePersistenceResultSkipsCreation();
+await durableLineageCreatesForwardTestAfterRestart();
 await multipleRankedCandidatesCreateIndependentForwardTests();
 await budgetStopsAfterInsertedLimit();
 await persistenceFailureDoesNotAbortRemainingCandidates();
@@ -95,6 +96,23 @@ async function duplicatePersistenceResultSkipsCreation() {
   assert.equal(await runTransition(fixtureRanking([candidate]), repository), 0);
 }
 
+async function durableLineageCreatesForwardTestAfterRestart() {
+  const candidate = fixtureCandidate("durable-restart");
+  const repository = new InMemoryForwardTestingRepository();
+  const strategy = fixtureStrategy(candidate);
+  const backtest = fixtureBacktest(candidate);
+  const count = await runTransition(fixtureRanking([candidate]), repository, {}, {
+    sources: new Map(),
+    extraRepositories: {
+      strategies: { get: async (id: string) => id === candidate.strategyId ? strategy : null },
+      courtroom: { get: async (id: string) => id === candidate.courtCaseId ? { backtestIds: [backtest.backtestId], lineageEventIds: candidate.lineageEventIds } : null },
+      backtests: { get: async (id: string) => id === backtest.backtestId ? backtest : null },
+    },
+  });
+  assert.equal(count, 1);
+  assert.equal(repository.list()[0].strategyId, candidate.strategyId);
+}
+
 async function multipleRankedCandidatesCreateIndependentForwardTests() {
   const repository = new InMemoryForwardTestingRepository();
   const ranking = fixtureRanking([fixtureCandidate("multi-a"), fixtureCandidate("multi-b")]);
@@ -164,13 +182,14 @@ async function runTransition(
   ranking: StrategyRankingDecision,
   repository: { save(record: ForwardTestRecord): unknown },
   options: { forwardTestingEnabled?: boolean; maxActiveForwardTests?: number } = {},
+  runtime: { sources?: Map<string, { strategy: StrategyDefinition; backtest: BacktestResult; courtEventId: string }>; extraRepositories?: Record<string, unknown> } = {},
 ) {
   return await createForwardTestsFromRanking({
-    repositories: { forwardTesting: repository },
+    repositories: { forwardTesting: repository, ...runtime.extraRepositories },
     config: { forwardTestingEnabled: options.forwardTestingEnabled ?? true, maxActiveForwardTests: options.maxActiveForwardTests ?? 3 },
     ranking,
     rankingEventId,
-    sources: new Map(ranking.candidates.map(candidate => [sourceKey(candidate), { strategy: fixtureStrategy(candidate), backtest: fixtureBacktest(candidate), courtEventId: `court-event-${candidate.courtCaseId}` }])),
+    sources: runtime.sources ?? new Map(ranking.candidates.map(candidate => [sourceKey(candidate), { strategy: fixtureStrategy(candidate), backtest: fixtureBacktest(candidate), courtEventId: `court-event-${candidate.courtCaseId}` }])),
     cycleId: "cycle-forward-test",
     correlationId,
     now: new Date("2026-07-30T12:00:00.000Z"),

@@ -54,6 +54,7 @@ export type V2ResearchPipelineCounts = {
   experiments: number;
   backtests: number;
   verdicts: number;
+  rankingDecisions?: number;
   rankedCandidates: number;
   forwardTests: number;
   signals: number;
