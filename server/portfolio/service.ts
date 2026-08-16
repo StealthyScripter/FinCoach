@@ -9,6 +9,7 @@ import { VirtualPortfolioBroker } from "./broker";
 import { accountingSnapshot } from "./accounting";
 
 type RankedSummary = PortfolioSummary & { score: number; confidence: number };
+export type PortfolioPlatformLike = Pick<PortfolioPlatformService, "summaries" | "health">;
 
 export class PortfolioPlatformService {
   private initialized = false;
@@ -101,6 +102,19 @@ export class PortfolioPlatformService {
 
   async activity(limit = 100) {
     return this.repository.listDecisions(undefined, limit);
+  }
+
+  async transactions(portfolioId: string, limit = 100) {
+    return this.repository.listTransactions(portfolioId, limit);
+  }
+
+  async orders(portfolioId: string, limit = 100) {
+    return this.repository.listOrders(portfolioId, limit);
+  }
+
+  async rankings(now = new Date()) {
+    const { rankLeaderboards } = await import("./analytics");
+    return rankLeaderboards(await this.summaries(now));
   }
 
   async rebalance(portfolioId: string, now = new Date()) {

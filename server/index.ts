@@ -15,6 +15,7 @@ import { deploymentMetadata } from "./deploymentMetadata";
 import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
 import { getStorageHealth } from "./storageMode";
 import { configureAuth } from "./auth/service";
+import { portfolioScheduler } from "./portfolio/scheduler";
 
 const app = express();
 const httpServer = createServer(app);
@@ -101,6 +102,8 @@ app.use((req, res, next) => {
   await registerRoutes(httpServer, app);
   const runtimeStartStatus = await v2Runtime.start();
   startDemoRunScheduler();
+  const portfolioSchedulerStart = portfolioScheduler.start();
+  structuredLogger.application({ level: portfolioSchedulerStart.started ? "info" : "warn", module: "portfolio-scheduler", event: portfolioSchedulerStart.started ? "portfolio_scheduler_started" : "portfolio_scheduler_not_started", message: portfolioSchedulerStart.started ? "Portfolio scheduler started" : "Portfolio scheduler not started", reason: "reason" in portfolioSchedulerStart ? portfolioSchedulerStart.reason : undefined });
   let shuttingDown = false;
   const shutdown = (signal: "SIGTERM" | "SIGINT" | "graceful_shutdown") => {
     if (shuttingDown) return;
@@ -110,6 +113,9 @@ app.use((req, res, next) => {
       const runtimeBeforeStop = v2Runtime.status();
       await closeHttpServer(httpServer, 2_000);
       stopDemoRunScheduler();
+      await portfolioScheduler.stop(`process_${signal.toLowerCase()}`).catch((error) => {
+        structuredLogger.application({ level: "error", module: "portfolio-scheduler", event: "portfolio_scheduler_shutdown_failed", message: "Portfolio scheduler failed to stop cleanly", error });
+      });
       await v2Runtime.stop(`process_${signal.toLowerCase()}`).catch((error) => {
         structuredLogger.v2Error({ level: "error", event: "v2_runtime_shutdown_failed", message: "V2 runtime shutdown failed", error });
       });

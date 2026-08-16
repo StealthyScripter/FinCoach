@@ -15,6 +15,20 @@ export function registerPortfolioRoutes(app: Express) {
     res.json({ events: await portfolioPlatformService.activity(limit) });
   });
 
+  app.get("/api/portfolio/rankings", async (_req, res) => {
+    res.json(await portfolioPlatformService.rankings());
+  });
+
+  app.get("/api/portfolio/strategies/:portfolioId/orders", async (req, res) => {
+    const limit = Math.min(250, Math.max(1, Number(req.query.limit ?? 100)));
+    res.json({ orders: await portfolioPlatformService.orders(req.params.portfolioId, limit) });
+  });
+
+  app.get("/api/portfolio/strategies/:portfolioId/transactions", async (req, res) => {
+    const limit = Math.min(250, Math.max(1, Number(req.query.limit ?? 100)));
+    res.json({ transactions: await portfolioPlatformService.transactions(req.params.portfolioId, limit) });
+  });
+
   app.get("/api/portfolio/strategies/:portfolioId", async (req, res) => {
     const detail = await portfolioPlatformService.detail(req.params.portfolioId);
     if (!detail) {
