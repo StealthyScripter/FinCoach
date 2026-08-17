@@ -50,8 +50,10 @@ if (!databaseUrl) {
     const server = createServer(app);
     await listen(server);
     try {
-      const created = await post(server, "/api/auth/signup", { email: "operator@example.com", password: "StrongPassword123!" });
-      assert.equal(created.status, 201);
+      const provisioned = await service.provisionUser("operator@example.com", "StrongPassword123!");
+      assert.equal(provisioned.ok, true);
+      const created = await post(server, "/api/auth/signin", { email: "operator@example.com", password: "StrongPassword123!" });
+      assert.equal(created.status, 200);
       const createdBody = await created.json();
       assert.equal(createdBody.user.email, "operator@example.com");
       assert.ok(createdBody.csrfToken);

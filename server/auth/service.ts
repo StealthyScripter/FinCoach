@@ -115,8 +115,31 @@ export class AuthService {
     return this.env.FINCOACH_AUTH_REQUIRED !== "false";
   }
 
+  publicRegistrationEnabled() {
+    return this.env.PUBLIC_REGISTRATION_ENABLED === "true";
+  }
+
   async signup(email: string, password: string, now = new Date()) {
     const normalized = normalizeEmail(email);
+    if (!this.publicRegistrationEnabled()) {
+      this.audit("auth_signup_rejected", normalized, "public_registration_disabled");
+      return { ok: false as const, reason: "registration_disabled" };
+    }
+    return this.createPasswordUser(normalized, password, "active", now, "auth_signup_created");
+  }
+
+  async provisionUser(email: string, password: string, status: AuthUser["status"] = "active", now = new Date()) {
+    const normalized = normalizeEmail(email);
+    return this.createPasswordUser(normalized, password, status, now, "auth_user_provisioned");
+  }
+
+  private async createPasswordUser(
+    normalized: string,
+    password: string,
+    status: AuthUser["status"],
+    now: Date,
+    successEvent: string,
+  ) {
     if (!this.allowedEmails().has(normalized)) {
       this.audit("auth_signup_rejected", normalized, "not_allowed");
       return { ok: false as const, reason: "invalid_credentials" };
@@ -131,12 +154,12 @@ export class AuthService {
       passwordHash: hashed.hash,
       passwordSalt: hashed.salt,
       passwordIterations: hashed.iterations,
-      status: "active",
+      status,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
       lastLoginAt: null,
     });
-    this.audit("auth_signup_created", normalized, "created");
+    this.audit(successEvent, normalized, "created");
     return { ok: true as const, user: publicUser(user) };
   }
 
@@ -250,11 +273,15 @@ function establishSession(req: Request, user: PublicUser) {
 }
 
 function publicApi(path: string) {
-  return path === "/api/health"
-    || path.startsWith("/api/health/")
-    || path.startsWith("/api/auth/")
-    || path === "/api/telegram/webhook"
-    || path === "/api/webhooks/tradingview";
+  const pathname = path.split("?")[0];
+  return pathname === "/api/health"
+    || pathname.startsWith("/api/health/")
+    || pathname === "/api/auth/session"
+    || pathname === "/api/auth/signup"
+    || pathname === "/api/auth/signin"
+    || pathname === "/api/auth/signout"
+    || pathname === "/api/telegram/webhook"
+    || pathname === "/api/webhooks/tradingview";
 }
 
 function safeCsrf(req: Request) {

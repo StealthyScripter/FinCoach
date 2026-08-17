@@ -8,9 +8,24 @@ Shared infrastructure is limited to PostgreSQL, authentication, HTTP routing, st
 
 ## Authentication
 
-The web app is private by default. `FINCOACH_AUTH_REQUIRED=true` protects private `/api/*` routes and the frontend. Public exceptions are health, auth, Telegram webhook, and TradingView webhook routes.
+The web app is private by default. `FINCOACH_AUTH_REQUIRED=true` protects private `/api/*` routes and the frontend. Public exceptions are health, the exact auth endpoints registered in `server/auth/service.ts`, Telegram webhook, and TradingView webhook routes.
 
-Allowed users are managed server-side through `FINCOACH_AUTH_ALLOWED_EMAILS`. Emails are normalized to lowercase. Non-whitelisted signups and signins receive generic failures.
+Allowed users are managed server-side through `FINCOACH_AUTH_ALLOWED_EMAILS`. Emails are normalized to lowercase. Non-whitelisted signins receive generic failures.
+
+Public registration is intentionally disabled for the invitation-only launch. `PUBLIC_REGISTRATION_ENABLED` is fail-closed:
+
+- missing: registration disabled
+- `false`: registration disabled
+- `true`: registration may operate, subject to allowed-email and password validation
+
+The frontend landing page exposes Login only. The `/api/auth/signup` route remains in the codebase for a future public launch, but direct HTTP signup requests cannot create accounts unless `PUBLIC_REGISTRATION_ENABLED=true`. Operator/customer provisioning should use the trusted server-side provisioning path (`AuthService.provisionUser`) or an audited administrative workflow, not the public signup endpoint.
+
+Future public registration re-enablement requires all of the following:
+
+- set `PUBLIC_REGISTRATION_ENABLED=true` intentionally in the target environment
+- restore and review a frontend signup route/form
+- re-run auth boundary and registration bypass tests
+- add abuse controls appropriate for open registration, including stronger registration rate limits and monitoring
 
 Production must set `FINCOACH_AUTH_SESSION_SECRET`. Passwords are hashed server-side with PBKDF2 and are never logged.
 
@@ -20,6 +35,7 @@ Required deployment additions:
 
 - `FINCOACH_AUTH_ALLOWED_EMAILS=<operator emails>`
 - `FINCOACH_AUTH_SESSION_SECRET=<strong random secret>`
+- `PUBLIC_REGISTRATION_ENABLED=false`
 - `FINCOACH_PORTFOLIO_ENABLED=true` only when the operator wants Portfolio online
 - `FINCOACH_PORTFOLIO_STARTING_CAPITAL=100000`
 - `FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER=alpha_vantage`
