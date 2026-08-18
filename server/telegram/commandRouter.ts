@@ -170,8 +170,11 @@ export class TelegramCommandRouter {
       case "/week":
         return operationsReportingService.telegramMessage("/week");
       case "/strategies":
-      case "/strategy_portfolio":
         return operationsReportingService.telegramMessage("/strategies");
+      case "/strategy_portfolio": {
+        const { v2OperationsService } = await import("../v2/operations");
+        return v2OperationsService.telegramSummary("/strategy_portfolio");
+      }
       case "/strategy":
         return operationsReportingService.telegramMessage("/strategy", argument);
       case "/kill_status":
@@ -256,7 +259,7 @@ export class TelegramCommandRouter {
         return ["Upcoming Market Events", ...events.map((item, index) => `${index + 1}. ${item.event.sourceType === "synthetic_demo" ? "[synthetic demo] " : ""}${item.event.title}\n   Time: ${item.event.startsAt}\n   Authoritative: ${item.event.authoritative}\n   Impact: ${item.impactScore.finalScore}/10\n   Affected configured symbols: ${item.impactScore.affectedInstruments.join(", ") || "none mapped"}\n   Score basis: ${item.impactScore.explanation}`), "Live execution: blocked"].join("\n");
       }
       case "/performance":
-        return this.performanceMessage();
+        return operationsReportingService.telegramMessage("/performance");
       case "/restarts":
         return this.restartsMessage();
       case "/data_reconciliation":

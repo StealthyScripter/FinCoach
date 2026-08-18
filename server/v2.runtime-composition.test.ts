@@ -168,6 +168,33 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 {
   const validation = loadV2RuntimeConfig({
     ...disabledEnv,
+    FINCOACH_DEMO_BROKER_EXECUTION_ENABLED: "true",
+    OANDA_ENV: "practice",
+    OANDA_API_TOKEN: "test-token",
+    OANDA_ACCOUNT_ID: "test-account",
+    OANDA_BASE_URL: "https://api-fxpractice.oanda.com/v3",
+  });
+  assert.equal(validation.ok, true);
+  assert.equal(validation.config.demoBrokerExecutionEnabled, true);
+}
+
+{
+  const validation = loadV2RuntimeConfig({
+    ...disabledEnv,
+    FINCOACH_DEMO_BROKER_EXECUTION_ENABLED: "true",
+    OANDA_ENV: "live",
+    OANDA_API_TOKEN: "test-token",
+    OANDA_ACCOUNT_ID: "test-account",
+    OANDA_BASE_URL: "https://api-fxtrade.oanda.com/v3",
+  });
+  assert.equal(validation.ok, false);
+  assert.match(validation.errors.join("\n"), /OANDA_ENV=practice/);
+  assert.match(validation.errors.join("\n"), /live endpoint|api-fxpractice/);
+}
+
+{
+  const validation = loadV2RuntimeConfig({
+    ...disabledEnv,
     NODE_ENV: "production",
     DATABASE_URL: "postgres://user:pass@localhost:5432/fincoach",
     FINCOACH_V2_RUNTIME_ENABLED: "true",
@@ -519,7 +546,11 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
     new InMemoryTelegramRepository(),
   );
   const reply = await router.handle({ command: "/performance", actorId: "123", chatId: "123" });
-  assert.match(reply, /Insufficient evidence to estimate profitability/);
+  assert.match(reply, /BACKTEST PERFORMANCE/);
+  assert.match(reply, /FORWARD-TEST PERFORMANCE/);
+  assert.match(reply, /DEMO\/PRACTICE BROKER PERFORMANCE/);
+  assert.match(reply, /LIVE PERFORMANCE/);
+  assert.match(reply, /real-money execution is blocked/);
 }
 
 console.log("v2 runtime composition focused tests passed");

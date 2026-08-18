@@ -470,6 +470,30 @@ function formatTelegram(snapshot: ReportingSnapshot, command: string, argument: 
       return [...header("Data"), `Provider reachability: ${snapshot.pnl.broker.degraded ? "degraded" : "available"}`, `Latest market data: ${snapshot.coverage.latestMarketDataTimestamp ?? "unavailable"}`, `Symbols receiving data: ${formatList(snapshot.coverage.coveredInstruments as unknown[])}`, `Timeframes: ${formatObject(snapshot.coverage.timeframeDistribution as Record<string, unknown>)}`, `Synthetic/demo data: unavailable`, `Temporal integrity: enforced`, `Future-dated violations: unavailable`].join("\n");
     case "/trading":
       return [...header("Trading"), `Broker/environment: ${broker.source}`, `Execution: 🔒 live blocked; paper=${snapshot.runtime.paperExecutionEnabled ? "configured" : "disabled"}; demo=${snapshot.runtime.demoBrokerExecutionEnabled ? "configured" : "disabled"}`, `Orders submitted: ${broker.tradeCount}`, `Trades closed: ${broker.tradeCount}`, `Open trades/positions/pending orders: unavailable`, `Paper realized/unrealized: ${paper.realizedPnl}/${paper.unrealizedPnl}`, `Broker realized/unrealized: ${broker.realizedPnl}/${broker.unrealizedPnl}`, `Wins/losses: ${paper.winningTrades}/${paper.losingTrades}`, `Daily loss used: ${risk.percentageUsed}%`, `Kill switch: ${risk.killSwitch}`].join("\n");
+    case "/performance":
+      return [
+        ...header("Performance"),
+        "BACKTEST PERFORMANCE",
+        `Backtests completed: ${pipeline.backtests}`,
+        `Rankings/verdicts: ${pipeline.rankings}/${pipeline.verdicts}`,
+        `Top ranked evidence: ${formatTopStrategy(strategies)}`,
+        "",
+        "FORWARD-TEST PERFORMANCE",
+        `Forward tests: ${pipeline.forwardTests}`,
+        `Research signals: ${pipeline.signals}`,
+        "Forward P/L: unavailable until forward-test outcomes are persisted",
+        "",
+        "DEMO/PRACTICE BROKER PERFORMANCE",
+        `Broker source: ${broker.source}`,
+        `Realized/unrealized P/L: ${broker.realizedPnl}/${broker.unrealizedPnl}`,
+        `Trades: ${broker.tradeCount}; win rate: ${broker.winRate ?? "unavailable"}; profit factor: ${broker.profitFactor ?? "unavailable"}`,
+        "",
+        "PORTFOLIO SIMULATION/DEMO PERFORMANCE",
+        "Portfolio projection: see /api/portfolio and /strategy_portfolio",
+        "",
+        "LIVE PERFORMANCE",
+        "Live FX/Portfolio performance: unavailable; real-money execution is blocked",
+      ].join("\n");
     case "/risk":
       return [...header("Risk"), `Kill switch: ${risk.killSwitch}`, `Daily-loss breaker: ${risk.dailyLossCircuitBreaker}`, `Automation level: ${risk.automationLevel}`, `Accounting boundary: ${risk.accountingDayBoundary}`, `Realized loss current day: ${risk.realizedLossCurrentDay}`, `Configured limit: ${risk.configuredLimit}`, `Used: ${risk.percentageUsed}%`, `Last activation: ${risk.lastActivationTime}; source=${risk.lastActivationSource}`, `Execution gates: ${JSON.stringify(risk.executionGates)}`].join("\n");
     case "/health":

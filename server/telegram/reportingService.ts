@@ -7,6 +7,7 @@ import { executionRiskService, summarizePositions } from "../execution/riskContr
 import { paperStrategyRuntime } from "../execution/paperStrategyRuntime";
 import { strategyEvidenceStore } from "../execution/strategyEvidenceStore";
 import { providerRegistryService } from "../providerRegistryService";
+import { operationsReportingService } from "../operationsReportingService";
 import { telegramMetrics } from "./metrics";
 import { telegramRepository, type TelegramRepository } from "./repository";
 import type { TelegramSummaryRecord } from "./contracts";
@@ -116,31 +117,33 @@ export class TelegramReportingService {
     const createdAt = now.toISOString();
     const demo = await demoRunService.status().catch(() => null);
     const telemetry = await demoRunService.telemetry().catch(() => null);
-    const pipeline = strategyResearchSchedulerService.snapshot();
     const evidence = strategyEvidenceStore.snapshot();
+    const canonicalMessage = await operationsReportingService.telegramMessage("/daily", "", now);
+    const canonicalSnapshot = await operationsReportingService.snapshot(now);
     const report = {
       generatedAt: now.toISOString(),
+      reportingSource: "canonical-postgresql-v2",
+      canonical: {
+        source: canonicalSnapshot.source,
+        databaseBacked: canonicalSnapshot.databaseBacked,
+        degraded: canonicalSnapshot.degraded,
+        projectionError: canonicalSnapshot.projectionError,
+        period: canonicalSnapshot.periods.daily,
+        research: canonicalSnapshot.research,
+        pipeline: canonicalSnapshot.pipeline,
+        strategies: canonicalSnapshot.strategies,
+        pnl: canonicalSnapshot.pnl,
+        blockers: canonicalSnapshot.blockers,
+      },
       system: { uptimeSeconds: demo?.uptimeSeconds ?? 0, reliability: telemetry?.reliability ?? null },
       demoRun: demo,
-      research: pipeline.counts,
       signals: telegramMetrics.snapshot(),
       rejectedSignals: evidence.rejectedSignals.slice(0, 10),
       safety: telemetry?.safety ?? null,
-      nextResearchPriority: pipeline.latestRejectionReasons[0] ?? "Continue evidence collection and validation.",
+      nextResearchPriority: canonicalSnapshot.blockers[0]?.action ?? "Continue evidence collection and validation.",
       disclaimer: "Historical performance is not guaranteed future performance. FinCoach is demo-only.",
     };
-    const conciseMessage = [
-      "Daily FinCoach Summary",
-      `Demo run: ${demo?.state ?? "unknown"}`,
-      `Research cycles: ${pipeline.health.cyclesRun}`,
-      `Patterns discovered: ${pipeline.counts.patternsDetected}`,
-      `Experiments created: ${pipeline.counts.experimentsCreated}`,
-      `Backtests completed: ${pipeline.counts.backtestsRun}`,
-      `Signals published/suppressed: ${telegramMetrics.snapshot().signalsPublished}/${telegramMetrics.snapshot().signalsRejected}`,
-      `Safety blocks: ${pipeline.health.safetyBlocks}`,
-      `Next: ${report.nextResearchPriority}`,
-      "Live execution: blocked",
-    ].join("\n");
+    const conciseMessage = ["Daily FinCoach Summary", canonicalMessage.replace(/^\S+ Daily\n/, ""), `Demo run: ${demo?.state ?? "unknown"}`].join("\n");
     const result = await this.repository.getOrCreateSummary({
       id: randomUUID(),
       period: "daily",

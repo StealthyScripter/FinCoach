@@ -199,8 +199,12 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.liveExecutionEnabled) errors.push("FINCOACH_LIVE_EXECUTION_ENABLED must remain false.");
   if (config.telegramSignalPublicationEnabled && !config.researchSignalEnabled) errors.push("Telegram signal publication requires research signal creation.");
   if (config.demoBrokerExecutionEnabled && config.liveExecutionEnabled) errors.push("Demo broker execution cannot run with live execution enabled.");
+  if (config.demoBrokerExecutionEnabled) {
+    const demoBrokerErrors = validateOandaPracticeDemoBroker(env);
+    errors.push(...demoBrokerErrors);
+  }
   if (config.paperExecutionEnabled && config.maxPaperPositions <= 0) errors.push("Paper execution requires FINCOACH_V2_MAX_PAPER_POSITIONS > 0.");
-  if (config.runtimeEnabled && !process.env.DATABASE_URL) errors.push("DATABASE_URL is required when FINCOACH_V2_RUNTIME_ENABLED=true.");
+  if (config.runtimeEnabled && !env.DATABASE_URL) errors.push("DATABASE_URL is required when FINCOACH_V2_RUNTIME_ENABLED=true.");
   if (config.researchEnabled && !config.runtimeEnabled) errors.push("Research cannot be enabled when V2 runtime is disabled.");
   if (config.pilotEnabled && !config.researchEnabled) errors.push("Pilot cannot be enabled when V2 research is disabled.");
   if (config.autostart && (!config.runtimeEnabled || !config.pilotEnabled || !config.researchEnabled)) errors.push("Autostart requires runtime, pilot, and research enabled.");
@@ -259,9 +263,46 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
       FINCOACH_V2_RUNTIME_ENABLED: provenance(env.FINCOACH_V2_RUNTIME_ENABLED, config.runtimeEnabled),
       FINCOACH_V2_RESEARCH_ENABLED: provenance(env.FINCOACH_V2_RESEARCH_ENABLED, config.researchEnabled),
       FINCOACH_V2_PILOT_ENABLED: provenance(env.FINCOACH_V2_PILOT_ENABLED, config.pilotEnabled),
+      FINCOACH_V2_FORWARD_TESTING_ENABLED: provenance(env.FINCOACH_V2_FORWARD_TESTING_ENABLED, config.forwardTestingEnabled),
+      FINCOACH_V2_RESEARCH_SIGNAL_ENABLED: provenance(env.FINCOACH_V2_RESEARCH_SIGNAL_ENABLED, config.researchSignalEnabled),
+      FINCOACH_PAPER_EXECUTION_ENABLED: provenance(env.FINCOACH_PAPER_EXECUTION_ENABLED, config.paperExecutionEnabled),
+      FINCOACH_DEMO_BROKER_EXECUTION_ENABLED: provenance(env.FINCOACH_DEMO_BROKER_EXECUTION_ENABLED, config.demoBrokerExecutionEnabled),
       FINCOACH_LIVE_EXECUTION_ENABLED: provenance(env.FINCOACH_LIVE_EXECUTION_ENABLED, config.liveExecutionEnabled),
+      OANDA_ENV: provenance(env.OANDA_ENV, env.OANDA_ENV?.trim().toLowerCase() ?? null),
+      OANDA_BASE_URL: provenance(env.OANDA_BASE_URL, env.OANDA_BASE_URL ? safeOandaBaseUrlState(env.OANDA_BASE_URL) : null),
     },
   };
+}
+
+function validateOandaPracticeDemoBroker(env: NodeJS.ProcessEnv) {
+  const errors: string[] = [];
+  const oandaEnv = env.OANDA_ENV?.trim().toLowerCase();
+  if (oandaEnv !== "practice") errors.push("FINCOACH_DEMO_BROKER_EXECUTION_ENABLED requires OANDA_ENV=practice.");
+  if (!env.OANDA_API_TOKEN?.trim()) errors.push("FINCOACH_DEMO_BROKER_EXECUTION_ENABLED requires OANDA_API_TOKEN.");
+  if (!env.OANDA_ACCOUNT_ID?.trim()) errors.push("FINCOACH_DEMO_BROKER_EXECUTION_ENABLED requires OANDA_ACCOUNT_ID.");
+  const baseUrl = env.OANDA_BASE_URL?.trim() || "https://api-fxpractice.oanda.com/v3";
+  try {
+    const parsed = new URL(baseUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (host !== "api-fxpractice.oanda.com") {
+      errors.push("FINCOACH_DEMO_BROKER_EXECUTION_ENABLED requires OANDA_BASE_URL=https://api-fxpractice.oanda.com/v3.");
+    }
+    if (/api-fxtrade\.oanda\.com/i.test(baseUrl)) {
+      errors.push("FINCOACH_DEMO_BROKER_EXECUTION_ENABLED rejected OANDA live endpoint.");
+    }
+  } catch {
+    errors.push("FINCOACH_DEMO_BROKER_EXECUTION_ENABLED requires a valid OANDA_BASE_URL practice URL.");
+  }
+  return errors;
+}
+
+function safeOandaBaseUrlState(value: string) {
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.hostname.toLowerCase() === "api-fxpractice.oanda.com" ? "practice_endpoint" : "non_practice_endpoint";
+  } catch {
+    return "invalid_url";
+  }
 }
 
 function validateWeeklyResearchSchedule(config: WeeklyResearchScheduleConfig) {
