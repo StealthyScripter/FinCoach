@@ -52,9 +52,14 @@ export class OandaPracticeAdapter implements DemoBrokerAdapter {
     if (!config.token.trim() || !config.accountId.trim()) {
       throw new SandboxBrokerError("token_missing");
     }
-    this.baseUrl = config.baseUrl ?? "https://api-fxpractice.oanda.com/v3";
-    const host = new URL(this.baseUrl).hostname;
-    if (!["api-fxpractice.oanda.com", "localhost", "127.0.0.1"].includes(host)) {
+    this.baseUrl = (config.baseUrl ?? "https://api-fxpractice.oanda.com/v3").replace(/\/+$/, "");
+    let url: URL;
+    try {
+      url = new URL(this.baseUrl);
+    } catch {
+      throw new SandboxBrokerError("demo_environment_required");
+    }
+    if (url.protocol !== "https:" || url.hostname !== "api-fxpractice.oanda.com" || url.pathname !== "/v3") {
       throw new SandboxBrokerError("demo_environment_required");
     }
     this.maxPriceAgeMs = config.maxPriceAgeMs ?? 30_000;
@@ -326,6 +331,7 @@ export function createOandaPracticeAdapterFromEnv(
     token: env.OANDA_API_TOKEN ?? "",
     accountId: env.OANDA_ACCOUNT_ID ?? "",
     environment: env.OANDA_ENV ?? "",
+    baseUrl: env.OANDA_BASE_URL,
   }, http);
 }
 

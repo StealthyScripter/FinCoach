@@ -674,6 +674,7 @@ export class FinCoachV2Runtime {
       await guarded(input.guard, "detector_evaluation_skipped", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol: plan.symbol, timeframe: plan.timeframe, detectorId: plan.detector.detectorId, detectorVersion: plan.detector.detectorVersion, strategyFamily: plan.detector.capability?.strategyFamily, status: "skipped", reason: "cycle_budget", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
     }
     const providerPlan = planProviderRequests(this.config, plans);
+    const providerCandlesBySymbolTimeframe = new Map<string, NormalizedCandle[]>();
     if (providerPlan.deferred.length) {
       await operationalBlockerService.record({
         kind: "limit",
@@ -738,11 +739,12 @@ export class FinCoachV2Runtime {
           await guarded(input.guard, "detector_evaluation_attempted", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: detector.detectorId, detectorVersion: detector.detectorVersion, strategyFamily: detector.capability?.strategyFamily, status: "attempted", correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
           structuredLogger.v2({ level: "info", event: "detector_evaluation_started", message: "V2 detector evaluation started", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: detector.detectorId, strategyFamily: detector.capability?.strategyFamily });
           await guarded(input.guard, "detector_evaluation_skipped", () => saveDetectorEvaluation(repositories.operations, { cycleId: input.cycleId, symbol, timeframe, detectorId: plan.detector.detectorId, detectorVersion: plan.detector.detectorVersion, strategyFamily: plan.detector.capability?.strategyFamily, status: "skipped", reason, correlationId: input.correlationId, causationId: input.cycleEventId, createdAt: input.now.toISOString() }));
-          structuredLogger.v2({ level: "warn", event: "detector_evaluation_skipped", message: "V2 detector evaluation skipped because authoritative market data is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: plan.detector.detectorId, reason, ...(providerDiagnostic(error) ?? {}) });
+          structuredLogger.v2({ level: "warn", event: "detector_evaluation_skipped", message: "V2 detector evaluation skipped because authoritative market data is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, symbol, timeframe, detectorId: plan.detector.detectorId, reason, providerDiagnostic: providerDiagnostic(error) });
         }
         continue;
       }
       const lastCandle = candles.at(-1)!;
+      providerCandlesBySymbolTimeframe.set(providerRequestKey(symbol, timeframe), candles);
       recordCoverageSuccess(marketDataCoverage, symbol, timeframe, activeFxSession?.sessionId ?? "unknown", lastCandle.source.provider, lastCandle.timestamp, input.now);
       if (!lastCandle.complete) {
         await operationalBlockerService.record({
@@ -998,6 +1000,39 @@ export class FinCoachV2Runtime {
           if (!compiled.strategy) continue;
           const compiledStrategy = compiled.strategy;
           const strategyEventId = firstEventId(compiled.events, "rules", compiledStrategy.strategyId);
+          const candidateTimeframe = normalizeTimeframe(candidate.timeframe);
+          const backtestCandles = candlesForBacktest({
+            mode: this.config.researchDataMode,
+            providerCandlesBySymbolTimeframe,
+            symbol: candidate.symbol,
+            timeframe: candidateTimeframe,
+            now: input.now,
+            count: 80,
+          });
+          if (!backtestCandles.length || backtestCandles.some(candle => this.config.researchDataMode === "provider" && candle.source.provider.startsWith("fincoach-deterministic"))) {
+            await operationalBlockerService.record({
+              kind: "dependency",
+              code: "provider_backtest_data_unavailable",
+              title: "🟡 Provider data degraded",
+              whatBlocked: "provider-backed experiment/backtest creation",
+              reason: "provider_data_invalid",
+              currentValue: `${candidate.symbol}:${candidate.timeframe}`,
+              limitValue: "authoritative completed provider candle window",
+              configKey: "OANDA_BASE_URL",
+              configValueState: envState(this.env, "OANDA_BASE_URL"),
+              scope: { cycleId: input.cycleId, symbol: candidate.symbol, sessionId, component: "v2-backtesting" },
+              expected: false,
+              action: "Restore completed provider candle availability before creating provider-mode backtests.",
+              effect: "Strategy candidate skipped; deterministic/demo candles were not substituted.",
+              now: input.now,
+            });
+            blockers.push(blocker("warning", "provider_backtest_data_unavailable", "backtesting", "Provider-mode backtest skipped because completed provider candles were unavailable.", candidate.symbol, "provider candle window", "Restore authoritative market data; do not substitute synthetic candles.", input.now));
+            continue;
+          }
+          const datasetStart = backtestCandles[0]!.timestamp;
+          const datasetEnd = backtestCandles.at(-1)!.timestamp;
+          const trainEnd = backtestCandles[Math.min(40, backtestCandles.length - 1)]!.timestamp;
+          const validationEnd = backtestCandles[Math.min(60, backtestCandles.length - 1)]!.timestamp;
           await guarded(input.guard, "strategy_save", () => repositories.strategies.save(compiledStrategy));
           strategyCandidatesByFamily.set(family, (strategyCandidatesByFamily.get(family) ?? 0) + 1);
           strategyCandidatesBySymbol.set(candidate.symbol, (strategyCandidatesBySymbol.get(candidate.symbol) ?? 0) + 1);
@@ -1007,7 +1042,7 @@ export class FinCoachV2Runtime {
             strategyId: compiled.strategy.strategyId,
             strategyVersion: compiled.strategy.strategyVersion,
             experimentType: "baseline_backtest",
-            datasetSpecification: { symbols: [candidate.symbol], timeframes: [candidate.timeframe], start: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[0].timestamp, end: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80).at(-1)!.timestamp },
+            datasetSpecification: { symbols: [candidate.symbol], timeframes: [candidate.timeframe], start: datasetStart, end: datasetEnd },
             parameterSpecification: {
               grid: {
                 templateId: [String(strategyInput.entryConditions.find(rule => rule.field === "templateId")?.value ?? "unknown")],
@@ -1017,8 +1052,8 @@ export class FinCoachV2Runtime {
                 regime: [regime],
               },
             },
-            holdoutPolicy: { trainEnd: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[40].timestamp, validationEnd: demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80)[60].timestamp, testStart: new Date(Date.parse(demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80).at(-1)!.timestamp) + 60_000).toISOString(), finalHoldoutLocked: true },
-            randomSeed: "deterministic-demo-seed",
+            holdoutPolicy: { trainEnd, validationEnd, testStart: new Date(Date.parse(datasetEnd) + 60_000).toISOString(), finalHoldoutLocked: true },
+            randomSeed: this.config.researchDataMode === "provider" ? "provider-oanda-practice-seed" : "deterministic-demo-seed",
             resourceBudget: { maxCandles: 80, maxRuntimeMs: this.config.cycleTimeoutMs },
             priority: 1,
             maxAttempts: this.config.retryBudget,
@@ -1029,7 +1064,6 @@ export class FinCoachV2Runtime {
           const experimentEventId = firstEventId(experiment.events, "experiments", experiment.experiment.experimentId);
           await guarded(input.guard, "experiment_save", () => repositories.experiments.save(experiment.experiment));
           experimentsCount += 1;
-          const backtestCandles = demoCandles(candidate.symbol, normalizeTimeframe(candidate.timeframe), input.now, 80);
           const observationLineageEventId = candidateCausationIds.get(candidateKey) ?? input.cycleEventId;
           const backtest = backtestingV2Engine.run({ experimentId: experiment.experiment.experimentId, strategy: compiled.strategy, candles: backtestCandles, randomSeed: experiment.experiment.randomSeed, lineageEventIds: [observationLineageEventId, hypothesisEventId, strategyEventId, experimentEventId], correlationId: input.correlationId, causationId: experimentEventId, spread: 0.0002, commissionPerTrade: 0, slippage: 0.0001 });
           const backtestEventId = firstEventId(backtest.events, "backtesting", backtest.result.backtestId);
@@ -1064,21 +1098,28 @@ export class FinCoachV2Runtime {
       const persistedRanking = rankingFromSaveResult(savedRanking) ?? rankingRecord;
       if (!saveInserted(savedRanking)) {
         structuredLogger.v2({ level: "info", event: "ranking_duplicate_suppressed", message: "Duplicate V2 ranking suppressed", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: persistedRanking.rankingId, inserted: false, conflict: conflictFromSaveResult(savedRanking) ?? "idempotent", skipReason: "ranking_save_not_inserted" });
-      } else {
-        rankedCount = persistedRanking.candidates.length;
-        forwardTestsCount = await createForwardTestsFromRanking({
-          repositories,
-          config: this.config,
-          ranking: persistedRanking,
-          rankingEventId,
-          sources: forwardTestSources,
-          cycleId: input.cycleId,
-          correlationId: input.correlationId,
-          now: input.now,
-          guard: input.guard,
-        });
       }
+      rankedCount = persistedRanking.candidates.length;
+      forwardTestsCount = await createForwardTestsFromRanking({
+        repositories,
+        config: this.config,
+        ranking: persistedRanking,
+        rankingEventId,
+        sources: forwardTestSources,
+        cycleId: input.cycleId,
+        correlationId: input.correlationId,
+        now: input.now,
+        guard: input.guard,
+      });
     }
+    forwardTestsCount += await processDurableForwardTestBacklog({
+      repositories,
+      config: this.config,
+      cycleId: input.cycleId,
+      correlationId: input.correlationId,
+      now: input.now,
+      guard: input.guard,
+    });
     signalsCount = await createSignalsFromForwardTests({
       repositories,
       config: this.config,
@@ -1626,32 +1667,91 @@ function demoCandles(symbol: string, timeframe: V2Timeframe, now: Date, count: n
   });
 }
 
+function candlesForBacktest(input: {
+  mode: V2RuntimeConfig["researchDataMode"];
+  providerCandlesBySymbolTimeframe: Map<string, NormalizedCandle[]>;
+  symbol: string;
+  timeframe: V2Timeframe;
+  now: Date;
+  count: number;
+}) {
+  if (input.mode === "provider") return input.providerCandlesBySymbolTimeframe.get(providerRequestKey(input.symbol, input.timeframe))?.slice(-input.count) ?? [];
+  return demoCandles(input.symbol, input.timeframe, input.now, input.count);
+}
+
 const COMPLETED_CANDLE_FETCH_BUFFER = 2;
 
 export async function researchCandles(config: V2RuntimeConfig, env: NodeJS.ProcessEnv, symbol: string, timeframe: V2Timeframe, now: Date, count: number): Promise<NormalizedCandle[]> {
   if (config.researchDataMode === "synthetic") return demoCandles(symbol, timeframe, now, count);
   const token = env["OANDA_API_TOKEN"]?.trim();
-  if (!token) throw new Error("OANDA_API_TOKEN is not configured");
-  const baseUrl = (env["OANDA_BASE_URL"]?.trim() || `https://api-fx${env["OANDA_ENV"] === "live" ? "trade" : "practice"}.oanda.com`).replace(/\/$/, "");
+  if (!token) throw new ProviderCandleError("provider_credentials_missing", "OANDA_API_TOKEN is not configured");
+  const environment = env["OANDA_ENV"]?.trim().toLowerCase();
+  if (environment !== "practice") throw new ProviderCandleError("provider_account_mismatch", "OANDA_ENV must be practice for provider-backed research");
+  const baseUrl = normalizeOandaPracticeBaseUrl(env["OANDA_BASE_URL"]);
   const granularity = ({ "1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30", "1h": "H1", "3h": "H3", "4h": "H4", "6h": "H6", "1d": "D", "1w": "W", "1mo": "M" } as Record<V2Timeframe, string>)[timeframe];
-  if (!granularity) throw new Error("Unsupported OANDA timeframe");
+  if (!granularity) throw new ProviderCandleError("provider_bad_request", "Unsupported OANDA timeframe");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   const requestedCount = Math.min(count + COMPLETED_CANDLE_FETCH_BUFFER, 5000);
-  const response = await fetch(`${baseUrl}/v3/instruments/${encodeURIComponent(symbol)}/candles?count=${requestedCount}&granularity=${granularity}&price=M`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: controller.signal }).finally(() => clearTimeout(timeout));
-  if (!response.ok) throw new Error(`OANDA historical candles failed with HTTP ${response.status}`);
-  const payload = await response.json() as { candles?: Array<{ time: string; complete?: boolean; mid?: { o: string; h: string; l: string; c: string }; volume?: number }> };
-  const rawCandles = payload.candles ?? [];
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/instruments/${encodeURIComponent(symbol)}/candles?count=${requestedCount}&granularity=${granularity}&price=M`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: controller.signal }).finally(() => clearTimeout(timeout));
+  } catch (error) {
+    if ((error as { name?: string }).name === "AbortError") throw new ProviderCandleError("provider_timeout", "OANDA candle request timed out", { symbol, timeframe, requestedCount, returnedCount: 0, completedCount: 0, requiredCount: count, providerGranularity: granularity });
+    throw new ProviderCandleError("provider_network_unavailable", "OANDA candle request failed before response", { symbol, timeframe, requestedCount, returnedCount: 0, completedCount: 0, requiredCount: count, providerGranularity: granularity });
+  }
+  if (!response.ok) throw httpProviderError(response.status, { symbol, timeframe, requestedCount, returnedCount: 0, completedCount: 0, requiredCount: count, providerGranularity: granularity });
+  let payload: { candles?: Array<{ time: string; complete?: boolean; mid?: { o: string; h: string; l: string; c: string }; volume?: number }> };
+  try {
+    payload = await response.json() as typeof payload;
+  } catch {
+    throw new ProviderCandleError("provider_response_invalid", "OANDA candle response was not valid JSON", { symbol, timeframe, requestedCount, returnedCount: 0, completedCount: 0, requiredCount: count, providerGranularity: granularity });
+  }
+  if (!Array.isArray(payload.candles)) throw new ProviderCandleError("provider_response_invalid", "OANDA candle response did not include candles array", { symbol, timeframe, requestedCount, returnedCount: 0, completedCount: 0, requiredCount: count, providerGranularity: granularity });
+  const rawCandles = payload.candles;
+  if (rawCandles.length === 0) throw new ProviderCandleError("provider_candles_empty", "OANDA returned no candles", { symbol, timeframe, requestedCount, returnedCount: 0, completedCount: 0, requiredCount: count, providerGranularity: granularity });
   const candles = rawCandles.map(candle => {
-    if (!candle.mid) throw new Error("OANDA candle missing mid prices");
-    return { symbol, timeframe, timestamp: new Date(candle.time).toISOString(), open: Number(candle.mid.o), high: Number(candle.mid.h), low: Number(candle.mid.l), close: Number(candle.mid.c), spread: null, volume: candle.volume ?? null, tickVolume: candle.volume ?? null, complete: candle.complete !== false, source: { provider: "oanda-practice-historical", providerSymbol: symbol, adapterVersion: "v1" }, corporateAction: null };
+    if (!candle.mid || !candle.time) throw new ProviderCandleError("provider_response_invalid", "OANDA candle missing required time or mid prices", { symbol, timeframe, requestedCount, returnedCount: rawCandles.length, completedCount: 0, requiredCount: count, providerGranularity: granularity });
+    const timestamp = Date.parse(candle.time);
+    if (!Number.isFinite(timestamp)) throw new ProviderCandleError("provider_response_invalid", "OANDA candle had invalid timestamp", { symbol, timeframe, requestedCount, returnedCount: rawCandles.length, completedCount: 0, requiredCount: count, providerGranularity: granularity });
+    return { symbol, timeframe, timestamp: new Date(timestamp).toISOString(), open: Number(candle.mid.o), high: Number(candle.mid.h), low: Number(candle.mid.l), close: Number(candle.mid.c), spread: null, volume: candle.volume ?? null, tickVolume: candle.volume ?? null, complete: candle.complete !== false, source: { provider: "oanda-practice-historical", providerSymbol: symbol, adapterVersion: "v1" }, corporateAction: null };
   });
-  if (!candles.every(candle => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite))) throw new Error("OANDA returned invalid candles");
+  if (!candles.every(candle => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite))) throw new ProviderCandleError("provider_response_invalid", "OANDA returned non-finite candle prices", { symbol, timeframe, requestedCount, returnedCount: rawCandles.length, completedCount: candles.filter(candle => candle.complete).length, requiredCount: count, providerGranularity: granularity });
   const completedCandles = candles.filter(candle => candle.complete);
   if (completedCandles.length < count) {
     throw new InsufficientCompletedCandlesError({ symbol, timeframe, requestedCount, returnedCount: rawCandles.length, completedCount: completedCandles.length, requiredCount: count, providerGranularity: granularity });
   }
   return completedCandles.slice(-count);
+}
+
+function normalizeOandaPracticeBaseUrl(value: string | undefined) {
+  const raw = (value?.trim() || "https://api-fxpractice.oanda.com/v3").replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new ProviderCandleError("provider_bad_request", "OANDA_BASE_URL is not a valid URL");
+  }
+  if (parsed.hostname.toLowerCase() !== "api-fxpractice.oanda.com") throw new ProviderCandleError("provider_account_mismatch", "OANDA_BASE_URL is not the approved practice endpoint");
+  if (/api-fxtrade\.oanda\.com/i.test(raw)) throw new ProviderCandleError("provider_account_mismatch", "OANDA live endpoint rejected");
+  return raw.endsWith("/v3") ? raw : `${raw}/v3`;
+}
+
+function httpProviderError(status: number, diagnostic: ProviderCandleDiagnostic) {
+  if (status === 400) return new ProviderCandleError("provider_bad_request", "OANDA candle request failed with HTTP 400", diagnostic);
+  if (status === 401) return new ProviderCandleError("provider_authentication_failed", "OANDA candle request failed with HTTP 401", diagnostic);
+  if (status === 403) return new ProviderCandleError("provider_account_mismatch", "OANDA candle request failed with HTTP 403", diagnostic);
+  if (status === 404) return new ProviderCandleError("provider_instrument_unsupported", "OANDA candle request failed with HTTP 404", diagnostic);
+  if (status === 429) return new ProviderCandleError("provider_rate_limited", "OANDA candle request failed with HTTP 429", diagnostic);
+  if (status >= 500) return new ProviderCandleError("provider_network_unavailable", `OANDA candle request failed with HTTP ${status}`, diagnostic);
+  return new ProviderCandleError("provider_response_invalid", `OANDA candle request failed with HTTP ${status}`, diagnostic);
+}
+
+class ProviderCandleError extends Error {
+  constructor(readonly code: string, message: string, readonly diagnostic?: ProviderCandleDiagnostic) {
+    super(message);
+    this.name = "ProviderCandleError";
+  }
 }
 
 class InsufficientCompletedCandlesError extends Error {
@@ -1674,8 +1774,9 @@ type ProviderCandleDiagnostic = {
   providerGranularity: string;
 };
 
-function providerDiagnostic(error: unknown): ProviderCandleDiagnostic | null {
-  return error instanceof InsufficientCompletedCandlesError ? error.diagnostic : null;
+function providerDiagnostic(error: unknown): ProviderCandleDiagnostic | Record<string, unknown> | null {
+  if (error instanceof ProviderCandleError) return { code: error.code, ...(error.diagnostic ?? {}) };
+  return error instanceof InsufficientCompletedCandlesError ? { code: "provider_completed_candles_unavailable", ...error.diagnostic } : null;
 }
 
 export function configuredObservationDetectors() {
@@ -1763,17 +1864,20 @@ function providerRequestKey(symbol: string, timeframe: V2Timeframe) {
 
 export function sanitizedProviderFailureReason(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof ProviderCandleError) return error.code;
   if (/OANDA_API_TOKEN.*not configured|credential/i.test(message)) return "provider_credentials_missing";
-  if (/HTTP 401\b/.test(message)) return "provider_http_401";
-  if (/HTTP 403\b/.test(message)) return "provider_http_403";
-  if (/HTTP 429\b/.test(message)) return "provider_http_429";
-  if (/HTTP 5\d\d\b/.test(message)) return "provider_http_5xx";
+  if (/HTTP 400\b/.test(message)) return "provider_bad_request";
+  if (/HTTP 401\b/.test(message)) return "provider_authentication_failed";
+  if (/HTTP 403\b/.test(message)) return "provider_account_mismatch";
+  if (/HTTP 404\b/.test(message)) return "provider_instrument_unsupported";
+  if (/HTTP 429\b/.test(message)) return "provider_rate_limited";
+  if (/HTTP 5\d\d\b/.test(message)) return "provider_network_unavailable";
   if (/abort|timeout/i.test(message) || (error instanceof Error && error.name === "AbortError")) return "provider_timeout";
-  if (/insufficient.*completed|completed.*insufficient/i.test(message)) return "insufficient_completed_candles";
-  if (/insufficient/i.test(message)) return "insufficient_completed_candles";
-  if (/invalid|missing mid|non-finite/i.test(message)) return "invalid_candles";
-  if (/unsupported.*timeframe|granularity/i.test(message)) return "unsupported_timeframe";
-  if (/fetch|network|econn|enotfound|eai_again|socket/i.test(message)) return "provider_network";
+  if (/insufficient.*completed|completed.*insufficient/i.test(message)) return "provider_completed_candles_unavailable";
+  if (/insufficient/i.test(message)) return "provider_completed_candles_unavailable";
+  if (/invalid|missing mid|non-finite/i.test(message)) return "provider_response_invalid";
+  if (/unsupported.*timeframe|granularity/i.test(message)) return "provider_bad_request";
+  if (/fetch|network|econn|enotfound|eai_again|socket/i.test(message)) return "provider_network_unavailable";
   return "market_data_unavailable";
 }
 
@@ -1837,12 +1941,52 @@ type ForwardTestSource = { strategy: StrategyDefinition; backtest: BacktestResul
 
 type ForwardTestRepositoryLike = {
   save(record: ForwardTestRecord): Promise<unknown> | unknown;
+  listPage?(input?: { limit?: number; offset?: number; strategyId?: string; status?: string }): Promise<{ items: Record<string, unknown>[]; total: number }> | { items: Record<string, unknown>[]; total: number };
 };
 type ForwardTestSourceRepositoryLike = {
   strategies?: { get(id: string): Promise<StrategyDefinition | null> | StrategyDefinition | null };
   courtroom?: { get(id: string): Promise<({ backtestIds?: string[]; lineageEventIds?: string[] } & Record<string, unknown>) | null> | (({ backtestIds?: string[]; lineageEventIds?: string[] } & Record<string, unknown>) | null) };
   backtests?: { get(id: string): Promise<BacktestResult | null> | BacktestResult | null };
+  ranking?: { listPage(input?: { limit?: number; offset?: number }): Promise<{ items: Record<string, unknown>[]; total: number }> | { items: Record<string, unknown>[]; total: number } };
 };
+
+export async function processDurableForwardTestBacklog(input: {
+  repositories: { forwardTesting?: ForwardTestRepositoryLike } & ForwardTestSourceRepositoryLike;
+  config: Pick<V2RuntimeConfig, "forwardTestingEnabled" | "maxActiveForwardTests">;
+  cycleId: string;
+  correlationId: string;
+  now: Date;
+  guard?: CycleLeaseGuard;
+}) {
+  if (!input.config.forwardTestingEnabled) return 0;
+  const rankingRepository = input.repositories.ranking;
+  if (!rankingRepository?.listPage) return 0;
+  const page = await rankingRepository.listPage({ limit: Math.max(20, input.config.maxActiveForwardTests * 5), offset: 0 });
+  const rankings = page.items
+    .map(item => item as StrategyRankingDecision & { schemaVersion?: "fincoach.v2.ranking.1"; lineageEventIds?: string[] })
+    .filter(item => Array.isArray(item.candidates) && item.candidates.length > 0)
+    .sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt));
+  let created = 0;
+  for (const ranking of rankings) {
+    if (await activeForwardTestCount(input.repositories.forwardTesting) >= input.config.maxActiveForwardTests) break;
+    const rankingEventId = validUuid(ranking.causationId) ? ranking.causationId : validUuid(ranking.lineageEventIds?.at(-1)) ? ranking.lineageEventIds!.at(-1)! : input.correlationId;
+    created += await createForwardTestsFromRanking({
+      repositories: input.repositories,
+      config: input.config,
+      ranking: { ...ranking, schemaVersion: "fincoach.v2.ranking.1", lineageEventIds: ranking.lineageEventIds ?? [] },
+      rankingEventId,
+      sources: new Map(),
+      cycleId: input.cycleId,
+      correlationId: input.correlationId,
+      now: input.now,
+      guard: input.guard,
+    });
+  }
+  if (rankings.length) {
+    structuredLogger.v2({ level: "info", event: "forward_test_backlog_reconciled", message: "V2 durable forward-test backlog reconciled", cycleId: input.cycleId, correlationId: input.correlationId, rankedDecisionsConsidered: rankings.length, forwardTestsCreated: created, activeCapacity: await activeForwardTestCount(input.repositories.forwardTesting), maxCapacity: input.config.maxActiveForwardTests });
+  }
+  return created;
+}
 
 export async function createForwardTestsFromRanking(input: {
   repositories: { forwardTesting?: ForwardTestRepositoryLike } & ForwardTestSourceRepositoryLike;
@@ -1875,8 +2019,7 @@ export async function createForwardTestsFromRanking(input: {
     structuredLogger.v2({ level: "info", event: "forward_test_creation_skipped", message: "V2 forward-test creation skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, reason: "forward_testing_disabled" });
     return 0;
   }
-  const limit = input.config.maxActiveForwardTests;
-  if (limit <= 0) {
+  if (input.config.maxActiveForwardTests <= 0) {
     await operationalBlockerService.record({
       kind: "limit",
       code: "max_active_forward_tests_zero",
@@ -1915,6 +2058,8 @@ export async function createForwardTestsFromRanking(input: {
     structuredLogger.v2({ level: "error", event: "forward_test_persistence_unavailable", message: "V2 forward-test repository is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId });
     return 0;
   }
+  const activeCount = await activeForwardTestCount(repository);
+  const limit = Math.max(0, input.config.maxActiveForwardTests - activeCount);
 
   const service = new ForwardTestingV2Service();
   let inserted = 0;
@@ -1926,8 +2071,8 @@ export async function createForwardTestsFromRanking(input: {
         title: "⚠️ Forward testing blocked: maximum active forward tests reached",
         whatBlocked: "additional forward-test candidates",
         reason: "forward_test_budget_exhausted",
-        currentValue: inserted,
-        limitValue: limit,
+        currentValue: activeCount + inserted,
+        limitValue: input.config.maxActiveForwardTests,
         configKey: "FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS",
         configValueState: envState(process.env, "FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS"),
         scope: { cycleId: input.cycleId, component: "forward-testing" },
@@ -1936,11 +2081,25 @@ export async function createForwardTestsFromRanking(input: {
         effect: "Remaining ranked candidates are deferred.",
         now: input.now,
       });
-      structuredLogger.v2({ level: "info", event: "forward_test_budget_exhausted", message: "V2 forward-test insertion budget exhausted", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, limit });
+      structuredLogger.v2({ level: "info", event: "forward_test_budget_exhausted", message: "V2 forward-test active capacity exhausted", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, activeCount, inserted, maxActiveForwardTests: input.config.maxActiveForwardTests });
       break;
     }
     const source = input.sources.get(rankingCandidateKey(candidate)) ?? await durableForwardTestSource(input.repositories, candidate);
     if (!source) {
+      await operationalBlockerService.record({
+        kind: "dependency",
+        code: "forward_test_candidate_rejected",
+        title: "⚠️ Forward test rejected: missing durable source",
+        whatBlocked: "forward-test candidate",
+        reason: "missing_lineage",
+        currentValue: { strategyId: candidate.strategyId, courtCaseId: candidate.courtCaseId },
+        limitValue: "strategy definition, court verdict, and backtest lineage",
+        scope: { cycleId: input.cycleId, strategyId: candidate.strategyId, component: "forward-testing" },
+        expected: true,
+        action: "Repair candidate lineage or let a new complete ranking supersede this candidate.",
+        effect: "Candidate was not started as a forward test.",
+        now: input.now,
+      });
       structuredLogger.v2({ level: "warn", event: "forward_test_candidate_skipped", message: "V2 forward-test candidate skipped", cycleId: input.cycleId, correlationId: input.correlationId, rankingId: input.ranking.rankingId, strategyId: candidate.strategyId, strategyVersion: candidate.strategyVersion, courtCaseId: candidate.courtCaseId, reason: "current_cycle_source_missing" });
       continue;
     }
@@ -1997,6 +2156,20 @@ export async function createForwardTestsFromRanking(input: {
     }
   }
   return inserted;
+}
+
+async function activeForwardTestCount(repository: ForwardTestRepositoryLike | undefined) {
+  if (!repository?.listPage) return 0;
+  try {
+    const page = await repository.listPage({ limit: 1, offset: 0, status: "monitoring" });
+    return Number(page.total ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+function validUuid(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function rankingCandidateKey(candidate: Pick<RankingCandidateInput, "strategyId" | "strategyVersion" | "courtCaseId">) {

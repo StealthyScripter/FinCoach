@@ -77,6 +77,18 @@ await provider.getQuote("SPY", "etf");
 assert.equal(calls.filter((item) => item.includes("GLOBAL_QUOTE")).length, 1, "quote cache should avoid duplicate provider calls");
 assert.ok(calls.every((item) => !item.includes("ALPHA_VANTAGE_API_KEY")));
 
+let concurrentCalls = 0;
+const concurrentProvider = new AlphaVantagePortfolioMarketDataProvider({ ...config, providerCacheTtlMs: 1 }, (async () => {
+  concurrentCalls += 1;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  return response({ "Global Quote": { "01. symbol": "SPY", "05. price": "545.39", "06. volume": "50000000", "07. latest trading day": "2026-08-14" } });
+}) as never);
+await Promise.all([
+  concurrentProvider.getQuote("SPY", "etf", new Date("2026-08-15T12:00:00.000Z")),
+  concurrentProvider.getQuote("SPY", "etf", new Date("2026-08-15T12:00:00.000Z")),
+]);
+assert.equal(concurrentCalls, 1, "concurrent identical quote requests should share one provider call");
+
 await assert.rejects(() => provider.getQuote("SPY", "option"), /getOptionChain/);
 assert.throws(() => new AlphaVantagePortfolioMarketDataProvider({ ...config, alphaVantageApiKey: null }), /ALPHA_VANTAGE_API_KEY/);
 const router = new PortfolioMarketDataRouter([new FixturePortfolioMarketDataProvider(), provider], true);

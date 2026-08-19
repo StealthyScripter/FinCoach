@@ -210,13 +210,18 @@ export class PgV2OperationsRepository {
   }
 
   async forwardTestEligibility() {
-    const [rankingRows, strategyRows] = await Promise.all([
+    const [rankingRows, strategyRows, forwardRows] = await Promise.all([
       this.db.query("SELECT payload FROM v2_ranking_decisions ORDER BY created_at DESC, record_id DESC LIMIT 100"),
       this.db.query("SELECT record_id, payload FROM v2_strategy_definitions"),
+      this.db.query("SELECT payload FROM v2_forward_tests"),
     ]);
     const strategies = new Map<string, Record<string, unknown>>();
     for (const row of strategyRows.rows) strategies.set(String(row.record_id), requireObject(row.payload, "strategy payload"));
-    return summarizeForwardTestEligibility(rankingRows.rows.map(row => requireObject(row.payload, "ranking payload")), strategies);
+    return summarizeForwardTestEligibility(
+      rankingRows.rows.map(row => requireObject(row.payload, "ranking payload")),
+      strategies,
+      forwardRows.rows.map(row => requireObject(row.payload, "forward test payload")),
+    );
   }
 
   private async strategyInventory(pipeline: Record<string, unknown>) {
@@ -522,12 +527,24 @@ function summarizeDetectorReasons(rows: QueryResultRow[]) {
 
 function sanitizeStoredReason(value: unknown) {
   const reason = String(value ?? "unknown").trim().toLowerCase();
-  if (/^provider_http_(401|403|429|5xx)$/.test(reason)) return reason;
+  if (reason === "provider_http_401") return "provider_authentication_failed";
+  if (reason === "provider_http_403") return "provider_account_mismatch";
+  if (reason === "provider_http_404") return "provider_instrument_unsupported";
+  if (reason === "provider_http_429") return "provider_rate_limited";
+  if (reason === "provider_http_5xx") return "provider_network_unavailable";
   if ([
     "provider_timeout",
     "provider_network",
-    "insufficient_completed_candles",
-    "invalid_candles",
+    "provider_authentication_failed",
+    "provider_account_mismatch",
+    "provider_rate_limited",
+    "provider_timeout",
+    "provider_bad_request",
+    "provider_instrument_unsupported",
+    "provider_candles_empty",
+    "provider_response_invalid",
+    "provider_network_unavailable",
+    "provider_completed_candles_unavailable",
     "incomplete_latest_candle",
     "session_gated",
     "unsupported_timeframe",
@@ -541,23 +558,28 @@ function sanitizeStoredReason(value: unknown) {
     "failed",
     "skipped",
   ].includes(reason)) return reason;
-  if (/401/.test(reason)) return "provider_http_401";
-  if (/403/.test(reason)) return "provider_http_403";
-  if (/429/.test(reason)) return "provider_http_429";
-  if (/\b5\d\d\b/.test(reason)) return "provider_http_5xx";
+  if (/401/.test(reason)) return "provider_authentication_failed";
+  if (/403/.test(reason)) return "provider_account_mismatch";
+  if (/404/.test(reason)) return "provider_instrument_unsupported";
+  if (/429/.test(reason)) return "provider_rate_limited";
+  if (/\b5\d\d\b/.test(reason)) return "provider_network_unavailable";
   if (/timeout|abort/.test(reason)) return "provider_timeout";
-  if (/network|fetch|econn|enotfound|eai_again|socket/.test(reason)) return "provider_network";
-  if (/insufficient.*completed|completed.*insufficient/.test(reason)) return "insufficient_completed_candles";
-  if (/insufficient/.test(reason)) return "insufficient_completed_candles";
-  if (/invalid|missing mid|non-finite/.test(reason)) return "invalid_candles";
+  if (/network|fetch|econn|enotfound|eai_again|socket/.test(reason)) return "provider_network_unavailable";
+  if (/insufficient.*completed|completed.*insufficient/.test(reason)) return "provider_completed_candles_unavailable";
+  if (/insufficient/.test(reason)) return "provider_completed_candles_unavailable";
+  if (/empty/.test(reason)) return "provider_candles_empty";
+  if (/invalid|missing mid|non-finite/.test(reason)) return "provider_response_invalid";
   if (/incomplete/.test(reason)) return "incomplete_latest_candle";
-  if (/unsupported.*timeframe|granularity/.test(reason)) return "unsupported_timeframe";
+  if (/unsupported.*timeframe|granularity|bad_request/.test(reason)) return "provider_bad_request";
   if (/duplicate/.test(reason)) return "duplicate_suppressed";
   return "market_data_unavailable";
 }
 
-function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], strategies: Map<string, Record<string, unknown>>) {
+function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], strategies: Map<string, Record<string, unknown>>, forwardTests: Record<string, unknown>[] = []) {
   const candidates = rankings.flatMap(ranking => Array.isArray(ranking.candidates) ? ranking.candidates as Record<string, unknown>[] : []);
+  const active = forwardTests.filter(test => String(test.status ?? "") === "monitoring");
+  const completed = forwardTests.filter(test => String(test.status ?? "") === "completed");
+  const forwardKeys = new Map(forwardTests.map(test => [`${test.strategyId}:${test.courtCaseId}`, test]));
   const criteria = {
     durableStrategySourceAvailable: { passed: 0, failed: 0 },
     verdictEligible: { passed: 0, failed: 0 },
@@ -570,8 +592,14 @@ function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], st
   };
   const rejectionReasons: Record<string, number> = {};
   let durableEligible = 0;
+  let alreadyActive = 0;
+  let alreadyCompleted = 0;
+  let rejectedCandidates = 0;
   for (const candidate of candidates) {
     const reasons: string[] = [];
+    const existingForward = forwardKeys.get(`${candidate.strategyId}:${candidate.courtCaseId}`);
+    if (existingForward && String(existingForward.status ?? "") === "monitoring") alreadyActive += 1;
+    if (existingForward && String(existingForward.status ?? "") === "completed") alreadyCompleted += 1;
     const strategy = strategies.get(String(candidate.strategyId ?? ""));
     countCriterion(criteria.durableStrategySourceAvailable, Boolean(strategy), reasons, "durable_strategy_source_missing");
     const verdict = String(candidate.courtVerdict ?? "");
@@ -582,12 +610,27 @@ function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], st
     countCriterion(criteria.expectedRPositive, Number.isFinite(expectedR) && expectedR > 0, reasons, "nonpositive_expected_r");
     const risk = Number((strategy?.positionSizing as Record<string, unknown> | undefined)?.riskFraction ?? Number.NaN);
     countCriterion(criteria.riskPositive, Number.isFinite(risk) && risk > 0, reasons, "invalid_risk");
-    const durablePass = reasons.length === 0;
+    const durablePass = reasons.length === 0 && !existingForward;
     if (durablePass) durableEligible += 1;
+    if (existingForward && String(existingForward.status ?? "") === "monitoring") reasons.push("already_forward_testing");
+    if (existingForward && String(existingForward.status ?? "") === "completed") reasons.push("already_completed_forward_test");
+    if (reasons.length > 0) rejectedCandidates += 1;
     for (const reason of [...new Set(reasons)]) rejectionReasons[reason] = (rejectionReasons[reason] ?? 0) + 1;
   }
   return {
     schemaVersion: "fincoach.v2.forward-test-eligibility-projection.1",
+    rankedTotal: candidates.length,
+    considered: candidates.length,
+    eligible: durableEligible,
+    created: forwardTests.length,
+    alreadyActive,
+    alreadyCompleted,
+    rejectedTotal: rejectedCandidates,
+    rejectedByReason: rejectionReasons,
+    notConsidered: 0,
+    notConsideredByReason: {},
+    activeCapacity: active.length,
+    maxCapacity: Number(process.env.FINCOACH_V2_MAX_ACTIVE_FORWARD_TESTS ?? 3),
     rankedCandidatesTotal: candidates.length,
     sourceSemantics: {
       rankingDecisions: rankings.length,

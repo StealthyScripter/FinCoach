@@ -19,7 +19,7 @@ import { EventLogService } from "./eventLogService";
 import { ExecutionAuditLog, ExecutionRiskService } from "./execution/riskControls";
 import { SandboxExecutionMetrics } from "./execution/sandboxMetrics";
 import { MetaTraderHttpDemoBridgeAdapter, type MetaTraderBridgeTransport } from "./execution/metaTraderDemoBridge";
-import { OandaPracticeAdapter, type BrokerHttpClient } from "./execution/oandaPracticeAdapter";
+import { createOandaPracticeAdapterFromEnv, OandaPracticeAdapter, type BrokerHttpClient } from "./execution/oandaPracticeAdapter";
 import { SandboxOrderFlowService } from "./execution/sandboxOrderFlow";
 import { ExecutionRiskPrecheckService, type RiskPrecheckContext } from "./execution/riskPrecheck";
 import { getSymbolMapping, listSymbolMappings } from "./execution/symbolMapping";
@@ -87,6 +87,14 @@ const oandaHttp: BrokerHttpClient = async (url, init) => {
 assert.throws(
   () => new OandaPracticeAdapter({ token: "token", accountId: "account", environment: "live" }, oandaHttp),
   /OANDA_ENV must be exactly practice/,
+);
+assert.throws(
+  () => new OandaPracticeAdapter({ token: "token", accountId: "account", environment: "practice", baseUrl: "https://api-fxtrade.oanda.com/v3" }, oandaHttp),
+  (error: unknown) => error instanceof SandboxBrokerError && error.code === "demo_environment_required",
+);
+assert.throws(
+  () => createOandaPracticeAdapterFromEnv({ OANDA_API_TOKEN: "token", OANDA_ACCOUNT_ID: "account", OANDA_ENV: "practice", OANDA_BASE_URL: "https://api-fxtrade.oanda.com/v3" } as NodeJS.ProcessEnv, oandaHttp),
+  (error: unknown) => error instanceof SandboxBrokerError && error.code === "demo_environment_required",
 );
 const oanda = new OandaPracticeAdapter({
   token: "super-secret-token",

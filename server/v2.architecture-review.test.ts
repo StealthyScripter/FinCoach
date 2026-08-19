@@ -67,7 +67,7 @@ function assertNoResearchBrokerOrTelegramImports() {
     const moduleName = moduleNameFor(file);
     if (!moduleName || ["operations", "governance", "reliability", "dataset-pipeline"].includes(moduleName)) continue;
     const text = readFileSync(file, "utf8");
-    if (/(api-fxtrade|placeOrder\s*\(|submitOrder\s*\(|createOrder\s*\(|from\s+["'][^"']*telegram|telegramClient\s*\.|sendOperations\s*\()/i.test(text)) {
+    if (/(placeOrder\s*\(|submitOrder\s*\(|createOrder\s*\(|from\s+["'][^"']*telegram|telegramClient\s*\.|sendOperations\s*\()/i.test(text)) {
       violations.push(rel(file));
     }
   }

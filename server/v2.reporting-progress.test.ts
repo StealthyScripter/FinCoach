@@ -121,6 +121,7 @@ async function testDurableProgressCountsAndReadiness() {
         }],
         rowCount: 1,
       };
+      if (sql.includes("SELECT payload FROM v2_forward_tests")) return { rows: [], rowCount: 0 };
       if (sql.includes("UNION ALL")) return { rows: [], rowCount: 0 };
       if (sql.includes("v2_orchestration_cycles")) return { rows: [], rowCount: 0 };
       throw new Error(`unexpected query: ${sql}`);
@@ -150,7 +151,7 @@ async function testDurableProgressCountsAndReadiness() {
     duplicatesSuppressedCurrentHour: 0,
     failuresCurrentHour: 0,
     currentHourByStatus: { attempted: 1, completed: 1, skipped: 4 },
-    currentHourByReason: { attempted: 1, completed: 1, provider_http_429: 1, provider_http_401: 1, provider_network: 1, insufficient_completed_candles: 1 },
+    currentHourByReason: { attempted: 1, completed: 1, provider_rate_limited: 1, provider_authentication_failed: 1, provider_network_unavailable: 1, provider_completed_candles_unavailable: 1 },
   });
   assert.deepEqual((progress.coverage as Record<string, unknown>).detectorCoverage, [{
     symbol: "EUR_USD",
@@ -189,7 +190,7 @@ async function testDurableProgressCountsAndReadiness() {
     paperExecutionState: "disabled_or_gated",
     demoExecutionState: "demo_only_gated",
   });
-  assert.equal(sqlSeen.length, 10);
+  assert.equal(sqlSeen.length, 11);
 }
 
 async function testProgressProjectionFailureIsSanitized() {

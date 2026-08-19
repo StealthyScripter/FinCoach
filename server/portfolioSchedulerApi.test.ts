@@ -40,6 +40,7 @@ await scheduler.stop("test");
 await scheduler.runOnce("manual");
 assert.ok(runs >= 1);
 assert.equal(scheduler.status().lastError, null);
+assert.equal(scheduler.status().providerState, "healthy");
 
 const disabled = new PortfolioScheduler(service, { ...config, enabled: false }, 60_000);
 const disabledStart = disabled.start();
@@ -57,3 +58,19 @@ const failing = new PortfolioScheduler({
 const failed = await failing.runOnce("manual");
 assert.equal(failed.ok, false);
 assert.equal(failing.status().lastError, "provider down");
+assert.equal(failing.status().providerState, "provider_unavailable");
+
+const rateLimited = new PortfolioScheduler({
+  async summaries() {
+    const error = new Error("Alpha Vantage request frequency/quota exceeded") as Error & { code: string };
+    error.code = "rate_limited";
+    throw error;
+  },
+  async health() {
+    return {} as never;
+  },
+}, config, 60_000);
+const throttled = await rateLimited.runOnce("manual");
+assert.equal(throttled.ok, false);
+assert.equal(throttled.providerState, "waiting_for_quota");
+assert.equal(rateLimited.status().providerState, "waiting_for_quota");

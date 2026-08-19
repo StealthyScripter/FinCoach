@@ -88,6 +88,7 @@ export class AlphaVantagePortfolioMarketDataProvider implements PortfolioMarketD
   id = "alpha-vantage";
   private calls = 0;
   private readonly cache = new Map<string, { expiresAt: number; value: unknown }>();
+  private readonly inFlight = new Map<string, Promise<Record<string, unknown>>>();
 
   constructor(private readonly config: Pick<PortfolioConfig, "alphaVantageApiKey" | "providerCallBudget" | "providerTimeoutMs" | "providerCacheTtlMs" | "quoteFreshnessMaxMinutes">, private readonly fetchImpl: typeof fetch = fetch) {
     if (!config.alphaVantageApiKey?.trim()) throw new Error("ALPHA_VANTAGE_API_KEY is required for Alpha Vantage Portfolio market data.");
@@ -176,11 +177,13 @@ export class AlphaVantagePortfolioMarketDataProvider implements PortfolioMarketD
   private async query(functionName: string, params: Record<string, string>, cacheKey: string): Promise<Record<string, unknown>> {
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.value as Record<string, unknown>;
+    const existing = this.inFlight.get(cacheKey);
+    if (existing) return existing;
     if (this.calls >= this.config.providerCallBudget) throw providerError("provider_budget_exhausted", "Portfolio Alpha Vantage provider call budget exhausted.");
     this.calls += 1;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.providerTimeoutMs);
-    try {
+    const request = (async () => {
       const url = new URL("https://www.alphavantage.co/query");
       url.searchParams.set("function", functionName);
       url.searchParams.set("apikey", this.config.alphaVantageApiKey!);
@@ -192,11 +195,16 @@ export class AlphaVantagePortfolioMarketDataProvider implements PortfolioMarketD
       if (data.Note || data.Information) throw providerError("rate_limited", String(data.Note ?? data.Information));
       this.cache.set(cacheKey, { value: data, expiresAt: Date.now() + this.config.providerCacheTtlMs });
       return data;
+    })();
+    this.inFlight.set(cacheKey, request);
+    try {
+      return await request;
     } catch (error) {
       if ((error as { name?: string }).name === "AbortError") throw providerError("timeout", "Alpha Vantage request timed out.");
       throw error;
     } finally {
       clearTimeout(timeout);
+      this.inFlight.delete(cacheKey);
     }
   }
 }

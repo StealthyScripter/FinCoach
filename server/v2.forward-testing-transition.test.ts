@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { bootstrapTestDatabase } from "./testDatabase";
-import { createForwardTestsFromRanking } from "./v2/runtime/composition";
+import { createForwardTestsFromRanking, processDurableForwardTestBacklog } from "./v2/runtime/composition";
 import { InMemoryForwardTestingRepository } from "./v2/forward-testing/repository";
 import { PgForwardTestingRepository } from "./v2/forward-testing/pgRepository";
 import type { BacktestResult } from "./v2/backtesting";
@@ -23,6 +23,7 @@ await zeroForwardTestLimitBlocksCreation();
 await duplicateRuntimeCycleDoesNotCreateAnotherForwardTest();
 await duplicatePersistenceResultSkipsCreation();
 await durableLineageCreatesForwardTestAfterRestart();
+await persistedRankingBacklogCreatesForwardTestAfterRestart();
 await multipleRankedCandidatesCreateIndependentForwardTests();
 await budgetStopsAfterInsertedLimit();
 await persistenceFailureDoesNotAbortRemainingCandidates();
@@ -111,6 +112,30 @@ async function durableLineageCreatesForwardTestAfterRestart() {
   });
   assert.equal(count, 1);
   assert.equal(repository.list()[0].strategyId, candidate.strategyId);
+}
+
+async function persistedRankingBacklogCreatesForwardTestAfterRestart() {
+  const candidate = fixtureCandidate("backlog-restart");
+  const ranking = fixtureRanking([candidate]);
+  const repository = new InMemoryForwardTestingRepository();
+  const strategy = fixtureStrategy(candidate);
+  const backtest = fixtureBacktest(candidate);
+  const count = await processDurableForwardTestBacklog({
+    repositories: {
+      forwardTesting: repository,
+      ranking: { listPage: async () => ({ items: [{ ...ranking, schemaVersion: "fincoach.v2.ranking.1", lineageEventIds: candidate.lineageEventIds }], total: 1 }) },
+      strategies: { get: async (id: string) => id === candidate.strategyId ? strategy : null },
+      courtroom: { get: async (id: string) => id === candidate.courtCaseId ? { backtestIds: [backtest.backtestId], lineageEventIds: candidate.lineageEventIds } : null },
+      backtests: { get: async (id: string) => id === backtest.backtestId ? backtest : null },
+    },
+    config: { forwardTestingEnabled: true, maxActiveForwardTests: 20 },
+    cycleId: "cycle-backlog",
+    correlationId,
+    now: new Date("2026-07-31T15:00:00.000Z"),
+  });
+  assert.equal(count, 1);
+  assert.equal(repository.list().length, 1);
+  assert.equal(repository.list()[0].rankingId, ranking.rankingId);
 }
 
 async function multipleRankedCandidatesCreateIndependentForwardTests() {

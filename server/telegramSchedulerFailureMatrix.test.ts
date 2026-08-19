@@ -222,14 +222,14 @@ await withEnv(scheduleEnv, async () => {
       let waiting = 0;
       repo.saveSummaryBarrier = async () => {
         waiting += 1;
-        if (waiting === concurrency) release();
+        if (waiting === 1) release();
         await barrier;
       };
       const summaries = await Promise.all(Array.from({ length: concurrency }, () => reporting.dailySummaryResult(now)));
       repo.saveSummaryBarrier = null;
       const summaryIds = new Set(summaries.map((item) => item.summary.id));
       assert.equal(summaryIds.size, 1, `iteration ${iteration}: all concurrent daily summary callers must receive the same row id`);
-      assert.equal(summaries.filter((item) => item.status === "created").length, 1, `iteration ${iteration}: only one concurrent daily summary caller should create`);
+      assert.ok(summaries.every((item) => item.status === "created"), `iteration ${iteration}: same-period callers should share the in-flight created result`);
       const delivered = await runDaily(repo, fakeNotifications({ attempts }), new Date(now.getTime() + 15 * 60_000));
       const duplicate = await runDaily(repo, fakeNotifications({ attempts }), new Date(now.getTime() + 30 * 60_000));
       assert.equal(delivered.status, "completed", `iteration ${iteration}: pending summary should deliver`);

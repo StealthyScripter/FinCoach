@@ -40,6 +40,8 @@ export type TelegramSummaryResult = {
   status: "created" | "existing";
 };
 
+const summaryBuildsInFlight = new Map<string, Promise<TelegramSummaryResult>>();
+
 export class TelegramReportingService {
   constructor(private readonly repository: TelegramRepository = telegramRepository) {}
 
@@ -114,6 +116,10 @@ export class TelegramReportingService {
 
   async dailySummaryResult(now = new Date()): Promise<TelegramSummaryResult> {
     const summaryDate = accountingDateKey(now);
+    return summaryResultOnce(`daily:${summaryDate}`, () => this.buildDailySummaryResult(now, summaryDate));
+  }
+
+  private async buildDailySummaryResult(now: Date, summaryDate: string): Promise<TelegramSummaryResult> {
     const createdAt = now.toISOString();
     const demo = await demoRunService.status().catch(() => null);
     const telemetry = await demoRunService.telemetry().catch(() => null);
@@ -165,6 +171,10 @@ export class TelegramReportingService {
 
   async weeklySummaryResult(now = new Date()): Promise<TelegramSummaryResult> {
     const summaryDate = weekKey(now);
+    return summaryResultOnce(`weekly:${summaryDate}`, () => this.buildWeeklySummaryResult(now, summaryDate));
+  }
+
+  private async buildWeeklySummaryResult(now: Date, summaryDate: string): Promise<TelegramSummaryResult> {
     const createdAt = now.toISOString();
     const pipeline = strategyResearchSchedulerService.snapshot();
     const metrics = telegramMetrics.snapshot();
@@ -245,6 +255,16 @@ function weekKey(date: Date) {
   const first = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
   const day = Math.floor((date.getTime() - first.getTime()) / 86_400_000);
   return `${date.getUTCFullYear()}-W${String(Math.ceil((day + first.getUTCDay() + 1) / 7)).padStart(2, "0")}`;
+}
+
+function summaryResultOnce(key: string, create: () => Promise<TelegramSummaryResult>) {
+  const existing = summaryBuildsInFlight.get(key);
+  if (existing) return existing;
+  const promise = create().finally(() => {
+    summaryBuildsInFlight.delete(key);
+  });
+  summaryBuildsInFlight.set(key, promise);
+  return promise;
 }
 
 export const telegramReportingService = new TelegramReportingService();

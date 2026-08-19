@@ -26,14 +26,16 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 }
 
 {
-  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 401")), "provider_http_401");
-  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 403")), "provider_http_403");
-  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 429")), "provider_http_429");
-  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 502")), "provider_http_5xx");
+  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 400")), "provider_bad_request");
+  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 401")), "provider_authentication_failed");
+  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 403")), "provider_account_mismatch");
+  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 404")), "provider_instrument_unsupported");
+  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 429")), "provider_rate_limited");
+  assert.equal(sanitizedProviderFailureReason(new Error("OANDA historical candles failed with HTTP 502")), "provider_network_unavailable");
   assert.equal(sanitizedProviderFailureReason(new Error("This operation was aborted")), "provider_timeout");
-  assert.equal(sanitizedProviderFailureReason(new Error("fetch failed ECONNRESET")), "provider_network");
-  assert.equal(sanitizedProviderFailureReason(new Error("OANDA returned insufficient completed candles")), "insufficient_completed_candles");
-  assert.equal(sanitizedProviderFailureReason(new Error("OANDA candle missing mid prices")), "invalid_candles");
+  assert.equal(sanitizedProviderFailureReason(new Error("fetch failed ECONNRESET")), "provider_network_unavailable");
+  assert.equal(sanitizedProviderFailureReason(new Error("OANDA returned insufficient completed candles")), "provider_completed_candles_unavailable");
+  assert.equal(sanitizedProviderFailureReason(new Error("OANDA candle missing mid prices")), "provider_response_invalid");
 }
 
 {
@@ -99,9 +101,11 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
     } as Response;
   }) as typeof fetch;
   try {
-    const candles = await researchCandles(loadV2RuntimeConfig(providerRuntimeEnv()).config, providerRuntimeEnv(), "EUR_USD", "1m", new Date("2026-07-31T15:30:00.000Z"), 80);
+    const env = providerRuntimeEnv({ OANDA_BASE_URL: "https://api-fxpractice.oanda.com/v3" });
+    const candles = await researchCandles(loadV2RuntimeConfig(env).config, env, "EUR_USD", "1m", new Date("2026-07-31T15:30:00.000Z"), 80);
     const url = new URL(requestedUrl);
     assert.equal(url.pathname, "/v3/instruments/EUR_USD/candles");
+    assert.doesNotMatch(url.pathname, /\/v3\/v3\//);
     assert.equal(url.searchParams.get("granularity"), "M1");
     assert.equal(url.searchParams.get("price"), "M");
     assert.equal(url.searchParams.get("from"), null);
@@ -148,7 +152,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
   try {
     await assert.rejects(
       () => researchCandles(loadV2RuntimeConfig(providerRuntimeEnv()).config, providerRuntimeEnv(), "EUR_USD", "1m", new Date("2026-07-31T15:30:00.000Z"), 80),
-      (error) => sanitizedProviderFailureReason(error) === "insufficient_completed_candles",
+      (error) => sanitizedProviderFailureReason(error) === "provider_completed_candles_unavailable",
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -495,7 +499,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
     assert.equal(result.completed, true);
     assert.equal(fetchCalls, 1);
     assert.equal(saved.evaluations.filter(item => item.status === "attempted").length, 2);
-    assert.equal(saved.evaluations.filter(item => item.status === "skipped" && item.reason === "insufficient_completed_candles").length, 2);
+    assert.equal(saved.evaluations.filter(item => item.status === "skipped" && item.reason === "provider_completed_candles_unavailable").length, 2);
     assert.equal(saved.evaluations.filter(item => item.status === "completed").length, 0);
     assert.equal(saved.observations.length, 0);
   } finally {
