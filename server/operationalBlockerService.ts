@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "crypto";
 import { Pool, type QueryResultRow } from "pg";
 import { telegramNotificationService, type TelegramNotificationService } from "./telegram/notificationService";
 import { structuredLogger } from "./structuredLogger";
+import { classifyOperationalAlert, operatorIncidentKey, shouldSendOperatorTelegramAlert, type OperationalAlertCategory } from "./operationalAlertPolicy";
 
 export type OperationalBlockerKind = "configuration" | "fallback" | "dependency" | "limit" | "lifecycle";
 export type OperationalBlockerSeverity = "info" | "warning" | "critical";
@@ -28,6 +29,7 @@ export type OperationalBlockerEvent = {
   action: string;
   effect?: string;
   severity?: OperationalBlockerSeverity;
+  alertCategory?: OperationalAlertCategory;
   count?: number;
   now?: Date;
 };
@@ -45,7 +47,7 @@ export type OperationalBlockerRecord = OperationalBlockerEvent & {
 
 type Store = {
   upsertActive(record: OperationalBlockerRecord): Promise<OperationalBlockerRecord>;
-  resolveMissing(activeFingerprints: Set<string>, now: Date): Promise<number>;
+  resolveMissing(activeFingerprints: Set<string>, now: Date): Promise<OperationalBlockerRecord[]>;
   list(input?: { includeResolved?: boolean; limit?: number }): Promise<OperationalBlockerRecord[]>;
 };
 
@@ -83,9 +85,19 @@ export class OperationalBlockerService {
   async record(event: OperationalBlockerEvent) {
     const now = event.now ?? new Date();
     const normalized = normalizeEvent(event);
-    const fingerprint = fingerprintFor(normalized);
+    const alertCategory = classifyOperationalAlert({
+      code: normalized.code,
+      kind: normalized.kind,
+      expected: normalized.expected,
+      category: normalized.alertCategory,
+      provider: normalized.scope?.component,
+      symbol: normalized.scope?.symbol,
+      configKey: normalized.configKey,
+    });
+    const fingerprint = fingerprintFor({ ...normalized, alertCategory });
     const base: OperationalBlockerRecord = {
       ...normalized,
+      alertCategory,
       id: `op-blocker-${fingerprint.slice(0, 16)}`,
       fingerprint,
       status: "active",
@@ -126,7 +138,8 @@ export class OperationalBlockerService {
 
   async reconcileActive(events: OperationalBlockerEvent[], now = new Date()) {
     const records = await this.recordMany(events.map(event => ({ ...event, now })));
-    await this.getStore().resolveMissing(new Set(records.map(record => record.fingerprint)), now);
+    const resolved = await this.getStore().resolveMissing(new Set(records.map(record => record.fingerprint)), now);
+    for (const record of resolved) await this.maybeNotifyRecovery(record, now);
     return records;
   }
 
@@ -169,11 +182,43 @@ export class OperationalBlockerService {
   }
 
   private shouldNotify(record: OperationalBlockerRecord, now: Date) {
+    if (!shouldSendOperatorTelegramAlert({
+      code: record.code,
+      kind: record.kind,
+      expected: record.expected,
+      category: record.alertCategory,
+      provider: record.scope?.component,
+      symbol: record.scope?.symbol,
+      configKey: record.configKey,
+    })) return false;
     if (this.dormant && record.kind !== "lifecycle") return false;
     if (!this.env.TELEGRAM_NOTIFICATIONS_ENABLED || this.env.TELEGRAM_NOTIFICATIONS_ENABLED === "false") return false;
     if (!this.env.TELEGRAM_BOT_TOKEN?.trim() || !this.env.TELEGRAM_CHAT_ID?.trim()) return false;
     if (!record.lastNotifiedAt) return true;
     return now.getTime() - Date.parse(record.lastNotifiedAt) >= reminderMs(this.env);
+  }
+
+  private async maybeNotifyRecovery(record: OperationalBlockerRecord, now: Date) {
+    if (!record.lastNotifiedAt) return;
+    if (!shouldSendOperatorTelegramAlert({
+      code: record.code,
+      kind: record.kind,
+      expected: record.expected,
+      category: record.alertCategory,
+      provider: record.scope?.component,
+      symbol: record.scope?.symbol,
+      configKey: record.configKey,
+    })) return;
+    if (!this.env.TELEGRAM_NOTIFICATIONS_ENABLED || this.env.TELEGRAM_NOTIFICATIONS_ENABLED === "false") return;
+    if (!this.env.TELEGRAM_BOT_TOKEN?.trim() || !this.env.TELEGRAM_CHAT_ID?.trim()) return;
+    await this.notifications.sendOperations("health", formatRecoveryMessage(record, now), {
+      blockerFingerprint: record.fingerprint,
+      blockerCode: record.code,
+      blockerKind: record.kind,
+      alertCategory: record.alertCategory,
+      recovered: true,
+      liveExecutionBlocked: true,
+    }).catch((error) => ({ sent: false as const, reason: error instanceof Error ? error.message : String(error) }));
   }
 }
 
@@ -197,14 +242,15 @@ class InMemoryOperationalBlockerStore implements Store {
   }
 
   async resolveMissing(activeFingerprints: Set<string>, now: Date) {
-    let count = 0;
+    const resolved: OperationalBlockerRecord[] = [];
     for (const [fingerprint, record] of this.records) {
       if (record.status === "active" && !activeFingerprints.has(fingerprint)) {
-        this.records.set(fingerprint, { ...record, status: "resolved", resolvedAt: now.toISOString(), lastSeenAt: now.toISOString() });
-        count += 1;
+        const next = { ...record, status: "resolved" as const, resolvedAt: now.toISOString(), lastSeenAt: now.toISOString() };
+        this.records.set(fingerprint, next);
+        resolved.push(next);
       }
     }
-    return count;
+    return resolved;
   }
 
   async list(input: { includeResolved?: boolean; limit?: number } = {}) {
@@ -267,12 +313,14 @@ class PgOperationalBlockerStore implements Store {
 
   async resolveMissing(activeFingerprints: Set<string>, now: Date) {
     try {
+      const active = await this.list({ includeResolved: false, limit: 10_000 });
+      const resolving = active.filter(record => !activeFingerprints.has(record.fingerprint));
       if (activeFingerprints.size === 0) {
-        const result = await this.pool.query("UPDATE operational_blockers SET status = 'resolved', resolved_at = $1, last_seen_at = $1 WHERE status = 'active'", [now.toISOString()]);
-        return result.rowCount ?? 0;
+        await this.pool.query("UPDATE operational_blockers SET status = 'resolved', resolved_at = $1, last_seen_at = $1 WHERE status = 'active'", [now.toISOString()]);
+        return resolving.map(record => ({ ...record, status: "resolved" as const, resolvedAt: now.toISOString(), lastSeenAt: now.toISOString() }));
       }
-      const result = await this.pool.query("UPDATE operational_blockers SET status = 'resolved', resolved_at = $1, last_seen_at = $1 WHERE status = 'active' AND NOT (fingerprint = ANY($2::text[]))", [now.toISOString(), [...activeFingerprints]]);
-      return result.rowCount ?? 0;
+      await this.pool.query("UPDATE operational_blockers SET status = 'resolved', resolved_at = $1, last_seen_at = $1 WHERE status = 'active' AND NOT (fingerprint = ANY($2::text[]))", [now.toISOString(), [...activeFingerprints]]);
+      return resolving.map(record => ({ ...record, status: "resolved" as const, resolvedAt: now.toISOString(), lastSeenAt: now.toISOString() }));
     } catch {
       return this.fallback.resolveMissing(activeFingerprints, now);
     }
@@ -300,6 +348,7 @@ function normalizeEvent(event: OperationalBlockerEvent): OperationalBlockerEvent
     code: event.code.trim().toLowerCase(),
     title: event.title.trim(),
     severity: event.severity ?? (event.expected ? "warning" : "critical"),
+    alertCategory: event.alertCategory ?? classifyOperationalAlert({ code: event.code, kind: event.kind, expected: event.expected, category: event.alertCategory, configKey: event.configKey, symbol: event.scope?.symbol, provider: event.scope?.component }),
     currentValue: sanitizeValue(event.currentValue),
     limitValue: sanitizeValue(event.limitValue),
     configValueState: event.configValueState ?? (event.configKey ? "N/A" : undefined),
@@ -312,6 +361,7 @@ function fingerprintFor(event: OperationalBlockerEvent) {
   return createHash("sha256").update(JSON.stringify({
     kind: event.kind,
     code: event.code,
+    incident: operatorIncidentKey({ code: event.code, kind: event.kind, expected: event.expected, category: event.alertCategory, provider: scope?.component, symbol: scope?.symbol, configKey: event.configKey }),
     scope: scope ?? {},
     currentValue: event.currentValue,
     limitValue: event.limitValue,
@@ -329,7 +379,9 @@ function withoutCycleId(scope: OperationalBlockerEvent["scope"]) {
 function formatBlockerMessage(record: OperationalBlockerRecord) {
   const icon = record.kind === "fallback" || record.kind === "dependency" ? "🟡" : "⚠️";
   const lines = [
-    `${icon} ${record.title}`,
+    `${icon} FinCoach operational alert`,
+    `Issue: ${record.title}`,
+    `Category: ${record.alertCategory ?? classifyOperationalAlert(record)}`,
     `Blocked: ${record.whatBlocked}`,
     `Reason: ${record.code} - ${record.reason}`,
     `Current: ${formatValue(record.currentValue)}`,
@@ -343,7 +395,22 @@ function formatBlockerMessage(record: OperationalBlockerRecord) {
   if (record.effect) lines.push(`Effect: ${record.effect}`);
   lines.push(`Classification: ${record.expected ? "expected gating" : "abnormal failure"}`);
   lines.push(`Action: ${record.action}`);
+  lines.push("Live execution remains blocked.");
   return lines.join("\n");
+}
+
+function formatRecoveryMessage(record: OperationalBlockerRecord, now: Date) {
+  const firstSeen = Date.parse(record.firstSeenAt);
+  const durationSeconds = Number.isFinite(firstSeen) ? Math.max(0, Math.round((now.getTime() - firstSeen) / 1000)) : null;
+  return [
+    "✅ FinCoach operational recovery",
+    `Issue: ${record.title}`,
+    `Category: ${record.alertCategory ?? classifyOperationalAlert(record)}`,
+    durationSeconds === null ? null : `Duration: ${durationSeconds}s`,
+    `Occurrences while active: ${record.occurrenceCount}`,
+    `Resolved at: ${now.toISOString()}`,
+    "Live execution remains blocked.",
+  ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
 function fromRow(row: QueryResultRow): OperationalBlockerRecord {
@@ -370,6 +437,7 @@ function fromRow(row: QueryResultRow): OperationalBlockerRecord {
     lastNotifiedAt: row.last_notified_at ? new Date(row.last_notified_at).toISOString() : null,
     resolvedAt: row.resolved_at ? new Date(row.resolved_at).toISOString() : null,
     occurrenceCount: Number(row.occurrence_count ?? 1),
+    alertCategory: classifyOperationalAlert({ code: String(row.code), kind: row.kind, expected: Boolean(row.expected), configKey: row.config_key ? String(row.config_key) : undefined }),
   };
 }
 
@@ -409,6 +477,8 @@ function parseJson(value: unknown) {
 }
 
 function reminderMs(env: NodeJS.ProcessEnv) {
+  const repeatMs = Number(env.FINCOACH_OPERATOR_ALERT_REPEAT_INTERVAL_MS);
+  if (Number.isFinite(repeatMs) && repeatMs > 0) return repeatMs;
   const parsed = Number(env.FINCOACH_OPERATIONAL_ALERT_REMINDER_MINUTES);
   return Number.isFinite(parsed) && parsed > 0 ? parsed * 60_000 : DEFAULT_REMINDER_MS;
 }

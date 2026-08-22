@@ -5,6 +5,7 @@ import type { PortfolioRepository } from "./repository";
 import { canonicalInstrument } from "./instruments";
 import { marketStatusForInstrument } from "./calendars";
 import { commission, fillPrice, nextPositionAfterFill } from "./accounting";
+import { ensureRealMarketDataForExecution } from "../marketDataProvenancePolicy";
 
 export type VirtualBrokerConfig = {
   conservativeSpreadBps: number;
@@ -35,6 +36,16 @@ export class VirtualPortfolioBroker {
     const marketStatus = marketStatusForInstrument(instrument, now);
     if (marketStatus.status !== "open") return this.reject(input, "market_closed", now, { marketStatus });
     const quote = await this.marketData.getQuote(input.symbol, input.assetClass, now);
+    const provenance = await ensureRealMarketDataForExecution({
+      workflow: "Portfolio virtual broker order fill",
+      symbol: quote.symbol,
+      provider: quote.source,
+      fixture: quote.fixture,
+      stale: quote.stale,
+      fallback: quote.marketData?.dataKind === "REAL_PROVIDER_FALLBACK",
+      observedAt: quote.observedAt,
+    }, undefined, now);
+    if (!provenance.ok) return this.reject(input, provenance.reason, now, { quote: safeQuote(quote), marketDataProvenance: provenance.provenanceKind });
     const price = fillPrice({ side: input.side, quote, conservativeSpreadBps: this.config.conservativeSpreadBps, slippageBps: this.config.slippageBps });
     const multiplier = instrument.contractMultiplier ?? 1;
     const tradeValue = input.quantity * price * multiplier;

@@ -116,6 +116,7 @@ import { researchAccelerationService } from "./researchAccelerationService";
 import { oandaHistoricalBackfillService } from "./historicalDataBackfillService";
 import { deploymentMetadata } from "./deploymentMetadata";
 import { portfolioPlatformService } from "./portfolio/service";
+import { executionFunnelTelemetry } from "./execution/executionFunnelTelemetry";
 
 const emergencyControlService = new EmergencyControlService(
   executionRiskService,
@@ -127,6 +128,7 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  sandboxBrokerRuntime.startReconciliationScheduler();
   const tradingViewRateLimiter = createApiRateLimiter({
     windowMs: 60_000,
     maxRequests: 30,
@@ -161,6 +163,7 @@ export async function registerRoutes(
       storage: storageHealth.status === "unavailable" ? "unhealthy" : subsystemState(storageHealth.status),
       portfolio: portfolioSubsystemState(portfolioHealth),
       v2: subsystemState((v2Body.moduleHealth as Record<string, unknown> | undefined)?.operations),
+      brokerReconciliation: brokerReconciliationSubsystemState(sandboxBrokerRuntime.reconciliationHealth()),
     };
     res.json({
       status: aggregateHealthStatus(subsystemStates),
@@ -190,6 +193,10 @@ export async function registerRoutes(
             blockers: v2Body.blockers,
           },
         },
+      brokerReconciliation: {
+        ...sandboxBrokerRuntime.reconciliationHealth(),
+        scheduler: sandboxBrokerRuntime.reconciliationSchedulerHealth(),
+      },
       },
       liveExecutionBlocked: true,
       deployedRevision: deploymentMetadata(),
@@ -1600,7 +1607,12 @@ export async function registerRoutes(
   });
 
   app.get("/api/marketpilot/execution/sandbox-metrics", async (_req, res) => {
-    res.json(sandboxExecutionMetrics.snapshot());
+    res.json({
+      ...sandboxExecutionMetrics.snapshot(),
+      executionFunnel: executionFunnelTelemetry.snapshot(),
+      reconciliation: sandboxBrokerRuntime.reconciliationHealth(),
+      reconciliationScheduler: sandboxBrokerRuntime.reconciliationSchedulerHealth(),
+    });
   });
 
   app.get("/api/marketpilot/execution/reliability-state/health", async (_req, res) => {
@@ -1666,7 +1678,10 @@ export async function registerRoutes(
   });
 
   app.get("/api/marketpilot/execution/sandbox-reconciliation", async (_req, res) => {
-    res.json(sandboxBrokerRuntime.reconciliationReports());
+    res.json({
+      reports: sandboxBrokerRuntime.reconciliationReports(),
+      health: sandboxBrokerRuntime.reconciliationHealth(),
+    });
   });
 
   app.post("/api/marketpilot/execution/sandbox/idempotency/resolve", async (req, res) => {
@@ -2157,6 +2172,14 @@ function portfolioSubsystemState(value: unknown): "healthy" | "degraded" | "unhe
     provider: subsystemState(health.providerHealth),
     readiness: subsystemState(health.readiness?.status),
   });
+}
+
+function brokerReconciliationSubsystemState(value: unknown): "healthy" | "degraded" | "unhealthy" {
+  const health = value as { reconciliationStatus?: unknown } | null;
+  const status = String(health?.reconciliationStatus ?? "never_run").toLowerCase();
+  if (status === "failed") return "unhealthy";
+  if (status === "stale" || status === "discrepancy" || status === "never_run") return "degraded";
+  return "healthy";
 }
 
 function aggregateHealthStatus(states: Record<string, "healthy" | "degraded" | "unhealthy">) {

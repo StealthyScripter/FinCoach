@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { OrderRequest, Position } from "./domain";
 import { governanceRepository, type GovernanceRepository } from "./governanceRepository";
+import { loadMaxActivePracticeTrades } from "./practiceTradeCapacity";
 
 export type LimitedAutonomyPolicy = {
   enabled: boolean;
@@ -22,7 +23,7 @@ export const DEFAULT_AUTONOMY_POLICY: LimitedAutonomyPolicy = {
   allowedInstruments: [],
   maxRiskPerTradePct: 0.5,
   maxDailyLoss: 250,
-  maxOpenPositions: 2,
+  maxOpenPositions: loadMaxActivePracticeTrades(),
   maxLeverage: 5,
   allowedStrategyIds: [],
   tradingSessionLimits: [],

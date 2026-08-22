@@ -482,7 +482,7 @@ try {
   assert.ok(lifecycleAlerts.includes("strategy.stopped"));
   assert.ok(lifecycleAlerts.includes("kill.switch_activated"));
   assert.ok(lifecycleAlerts.includes("sandbox.order_submitted"));
-  assert.ok(lifecycleAlerts.includes("sandbox.order_rejected"));
+  assert.ok(!lifecycleAlerts.includes("sandbox.order_rejected"), "generic sandbox order rejections should not be lifecycle Telegram noise");
   assert.ok(lifecycleAlerts.includes("sandbox.position_opened"));
   assert.ok(lifecycleAlerts.includes("sandbox.position_closed"));
   assert.ok(lifecycleAlerts.includes("daily.loss_limit_triggered"));

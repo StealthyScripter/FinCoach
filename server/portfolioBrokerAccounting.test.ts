@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { InMemoryPortfolioRepository } from "./portfolio/repository";
-import { FixturePortfolioMarketDataProvider } from "./portfolio/marketData";
+import { FixturePortfolioMarketDataProvider, type PortfolioMarketDataProvider } from "./portfolio/marketData";
 import { VirtualPortfolioBroker } from "./portfolio/broker";
 import { accountingSnapshot } from "./portfolio/accounting";
 import { canonicalInstrument, optionInstrument } from "./portfolio/instruments";
@@ -8,6 +8,20 @@ import { latestLegitimateClose, marketStatusForInstrument } from "./portfolio/ca
 
 const repository = new InMemoryPortfolioRepository();
 const now = new Date("2026-08-14T15:00:00.000Z");
+class DeterministicRealProvider extends FixturePortfolioMarketDataProvider implements PortfolioMarketDataProvider {
+  id = "deterministic-real-provider";
+  capabilities() {
+    return { ...super.capabilities(), fixture: false, live: true };
+  }
+  async getQuote(symbol: string, assetClass: Parameters<FixturePortfolioMarketDataProvider["getQuote"]>[1], at = new Date()) {
+    const quote = await super.getQuote(symbol, assetClass, at);
+    return { ...quote, source: this.id, fixture: false };
+  }
+  async getHistoricalBars(symbol: string, assetClass: Parameters<FixturePortfolioMarketDataProvider["getHistoricalBars"]>[1], input: Parameters<FixturePortfolioMarketDataProvider["getHistoricalBars"]>[2] = {}) {
+    const bars = await super.getHistoricalBars(symbol, assetClass, input);
+    return bars.map((bar) => ({ ...bar, source: this.id, fixture: false }));
+  }
+}
 await repository.saveStrategy({
   id: "strategy-test",
   shortName: "TEST",
@@ -29,10 +43,14 @@ await repository.saveStrategy({
 });
 await repository.savePortfolio({ id: "portfolio-test", strategyId: "strategy-test", startingCapital: 10_000, cash: 10_000, currency: "USD", status: "active", createdAt: now.toISOString(), updatedAt: now.toISOString() });
 
-const broker = new VirtualPortfolioBroker(repository, new FixturePortfolioMarketDataProvider(), { conservativeSpreadBps: 20, slippageBps: 2, minFee: 1, feeBps: 5 });
+const fixtureBlocked = await new VirtualPortfolioBroker(repository, new FixturePortfolioMarketDataProvider(), { conservativeSpreadBps: 20, slippageBps: 2, minFee: 1, feeBps: 5 }).submitOrder({ portfolioId: "portfolio-test", idempotencyKey: "fixture-1", side: "BUY", symbol: "SPY", assetClass: "etf", quantity: 1, reason: "fixture blocked", now });
+assert.equal(fixtureBlocked.ok, false);
+assert.equal(fixtureBlocked.reason, "real_market_data_required");
+
+const broker = new VirtualPortfolioBroker(repository, new DeterministicRealProvider(), { conservativeSpreadBps: 20, slippageBps: 2, minFee: 1, feeBps: 5 });
 const buy = await broker.submitOrder({ portfolioId: "portfolio-test", idempotencyKey: "buy-1", side: "BUY", symbol: "SPY", assetClass: "etf", quantity: 10, reason: "test buy", now });
 assert.equal(buy.ok, true);
-assert.equal((await repository.listOrders("portfolio-test")).length, 1);
+assert.equal((await repository.listOrders("portfolio-test")).length, 2);
 assert.equal((await repository.listTransactions("portfolio-test")).length, 1);
 const afterBuy = await repository.getPortfolio("portfolio-test");
 assert.ok(afterBuy);

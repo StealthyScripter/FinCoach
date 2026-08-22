@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { BrokerReconciliationService } from "./execution/brokerReconciliationService";
+import { evaluatePracticeTradeCapacity, loadMaxActivePracticeTrades } from "./execution/practiceTradeCapacity";
+import { ExecutionFunnelTelemetry } from "./execution/executionFunnelTelemetry";
+import { SandboxBrokerRuntime } from "./execution/sandboxBrokerRuntime";
 import type {
   BrokerHealth,
   BrokerInstrument,
@@ -73,7 +76,9 @@ await assert.rejects(
 const events = new EventLogService();
 const audit = new ExecutionAuditLog();
 const metrics = new SandboxExecutionMetrics();
-const reconciliation = new BrokerReconciliationService(events, audit, metrics);
+const blockerEvents: any[] = [];
+const blockerService = { record: async (event: any) => { blockerEvents.push(event); return event; } };
+const reconciliation = new BrokerReconciliationService(events, audit, metrics, undefined, undefined, blockerService as never);
 const adapter = new ReliabilityAdapter();
 const matched = await reconciliation.reconcile(adapter, [{
   provider: "metatrader_demo",
@@ -99,5 +104,89 @@ assert.equal(events.countByType("sandbox.reconciliation_completed"), 2);
 assert.equal(metrics.snapshot().reconciliationCount, 2);
 assert.equal(metrics.snapshot().reconciliationFailureCount, 1);
 assert.ok(audit.list().some((entry) => entry.action === "sandbox.reconciliation"));
+
+const historicalIncident = await reconciliation.reconcile(adapter, [], "operator", new Date("2026-06-20T10:07:00.000Z"), {
+  localActiveTrades: [
+    { id: "local-1", provider: "metatrader_demo", brokerTradeId: "missing-trade-1", instrument: "EUR/USD", state: "active" },
+    { id: "local-2", provider: "metatrader_demo", brokerTradeId: "missing-trade-2", instrument: "EUR/USD", state: "active" },
+    { id: "local-3", provider: "metatrader_demo", brokerTradeId: "missing-trade-3", instrument: "EUR/USD", state: "active" },
+  ],
+});
+assert.equal(historicalIncident.status, "discrepancy");
+assert.equal(historicalIncident.localActiveTrades, 3);
+assert.equal(historicalIncident.brokerActiveTrades, 1);
+assert.equal(historicalIncident.mismatchedTrades, 3);
+assert.ok(historicalIncident.discrepancies.some((item) => item.type === "local_active_broker_missing"));
+assert.ok(blockerEvents.some((event) => event.code === "broker_trade_missing" && event.alertCategory === "BROKER_STATE_MISMATCH"));
+const afterMismatch = evaluatePracticeTradeCapacity({
+  maxActivePracticeTrades: 3,
+  brokerConfirmedActiveTrades: 0,
+  localActiveTrades: [
+    { id: "local-1", provider: "metatrader_demo", instrument: "EUR/USD", state: "missing_at_broker" },
+    { id: "local-2", provider: "metatrader_demo", instrument: "EUR/USD", state: "missing_at_broker" },
+    { id: "local-3", provider: "metatrader_demo", instrument: "EUR/USD", state: "missing_at_broker" },
+  ],
+  reconciliationStatus: "healthy",
+});
+assert.equal(afterMismatch.allowed, true, "stale local active rows must not silently enforce the practice cap after broker reconciliation");
+assert.equal(afterMismatch.activeTradeCountUsed, 0);
+
+const legitimateCap = evaluatePracticeTradeCapacity({ maxActivePracticeTrades: 3, brokerConfirmedActiveTrades: 3, reconciliationStatus: "healthy" });
+assert.equal(legitimateCap.allowed, false);
+assert.equal(legitimateCap.code, "practice_active_trade_cap_reached");
+assert.equal(legitimateCap.expectedPolicyRejection, true);
+assert.equal(legitimateCap.alertCategory, "EXPECTED_POLICY_REJECTION");
+const staleReconciliation = evaluatePracticeTradeCapacity({ maxActivePracticeTrades: 3, brokerConfirmedActiveTrades: 0, reconciliationStatus: "stale" });
+assert.equal(staleReconciliation.allowed, false);
+assert.equal(staleReconciliation.code, "reconciliation_stale");
+assert.equal(staleReconciliation.expectedPolicyRejection, false);
+assert.equal(loadMaxActivePracticeTrades({} as NodeJS.ProcessEnv), 25);
+assert.equal(loadMaxActivePracticeTrades({ FINCOACH_MAX_ACTIVE_PRACTICE_TRADES: "75" } as NodeJS.ProcessEnv), 75);
+assert.throws(() => loadMaxActivePracticeTrades({ FINCOACH_MAX_ACTIVE_PRACTICE_TRADES: "0" } as NodeJS.ProcessEnv), /FINCOACH_MAX_ACTIVE_PRACTICE_TRADES/);
+
+const disabledSchedulerRuntime = new SandboxBrokerRuntime({ FINCOACH_BROKER_RECONCILIATION_ENABLED: "false" } as NodeJS.ProcessEnv);
+disabledSchedulerRuntime.startReconciliationScheduler();
+assert.equal(disabledSchedulerRuntime.reconciliationSchedulerHealth().enabled, false);
+assert.equal(disabledSchedulerRuntime.reconciliationSchedulerHealth().active, false);
+
+const idleSchedulerRuntime = new SandboxBrokerRuntime({
+  FINCOACH_BROKER_RECONCILIATION_INTERVAL_MS: "60000",
+  OANDA_ENV: "practice",
+} as NodeJS.ProcessEnv);
+idleSchedulerRuntime.startReconciliationScheduler();
+assert.equal(idleSchedulerRuntime.reconciliationSchedulerHealth().enabled, true);
+assert.equal(idleSchedulerRuntime.reconciliationSchedulerHealth().active, true);
+assert.equal(idleSchedulerRuntime.reconciliationSchedulerHealth().providerConfigured, false);
+idleSchedulerRuntime.stopReconciliationSchedulerForTest();
+assert.equal(idleSchedulerRuntime.reconciliationSchedulerHealth().active, false);
+
+const funnel = new ExecutionFunnelTelemetry();
+funnel.increment("tradeCandidatesEvaluated", 100);
+funnel.classifyRejection("RR below threshold");
+funnel.classifyRejection("Spread exceeds the configured limit");
+funnel.classifyRejection("broker account authentication failed");
+funnel.classifyRejection("reconciliation is stale");
+funnel.increment("brokerSubmissionAttempted", 54);
+funnel.increment("brokerAccepted", 53);
+funnel.increment("brokerTradesConfirmed", 52);
+assert.deepEqual({
+  evaluated: funnel.snapshot().tradeCandidatesEvaluated,
+  strategyRejected: funnel.snapshot().strategyRejected,
+  riskRejected: funnel.snapshot().riskRejected,
+  configRejected: funnel.snapshot().configRejected,
+  reconciliationBlocked: funnel.snapshot().reconciliationBlocked,
+  submitted: funnel.snapshot().brokerSubmissionAttempted,
+  accepted: funnel.snapshot().brokerAccepted,
+  confirmed: funnel.snapshot().brokerTradesConfirmed,
+}, {
+  evaluated: 100,
+  strategyRejected: 0,
+  riskRejected: 2,
+  configRejected: 1,
+  reconciliationBlocked: 1,
+  submitted: 54,
+  accepted: 53,
+  confirmed: 52,
+});
 
 console.log("execution reliability tests passed");

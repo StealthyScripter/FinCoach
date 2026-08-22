@@ -13,6 +13,7 @@ import { strategyLeaseService } from "./strategyLeaseService";
 import { transactionalReliabilityRepository } from "./transactionalReliabilityRepository";
 import { automationLevelService } from "./automationLevels";
 import { semiAutonomousApprovalService } from "./semiAutonomousApprovalService";
+import { loadMaxActivePracticeTrades } from "./practiceTradeCapacity";
 
 export const operationalStrategySchema = z.object({
   id: z.string().min(1),
@@ -23,7 +24,7 @@ export const operationalStrategySchema = z.object({
   units: z.number().positive(),
   rule: z.enum(["bullish_candle", "bearish_candle", "range_breakout"]),
   maxTradesPerDay: z.number().int().positive().max(50).default(5),
-  maxOpenPositions: z.number().int().positive().max(20).default(2),
+  maxOpenPositions: z.number().int().positive().max(500).default(loadMaxActivePracticeTrades()),
   sessionStartHourUtc: z.number().int().min(0).max(23).default(0),
   sessionEndHourUtc: z.number().int().min(0).max(23).default(23),
   stopDistance: z.number().positive(),

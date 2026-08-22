@@ -119,6 +119,7 @@ export type PortfolioMarketDataProvenance = {
   staleUntil: string;
   cacheStatus: "miss" | "hit" | "coalesced" | "stale_hit";
   freshnessState: PortfolioMarketDataFreshnessState;
+  dataKind?: "REAL_PROVIDER_DATA" | "REAL_PROVIDER_FALLBACK" | "STALE_REAL_DATA" | "FIXTURE_DATA" | "SIMULATED_DATA" | "SYNTHETIC_DATA";
   apiCreditsUsed?: number | null;
   apiCreditsLeft?: number | null;
 };

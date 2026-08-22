@@ -3,6 +3,7 @@ import { AlphaVantagePortfolioMarketDataProvider, FixturePortfolioMarketDataProv
 import { optionMarketValue, settleExpiredOption } from "./portfolio/options";
 import { loadPortfolioConfig } from "./portfolio/config";
 import type { AssetClass, PortfolioHistoricalBar, PortfolioQuote } from "./portfolio/domain";
+import { classifyMarketDataProvenance, ensureRealMarketDataForExecution } from "./marketDataProvenancePolicy";
 
 const alphaCalls: string[] = [];
 const alphaFetch = async (url: URL | RequestInfo) => {
@@ -214,11 +215,16 @@ assert.equal(durable.pruneCalls, 1, "durable cache cleanup should be callable th
 const failing = new CountingProvider("failing", 30);
 failing.fail = true;
 const fallback = new CountingProvider("fallback", 30);
-const fallbackRouter = new PortfolioMarketDataRouter([failing, fallback], { cacheEnabled: true, cacheMaxEntries: 100, cacheMaxBytes: null, providerRateLimitCooldownMs: 300_000 });
-await fallbackRouter.getQuote("AAPL", "equity", new Date("2026-08-17T15:00:00.000Z"));
+const fallbackAlerts: any[] = [];
+const fallbackRouter = new PortfolioMarketDataRouter([failing, fallback], { cacheEnabled: true, cacheMaxEntries: 100, cacheMaxBytes: null, providerRateLimitCooldownMs: 300_000 }, false, null, { record: async (event: any) => { fallbackAlerts.push(event); return event; } } as never);
+const fallbackQuote = await fallbackRouter.getQuote("AAPL", "equity", new Date("2026-08-17T15:00:00.000Z"));
+assert.equal(fallbackQuote.marketData?.dataKind, "REAL_PROVIDER_FALLBACK");
+assert.equal(fallbackAlerts.length, 1, "real-provider fallback should emit one operator incident");
+assert.equal(fallbackAlerts[0].alertCategory, "MARKET_DATA_FALLBACK");
 await fallbackRouter.getQuote("AAPL", "equity", new Date("2026-08-17T15:00:01.000Z"));
 assert.equal(failing.quoteCalls, 1, "fallback should not keep double-calling after valid cached fallback data exists");
 assert.equal(fallback.quoteCalls, 1);
+assert.equal(fallbackAlerts.length, 1, "cached fallback should not repeat-probe or flood alerts");
 await fallbackRouter.getQuote("AAPL", "equity", new Date("2026-08-17T15:00:20.000Z"));
 assert.equal(failing.quoteCalls, 1, "rate-limited primary remains on cooldown after fallback cache TTL expires");
 assert.equal(fallback.quoteCalls, 2, "fallback provider refreshes while primary is cooling down");
@@ -257,6 +263,20 @@ assert.throws(() => new TwelveDataPortfolioMarketDataProvider({ ...config, twelv
 const router = new PortfolioMarketDataRouter([new FixturePortfolioMarketDataProvider(), alpha], { cacheEnabled: true, cacheMaxEntries: 100, cacheMaxBytes: null }, true);
 assert.equal(router.providerFor("QUOTE", "etf").id, "alpha-vantage");
 assert.equal(router.providerFor("OPTIONS_CHAIN", "option").id, "alpha-vantage");
+
+const provenanceAlerts: any[] = [];
+assert.equal(classifyMarketDataProvenance({ workflow: "execution", provider: "alpha-vantage", fixture: false, stale: false }), "REAL_PROVIDER_DATA");
+assert.equal(classifyMarketDataProvenance({ workflow: "execution", provider: "alpha-vantage", fallback: true }), "REAL_PROVIDER_FALLBACK");
+assert.equal(classifyMarketDataProvenance({ workflow: "execution", provider: "fixture", fixture: true }), "FIXTURE_DATA");
+const blockedFixture = await ensureRealMarketDataForExecution(
+  { workflow: "execution", symbol: "SPY", provider: "portfolio-fixture-market-data", fixture: true },
+  { record: async (event: any) => { provenanceAlerts.push(event); return event; } } as never,
+  new Date("2026-08-17T15:00:00.000Z"),
+);
+assert.equal(blockedFixture.ok, false);
+assert.equal(blockedFixture.reason, "real_market_data_required");
+assert.equal(provenanceAlerts[0].alertCategory, "MARKET_DATA_FAILURE");
+assert.equal((await ensureRealMarketDataForExecution({ workflow: "execution", symbol: "SPY", provider: "alpha-vantage", fallback: true }, { record: async (event: any) => { provenanceAlerts.push(event); return event; } } as never)).ok, true);
 
 const chain = createPortfolioMarketDataProvider("twelve_data", {
   ...loadPortfolioConfig({ FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDERS: "twelve_data,alpha_vantage", TWELVE_DATA_API_KEY: "td", ALPHA_VANTAGE_API_KEY: "av", FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED: "false" } as NodeJS.ProcessEnv),

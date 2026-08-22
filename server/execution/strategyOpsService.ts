@@ -11,6 +11,7 @@ import { automationLevelService, type AutomationLevelService } from "./automatio
 import { executionEmergencyState } from "./emergencyControls";
 import { strategyEvidenceStore } from "./strategyEvidenceStore";
 import { publishTelegramLifecycleAlert } from "../telegramNotificationBus";
+import { executionFunnelTelemetry } from "./executionFunnelTelemetry";
 
 export type StrategyRuleDecision = {
   candidate: boolean;
@@ -106,6 +107,7 @@ export class StrategyOpsService {
   private async evaluate(strategy: OperationalStrategy, candle: Candle, history: Candle[]) {
     const state = this.states.get(strategy.id)!;
     state.evaluations += 1;
+    executionFunnelTelemetry.increment("tradeCandidatesEvaluated");
     state.lastEvaluatedAt = candle.endTime;
     if (executionEmergencyState.signalsFrozen) return this.reject(strategy, candle, "New signals are frozen by emergency controls");
     if (!this.automation.allows("signals")) {
@@ -223,6 +225,7 @@ export class StrategyOpsService {
   }
 
   private reject(strategy: OperationalStrategy, candle: Candle, reason: string) {
+    executionFunnelTelemetry.classifyRejection(reason);
     if (/stale/i.test(reason)) {
       void publishTelegramLifecycleAlert({
         id: `strategy-stale-${strategy.id}-${candle.endTime}`,

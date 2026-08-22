@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { OperationalBlockerService } from "./operationalBlockerService";
+import { classifyOperationalAlert, operatorIncidentKey, shouldSendOperatorTelegramAlert } from "./operationalAlertPolicy";
 
 const sent: string[] = [];
 const notifications = {
@@ -19,33 +20,34 @@ const env = {
 {
   const service = new OperationalBlockerService(env, notifications);
   const first = await service.record({
-    kind: "limit",
-    code: "max_observations_per_cycle_reached",
-    title: "Research blocked: maximum observations reached",
-    whatBlocked: "remaining observation candidates",
-    reason: "cycle_budget",
-    currentValue: 400,
-    limitValue: 400,
-    configKey: "FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE",
+    kind: "configuration",
+    code: "broker_not_configured",
+    title: "Broker endpoint is not configured",
+    whatBlocked: "OANDA PRACTICE order submission",
+    reason: "OANDA_BASE_URL is unset",
+    currentValue: "",
+    limitValue: "https://api-fxpractice.oanda.com/v3",
+    configKey: "OANDA_BASE_URL",
     configValueState: "SET",
     scope: { cycleId: "cycle-1", symbol: "EUR_USD" },
     expected: true,
-    action: "Increase only if capacity supports it.",
+    expected: false,
+    action: "Configure OANDA PRACTICE endpoint.",
     now: new Date("2026-08-14T21:00:00.000Z"),
   });
   const second = await service.record({
-    kind: "limit",
-    code: "max_observations_per_cycle_reached",
-    title: "Research blocked: maximum observations reached",
-    whatBlocked: "remaining observation candidates",
-    reason: "cycle_budget",
-    currentValue: 400,
-    limitValue: 400,
-    configKey: "FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE",
+    kind: "configuration",
+    code: "broker_not_configured",
+    title: "Broker endpoint is not configured",
+    whatBlocked: "OANDA PRACTICE order submission",
+    reason: "OANDA_BASE_URL is unset",
+    currentValue: "",
+    limitValue: "https://api-fxpractice.oanda.com/v3",
+    configKey: "OANDA_BASE_URL",
     configValueState: "SET",
     scope: { cycleId: "cycle-1", symbol: "EUR_USD" },
-    expected: true,
-    action: "Increase only if capacity supports it.",
+    expected: false,
+    action: "Configure OANDA PRACTICE endpoint.",
     now: new Date("2026-08-14T21:10:00.000Z"),
   });
   assert.equal(first.fingerprint, second.fingerprint);
@@ -53,21 +55,33 @@ const env = {
   assert.equal(sent.length, 1, "identical alert should not resend inside reminder interval");
 
   await service.record({
-    kind: "limit",
-    code: "max_observations_per_cycle_reached",
-    title: "Research blocked: maximum observations reached",
-    whatBlocked: "remaining observation candidates",
-    reason: "cycle_budget",
-    currentValue: 400,
-    limitValue: 400,
-    configKey: "FINCOACH_V2_MAX_OBSERVATIONS_PER_CYCLE",
+    kind: "configuration",
+    code: "broker_not_configured",
+    title: "Broker endpoint is not configured",
+    whatBlocked: "OANDA PRACTICE order submission",
+    reason: "OANDA_BASE_URL is unset",
+    currentValue: "",
+    limitValue: "https://api-fxpractice.oanda.com/v3",
+    configKey: "OANDA_BASE_URL",
     configValueState: "SET",
     scope: { cycleId: "cycle-1", symbol: "EUR_USD" },
-    expected: true,
-    action: "Increase only if capacity supports it.",
+    expected: false,
+    action: "Configure OANDA PRACTICE endpoint.",
     now: new Date("2026-08-14T22:05:00.000Z"),
   });
   assert.equal(sent.length, 2, "alert should resend after reminder interval");
+}
+
+{
+  assert.equal(classifyOperationalAlert({ code: "rr_below_minimum", expected: true }), "EXPECTED_POLICY_REJECTION");
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "spread_above_limit", expected: true }), false);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "broker_authentication_failed", expected: false }), true);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "reconciliation_stale", expected: false }), true);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "market_data_provider_fallback_active", kind: "fallback", expected: false }), true);
+  assert.equal(
+    operatorIncidentKey({ code: "broker_authentication_failed", broker: "oanda_practice", account: "practice", environment: "practice" }),
+    operatorIncidentKey({ code: "BROKER_AUTHENTICATION_FAILED", broker: "oanda_practice", account: "practice", environment: "practice" }),
+  );
 }
 
 {
@@ -93,6 +107,7 @@ const env = {
   assert.equal(snapshot.active.length, 0);
   assert.equal(snapshot.resolvedBlockers.length, 1);
   assert.ok(!JSON.stringify(snapshot).includes("super-secret-value"));
+  assert.match(sent.at(-1) ?? "", /operational recovery/);
 }
 
 {

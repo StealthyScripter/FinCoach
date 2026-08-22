@@ -17,8 +17,21 @@ const enabledConfig = {
   rebalanceThresholdPct: 1,
 };
 
+class DeterministicRealProvider extends FixturePortfolioMarketDataProvider {
+  id = "deterministic-real-provider";
+  capabilities() { return { ...super.capabilities(), fixture: false, live: true }; }
+  async getQuote(symbol: string, assetClass: Parameters<FixturePortfolioMarketDataProvider["getQuote"]>[1], at = new Date()) {
+    const quote = await super.getQuote(symbol, assetClass, at);
+    return { ...quote, source: this.id, fixture: false };
+  }
+  async getHistoricalBars(symbol: string, assetClass: Parameters<FixturePortfolioMarketDataProvider["getHistoricalBars"]>[1], input: Parameters<FixturePortfolioMarketDataProvider["getHistoricalBars"]>[2] = {}) {
+    const bars = await super.getHistoricalBars(symbol, assetClass, input);
+    return bars.map((bar) => ({ ...bar, source: this.id, fixture: false }));
+  }
+}
+
 const repository = new InMemoryPortfolioRepository();
-const service = new PortfolioPlatformService(enabledConfig, repository, new FixturePortfolioMarketDataProvider());
+const service = new PortfolioPlatformService(enabledConfig, repository, new DeterministicRealProvider());
 const start = new Date("2026-08-14T20:00:00.000Z");
 await service.initialize(start);
 
@@ -33,7 +46,7 @@ assert.ok(portfolios.every((item) => item.cash === 1_000));
 const summaries = await service.summaries(start);
 assert.equal(summaries.length, 20);
 assert.ok(summaries.every((item) => item.rank !== null));
-assert.ok(summaries.every((item) => item.providerSource === "portfolio-fixture-market-data"));
+assert.ok(summaries.every((item) => item.providerSource === "deterministic-real-provider"));
 
 const firstPortfolio = portfolios[0];
 const rebalance = await service.rebalance(firstPortfolio.id, new Date("2026-08-14T20:30:00.000Z"));

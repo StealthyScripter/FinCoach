@@ -65,6 +65,12 @@ Read-only retry recovery emits provider- and operation-labelled telemetry for ea
 
 MarketPilot keeps a submitted sandbox-order ledger and can reconcile it against provider order status, pending orders, positions, and trades. Reports identify missing orders and status mismatches, emit `sandbox.reconciliation_completed`, update metrics, and preserve the production-disabled marker. Reconciliation is read-only and never repairs broker state automatically.
 
+Reconciliation health exposes `lastReconciliationAttemptAt`, `lastSuccessfulReconciliationAt`, `reconciliationAgeSeconds`, `reconciliationStatus`, local/broker active trade counts, local/broker pending order counts, mismatched local trades, orphan broker trades, `reconciledSinceStartup`, and scheduler state. Configure `FINCOACH_BROKER_RECONCILIATION_ENABLED=true`, `FINCOACH_BROKER_RECONCILIATION_INTERVAL_MS=300000`, and `FINCOACH_BROKER_RECONCILIATION_MAX_AGE_MS=900000` so stale reconciliation degrades health and raises a deduplicated operator alert instead of silently trusting stale local active-trade rows. The scheduler is single-owner within the process, skips when OANDA PRACTICE is not configured, and does not overlap runs.
+
+OANDA PRACTICE is the authoritative external source for active broker trades. If local state says active trades exist but OANDA does not confirm them, reconciliation records a broker-state mismatch incident and those stale local rows must not indefinitely enforce the practice trade-count guard. If reconciliation is failed or stale, new practice throughput checks fail closed with an operator alert until broker state is current.
+
+`FINCOACH_MAX_ACTIVE_PRACTICE_TRADES` controls only the absolute OANDA PRACTICE/demo trade-count guard. The recommended demo value is `25` for strategy-performance observation. This does not weaken per-trade risk, aggregate risk, drawdown, exposure, correlation, stop-loss, RR, evidence, or live-execution safety gates.
+
 ## Symbol mapping
 
 | Internal | OANDA | MetaTrader |

@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import type { AssetClass, PortfolioHistoricalBar, PortfolioInstrument, PortfolioMarketDataCapability, PortfolioMarketDataFreshnessState, PortfolioMarketDataProvenance, PortfolioMarketStatus, PortfolioOptionContract, PortfolioQuote } from "./domain";
 import type { PortfolioConfig, PortfolioMarketDataProviderKind } from "./config";
+import { operationalBlockerService, type OperationalBlockerService } from "../operationalBlockerService";
 
 export type PortfolioMarketDataProvider = {
   id: string;
@@ -432,7 +433,7 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
     cacheFreshHits: 0, cacheStaleHits: 0, providerRateLimitEvents: 0,
     providerCallsByProvider: {} as Record<string, number>, providerCallsByEndpoint: {} as Record<string, number>, providerCreditsUsed: {} as Record<string, number>, providerCreditsRemaining: {} as Record<string, number>,
   };
-  constructor(private readonly providers: PortfolioMarketDataProvider[], private readonly config: Partial<Pick<PortfolioConfig, "cacheEnabled" | "cacheMaxEntries" | "cacheMaxBytes" | "cachePruneIntervalMs" | "cacheExpiredRetentionMs" | "providerMaxConcurrency" | "providerRateLimitCooldownMs">> = { cacheEnabled: true, cacheMaxEntries: 2_000, cacheMaxBytes: null, providerMaxConcurrency: 8, providerRateLimitCooldownMs: 300_000 }, private readonly production = process.env.NODE_ENV === "production", private readonly durableCache: DurablePortfolioMarketDataCache | null = null) {
+  constructor(private readonly providers: PortfolioMarketDataProvider[], private readonly config: Partial<Pick<PortfolioConfig, "cacheEnabled" | "cacheMaxEntries" | "cacheMaxBytes" | "cachePruneIntervalMs" | "cacheExpiredRetentionMs" | "providerMaxConcurrency" | "providerRateLimitCooldownMs">> = { cacheEnabled: true, cacheMaxEntries: 2_000, cacheMaxBytes: null, providerMaxConcurrency: 8, providerRateLimitCooldownMs: 300_000 }, private readonly production = process.env.NODE_ENV === "production", private readonly durableCache: DurablePortfolioMarketDataCache | null = null, private readonly blockers: OperationalBlockerService = operationalBlockerService) {
     this.cache = new PortfolioMarketDataCache(config.cacheMaxEntries ?? 2_000, config.cacheMaxBytes ?? null);
     this.providerLimiter = new AsyncLimiter(config.providerMaxConcurrency ?? 8);
   }
@@ -529,12 +530,21 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
         return withProvenance(staleEntry.value, staleEntry, "stale_hit", "stale_revalidating");
       }
     }
+    let failedPrimary: { provider: string; code: string; message: string } | null = null;
     for (const provider of candidates) {
       if (this.providerOnCooldown(provider, input.now)) continue;
       const key = marketDataCacheKey({ ...input.cacheKey, provider: provider.id });
-      const entry = await this.fetchWithCoalescing(key, provider, input);
-      if (entry) return withProvenance(entry.value as T, entry as CacheEntry<T>, entry.provenance.cacheStatus, "fresh");
+      const result = await this.fetchWithCoalescing(key, provider, input);
+      if (result.entry) {
+        if (failedPrimary && provider.id !== failedPrimary.provider) {
+          result.entry.provenance.dataKind = "REAL_PROVIDER_FALLBACK";
+          await this.recordFallbackIncident(input, failedPrimary, provider.id);
+        }
+        return withProvenance(result.entry.value as T, result.entry as CacheEntry<T>, result.entry.provenance.cacheStatus, "fresh");
+      }
+      if (!failedPrimary) failedPrimary = { provider: provider.id, code: result.errorCode ?? "provider_failure", message: result.errorMessage ?? "provider failed" };
     }
+    await this.recordMarketDataUnavailable(input, failedPrimary);
     throw providerError("capability_unavailable", `No configured provider returned ${input.endpoint}.`);
   }
   private async fetchWithCoalescing<T extends CacheableValue>(key: string, provider: PortfolioMarketDataProvider, input: { endpoint: string; ttl: { expiresInMs: number; staleForMs: number }; now: Date; fetcher: ProviderFetch<T> }) {
@@ -542,8 +552,12 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
     if (existing) {
       this.telemetryCounters.inFlightCoalescedRequests += 1;
       this.telemetryCounters.providerCallsAvoided += 1;
-      const entry = await existing;
-      return { ...entry, provenance: { ...entry.provenance, cacheStatus: "coalesced" as const } };
+      try {
+        const entry = await existing;
+        return { entry: { ...entry, provenance: { ...entry.provenance, cacheStatus: "coalesced" as const } } };
+      } catch (error) {
+        return { entry: null, errorCode: String((error as { code?: unknown }).code ?? "provider_failure"), errorMessage: error instanceof Error ? error.message : String(error) };
+      }
     }
     this.telemetryCounters.cacheMisses += 1;
     const request = (async () => {
@@ -572,13 +586,13 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
     })();
     this.inFlight.set(key, request as Promise<CacheEntry>);
     try {
-      return await request;
+      return { entry: await request };
     } catch (error) {
       if (isRateLimitError(error)) {
         this.telemetryCounters.providerRateLimitEvents += 1;
         this.providerCooldownUntil.set(provider.id, input.now.getTime() + (this.config.providerRateLimitCooldownMs ?? 300_000));
       }
-      return null;
+      return { entry: null, errorCode: String((error as { code?: unknown }).code ?? "provider_failure"), errorMessage: error instanceof Error ? error.message : String(error) };
     } finally {
       this.inFlight.delete(key);
     }
@@ -590,6 +604,42 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
       ?? this.usableProviders().find((candidate) => supports(candidate, input.capability, input.assetClass) && !this.providerOnCooldown(candidate, input.now));
     if (!provider) return;
     await this.fetchWithCoalescing(key, provider, input).catch(() => null);
+  }
+  private async recordFallbackIncident(input: { endpoint: string; cacheKey: CacheKeyInput; now: Date }, failedPrimary: { provider: string; code: string; message: string }, fallbackProvider: string) {
+    await this.blockers.record({
+      kind: "fallback",
+      code: "market_data_provider_fallback_active",
+      title: "Market-data provider fallback active",
+      whatBlocked: "primary Portfolio market-data provider",
+      reason: `${failedPrimary.provider} failed with ${failedPrimary.code}`,
+      currentValue: { primary: failedPrimary.provider, fallback: fallbackProvider, reason: failedPrimary.code },
+      limitValue: "primary provider healthy",
+      scope: { symbol: input.cacheKey.symbol, component: `${failedPrimary.provider}->${fallbackProvider}` },
+      expected: false,
+      action: "Review provider quota, authentication, and reachability; fallback data remains real provider data.",
+      effect: `Portfolio ${input.endpoint} is using ${fallbackProvider} instead of ${failedPrimary.provider}.`,
+      severity: "warning",
+      alertCategory: "MARKET_DATA_FALLBACK",
+      now: input.now,
+    });
+  }
+  private async recordMarketDataUnavailable(input: { endpoint: string; cacheKey: CacheKeyInput; now: Date }, failure: { provider: string; code: string; message: string } | null) {
+    await this.blockers.record({
+      kind: "dependency",
+      code: "required_market_data_unavailable",
+      title: "Required real market data unavailable",
+      whatBlocked: `Portfolio ${input.endpoint}`,
+      reason: failure ? `${failure.provider} failed with ${failure.code}` : "no configured real provider supports this request",
+      currentValue: failure ? { provider: failure.provider, reason: failure.code } : "NO_PROVIDER",
+      limitValue: "fresh or explicitly stale real provider data",
+      scope: { symbol: input.cacheKey.symbol, component: failure?.provider },
+      expected: false,
+      action: "Restore a configured real market-data provider; fixture or simulated fallback is prohibited for execution-capable workflows.",
+      effect: "Portfolio workflow is blocked/degraded rather than silently using fabricated data.",
+      severity: "critical",
+      alertCategory: "MARKET_DATA_FAILURE",
+      now: input.now,
+    });
   }
   private providerOnCooldown(provider: PortfolioMarketDataProvider, now: Date) {
     return (this.providerCooldownUntil.get(provider.id) ?? 0) > now.getTime();

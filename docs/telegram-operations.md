@@ -4,6 +4,14 @@ FinCoach uses Telegram as an operations and reporting surface for `@WendotFinanc
 
 FinCoach remains demo-only, paper-only, sandbox-only, and OANDA-practice-only. Telegram commands can report status and can request limited demo controls, but they cannot enable live trading, connect live accounts, override account verification, or bypass signal validation.
 
+## Operator Alert Policy
+
+Telegram operations alerts are reserved for operational incidents: configuration failure, authentication failure, provider failure, market-data failure/fallback, broker reconciliation failure, broker state mismatch, execution infrastructure failure, safety-environment failure, and system-health failure. Expected strategy, scientific, and risk-policy rejections remain persisted in database telemetry and summaries but do not send one Telegram message per rejection.
+
+Set `FINCOACH_OPERATOR_ALERT_REPEAT_INTERVAL_MS=3600000` for hourly reminders while the same incident remains unresolved. Incidents are keyed by category, code, provider/broker, symbol when relevant, account/environment, and config key. The first occurrence sends immediately, repeated occurrences increment silently until the repeat interval, and resolution sends one recovery notification.
+
+Inbound polling is controlled separately by `FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED`. Setting it to `false` prevents the `getUpdates` polling loop but does not disable outbound operator alerts when `TELEGRAM_NOTIFICATIONS_ENABLED=true`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` are configured.
+
 ## Configuration
 
 Required for operations notifications:

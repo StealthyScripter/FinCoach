@@ -27,7 +27,19 @@ const config = {
 };
 const now = new Date("2026-08-14T15:00:00.000Z");
 const repository = new InMemoryPortfolioRepository();
-const provider = new FixturePortfolioMarketDataProvider();
+class DeterministicRealProvider extends FixturePortfolioMarketDataProvider {
+  id = "deterministic-real-provider";
+  capabilities() { return { ...super.capabilities(), fixture: false, live: true }; }
+  async getQuote(symbol: string, assetClass: Parameters<FixturePortfolioMarketDataProvider["getQuote"]>[1], at = new Date()) {
+    const quote = await super.getQuote(symbol, assetClass, at);
+    return { ...quote, source: this.id, fixture: false };
+  }
+  async getHistoricalBars(symbol: string, assetClass: Parameters<FixturePortfolioMarketDataProvider["getHistoricalBars"]>[1], input: Parameters<FixturePortfolioMarketDataProvider["getHistoricalBars"]>[2] = {}) {
+    const bars = await super.getHistoricalBars(symbol, assetClass, input);
+    return bars.map((bar) => ({ ...bar, source: this.id, fixture: false }));
+  }
+}
+const provider = new DeterministicRealProvider();
 const service = new PortfolioPlatformService(config, repository, provider);
 await service.initialize(now);
 
@@ -92,5 +104,5 @@ const softwareReady = portfolioReadiness({
 });
 assert.equal(softwareReady.codeReady, true);
 assert.equal(softwareReady.liveExecutionBlocked, true);
-const localFixtureReadiness = portfolioReadiness({ config, provider, blockers: [], env: {} as NodeJS.ProcessEnv });
+const localFixtureReadiness = portfolioReadiness({ config, provider: new FixturePortfolioMarketDataProvider(), blockers: [], env: {} as NodeJS.ProcessEnv });
 assert.equal(localFixtureReadiness.activationReady, false);
