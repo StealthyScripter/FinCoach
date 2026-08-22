@@ -158,7 +158,7 @@ export async function registerRoutes(
     }));
     const v2Body = v2Status.body as Record<string, unknown>;
     const subsystemStates: Record<string, "healthy" | "degraded" | "unhealthy"> = {
-      storage: storageHealth.status === "unavailable" ? "degraded" : "healthy",
+      storage: storageHealth.status === "unavailable" ? "unhealthy" : subsystemState(storageHealth.status),
       portfolio: portfolioSubsystemState(portfolioHealth),
       v2: subsystemState((v2Body.moduleHealth as Record<string, unknown> | undefined)?.operations),
     };
