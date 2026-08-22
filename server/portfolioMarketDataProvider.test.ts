@@ -23,6 +23,8 @@ const config = {
   twelveDataApiKey: "td-key",
   providerCallBudget: 100,
   providerTimeoutMs: 1_000,
+  providerMaxConcurrency: 8,
+  providerRateLimitCooldownMs: 300_000,
   providerCacheTtlMs: 60_000,
   quoteFreshnessMaxMinutes: 60 * 24 * 10,
   cacheEnabled: true,
@@ -36,6 +38,8 @@ const config = {
 class CountingProvider implements PortfolioMarketDataProvider {
   quoteCalls = 0;
   barCalls = 0;
+  activeCalls = 0;
+  maxActiveCalls = 0;
   fail = false;
   constructor(readonly id: string, private readonly delayMs: number) {}
   capabilities() {
@@ -43,9 +47,15 @@ class CountingProvider implements PortfolioMarketDataProvider {
   }
   async getQuote(symbol: string, assetClass: AssetClass, now = new Date()): Promise<PortfolioQuote> {
     this.quoteCalls += 1;
+    this.activeCalls += 1;
+    this.maxActiveCalls = Math.max(this.maxActiveCalls, this.activeCalls);
     await new Promise((resolve) => setTimeout(resolve, this.delayMs));
-    if (this.fail) throw providerError("rate_limited", "rate limited");
-    return { symbol: symbol.toUpperCase(), assetClass, bid: null, ask: null, last: 100 + this.quoteCalls, currency: "USD", observedAt: now.toISOString(), stale: false, source: this.id, fixture: false };
+    try {
+      if (this.fail) throw providerError("rate_limited", "rate limited");
+      return { symbol: symbol.toUpperCase(), assetClass, bid: null, ask: null, last: 100 + this.quoteCalls, currency: "USD", observedAt: now.toISOString(), stale: false, source: this.id, fixture: false };
+    } finally {
+      this.activeCalls -= 1;
+    }
   }
   async getHistoricalBars(symbol: string, assetClass: AssetClass, input = {} as { interval?: string; now?: Date }): Promise<PortfolioHistoricalBar[]> {
     this.barCalls += 1;
@@ -204,11 +214,29 @@ assert.equal(durable.pruneCalls, 1, "durable cache cleanup should be callable th
 const failing = new CountingProvider("failing", 30);
 failing.fail = true;
 const fallback = new CountingProvider("fallback", 30);
-const fallbackRouter = new PortfolioMarketDataRouter([failing, fallback], { cacheEnabled: true, cacheMaxEntries: 100, cacheMaxBytes: null });
+const fallbackRouter = new PortfolioMarketDataRouter([failing, fallback], { cacheEnabled: true, cacheMaxEntries: 100, cacheMaxBytes: null, providerRateLimitCooldownMs: 300_000 });
 await fallbackRouter.getQuote("AAPL", "equity", new Date("2026-08-17T15:00:00.000Z"));
 await fallbackRouter.getQuote("AAPL", "equity", new Date("2026-08-17T15:00:01.000Z"));
 assert.equal(failing.quoteCalls, 1, "fallback should not keep double-calling after valid cached fallback data exists");
 assert.equal(fallback.quoteCalls, 1);
+await fallbackRouter.getQuote("AAPL", "equity", new Date("2026-08-17T15:00:20.000Z"));
+assert.equal(failing.quoteCalls, 1, "rate-limited primary remains on cooldown after fallback cache TTL expires");
+assert.equal(fallback.quoteCalls, 2, "fallback provider refreshes while primary is cooling down");
+
+const burstProvider = new CountingProvider("burst", 5);
+const burstRouter = new PortfolioMarketDataRouter([burstProvider], { cacheEnabled: true, cacheMaxEntries: 500, cacheMaxBytes: null, providerMaxConcurrency: 8 });
+await Promise.all(Array.from({ length: 400 }, (_, index) => burstRouter.getQuote(`SYM${index}`, "equity", new Date("2026-08-17T15:00:00.000Z"))));
+assert.equal(burstProvider.quoteCalls, 400, "400 unique symbols should each make one provider call");
+assert.ok(burstProvider.maxActiveCalls <= 8, `provider concurrency should be bounded to 8, saw ${burstProvider.maxActiveCalls}`);
+
+const failingConcurrent = new CountingProvider("fail-concurrent", 5);
+failingConcurrent.fail = true;
+const failingConcurrentRouter = new PortfolioMarketDataRouter([failingConcurrent], { cacheEnabled: true, cacheMaxEntries: 100, cacheMaxBytes: null, providerMaxConcurrency: 4 });
+await assert.rejects(() => Promise.all(Array.from({ length: 20 }, () => failingConcurrentRouter.getQuote("FAIL", "equity", new Date("2026-08-17T15:00:00.000Z")))), /No configured provider returned quote/);
+assert.equal(failingConcurrent.quoteCalls, 1, "failing identical requests should still coalesce to one failed upstream call");
+failingConcurrent.fail = false;
+await failingConcurrentRouter.getQuote("FAIL", "equity", new Date("2026-08-17T15:06:00.000Z"));
+assert.equal(failingConcurrent.quoteCalls, 2, "in-flight failure should be removed so retry after cooldown can succeed");
 
 const bounded = new PortfolioMarketDataRouter([new CountingProvider("bounded", 60)], { cacheEnabled: true, cacheMaxEntries: 2, cacheMaxBytes: null });
 await bounded.getQuote("A", "equity", new Date("2026-08-17T15:00:00.000Z"));
@@ -217,7 +245,12 @@ await bounded.getQuote("C", "equity", new Date("2026-08-17T15:00:00.000Z"));
 assert.equal(bounded.telemetry().cacheEntries, 2, "cache capacity is bounded");
 assert.equal(bounded.telemetry().cacheEvictions, 1);
 
-assert.equal(marketDataCacheKey({ provider: "p", endpoint: "time_series", symbol: "AAPL", interval: "15min", timezone: "UTC", adjusted: true, outputSize: "compact" }), "portfolio-md|p|time_series|aapl|*|15min|*|utc|adjusted|compact|*|*|*|*|*");
+assert.equal(marketDataCacheKey({ provider: "p", endpoint: "time_series", symbol: "AAPL", interval: "15min", timezone: "UTC", adjusted: true, outputSize: "compact" }), "portfolio-md|p|time_series|aapl|*|15min|*|utc|adjusted|compact|*|*|*|*|*|*");
+assert.notEqual(
+  marketDataCacheKey({ provider: "p", endpoint: "historical_options", symbol: "SPY", interval: "historical", requireGreeks: true }),
+  marketDataCacheKey({ provider: "p", endpoint: "historical_options", symbol: "SPY", interval: "historical", requireGreeks: false }),
+  "option greeks requirement must be part of the cache key",
+);
 await assert.rejects(() => alphaRouter.getQuote("SPY", "option"), /No configured provider returned quote/);
 assert.throws(() => new AlphaVantagePortfolioMarketDataProvider({ ...config, alphaVantageApiKey: null }), /ALPHA_VANTAGE_API_KEY/);
 assert.throws(() => new TwelveDataPortfolioMarketDataProvider({ ...config, twelveDataApiKey: null }), /TWELVE_DATA_API_KEY/);
@@ -229,6 +262,10 @@ const chain = createPortfolioMarketDataProvider("twelve_data", {
   ...loadPortfolioConfig({ FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDERS: "twelve_data,alpha_vantage", TWELVE_DATA_API_KEY: "td", ALPHA_VANTAGE_API_KEY: "av", FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED: "false" } as NodeJS.ProcessEnv),
 });
 assert.equal(chain.capabilities().latestQuote, true);
+const loadedConfig = loadPortfolioConfig({ FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED: "false", FINCOACH_PORTFOLIO_PROVIDER_MAX_CONCURRENCY: "7", FINCOACH_PORTFOLIO_PROVIDER_RATE_LIMIT_COOLDOWN_MS: "12345" } as NodeJS.ProcessEnv);
+assert.equal(loadedConfig.providerMaxConcurrency, 7);
+assert.equal(loadedConfig.providerRateLimitCooldownMs, 12345);
+assert.throws(() => loadPortfolioConfig({ FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED: "false", FINCOACH_PORTFOLIO_PROVIDER_MAX_CONCURRENCY: "0" } as NodeJS.ProcessEnv), /FINCOACH_PORTFOLIO_PROVIDER_MAX_CONCURRENCY/);
 
 assert.throws(() => loadPortfolioConfig({ NODE_ENV: "production", FINCOACH_PORTFOLIO_ENABLED: "true", FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER: "fixture", FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED: "false" } as NodeJS.ProcessEnv), /fixture is not allowed/);
 assert.throws(() => loadPortfolioConfig({ FINCOACH_PORTFOLIO_ENABLED: "true", FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER: "alpha_vantage", FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED: "false" } as NodeJS.ProcessEnv), /ALPHA_VANTAGE_API_KEY/);

@@ -10,6 +10,8 @@ export type PortfolioConfig = {
   alphaVantageApiKey: string | null;
   twelveDataApiKey: string | null;
   providerTimeoutMs: number;
+  providerMaxConcurrency: number;
+  providerRateLimitCooldownMs: number;
   providerCacheTtlMs: number;
   quoteFreshnessMaxMinutes: number;
   fixtureAllowedInProduction: boolean;
@@ -51,6 +53,8 @@ export function loadPortfolioConfig(env: NodeJS.ProcessEnv = process.env): Portf
     alphaVantageApiKey: env.ALPHA_VANTAGE_API_KEY?.trim() || null,
     twelveDataApiKey: env.TWELVE_DATA_API_KEY?.trim() || null,
     providerTimeoutMs: parsePositiveInt(env.FINCOACH_PORTFOLIO_PROVIDER_TIMEOUT_MS, 10_000, "FINCOACH_PORTFOLIO_PROVIDER_TIMEOUT_MS"),
+    providerMaxConcurrency: parsePositiveInt(env.FINCOACH_PORTFOLIO_PROVIDER_MAX_CONCURRENCY, 8, "FINCOACH_PORTFOLIO_PROVIDER_MAX_CONCURRENCY"),
+    providerRateLimitCooldownMs: parsePositiveInt(env.FINCOACH_PORTFOLIO_PROVIDER_RATE_LIMIT_COOLDOWN_MS, 300_000, "FINCOACH_PORTFOLIO_PROVIDER_RATE_LIMIT_COOLDOWN_MS"),
     providerCacheTtlMs: parsePositiveInt(env.FINCOACH_PORTFOLIO_PROVIDER_CACHE_TTL_MS, 60_000, "FINCOACH_PORTFOLIO_PROVIDER_CACHE_TTL_MS"),
     quoteFreshnessMaxMinutes: parsePositiveInt(env.FINCOACH_PORTFOLIO_QUOTE_FRESHNESS_MAX_MINUTES, 1440, "FINCOACH_PORTFOLIO_QUOTE_FRESHNESS_MAX_MINUTES"),
     fixtureAllowedInProduction,

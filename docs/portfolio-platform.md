@@ -43,6 +43,8 @@ Required deployment additions:
 - `ALPHA_VANTAGE_API_KEY=<provider secret>` when Alpha Vantage is configured
 - `FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED=false`
 - `FINCOACH_PORTFOLIO_ALLOW_FIXTURE_PROVIDER=false`
+- `FINCOACH_PORTFOLIO_PROVIDER_MAX_CONCURRENCY=8`
+- `FINCOACH_PORTFOLIO_PROVIDER_RATE_LIMIT_COOLDOWN_MS=300000`
 - `FINCOACH_PORTFOLIO_CACHE_ENABLED=true`
 - `FINCOACH_PORTFOLIO_CACHE_MAX_ENTRIES=1500`
 - `FINCOACH_PORTFOLIO_CACHE_MAX_BYTES=25000000`
@@ -72,7 +74,7 @@ Current implementations:
 
 No live equity/ETF/options prices are fabricated. Unsupported instruments and provider capability gaps are reported as unavailable/degraded.
 
-`FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDERS` accepts a comma-separated provider chain. The router tries configured real providers by capability, coalesces identical in-flight requests, serves fresh cache hits inside the TTL window, serves stale-revalidating data only inside the stale window, and records provider health/telemetry on Portfolio health responses. Completed historical/reference responses are also eligible for the durable PostgreSQL cache when `DATABASE_URL` is available. The Portfolio scheduler prunes durable cache rows whose stale window expired more than `FINCOACH_PORTFOLIO_CACHE_EXPIRED_RETENTION_MS` ago, bounded to 1,000 rows per maintenance pass.
+`FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDERS` accepts a comma-separated provider chain. The router tries configured real providers by capability, coalesces identical in-flight requests, limits unique upstream provider calls with `FINCOACH_PORTFOLIO_PROVIDER_MAX_CONCURRENCY`, puts rate-limited providers on `FINCOACH_PORTFOLIO_PROVIDER_RATE_LIMIT_COOLDOWN_MS` cooldown before fallback, serves fresh cache hits inside the TTL window, serves stale-revalidating data only inside the stale window, and records provider health/telemetry on Portfolio health responses. Completed historical/reference responses are also eligible for the durable PostgreSQL cache when `DATABASE_URL` is available. The Portfolio scheduler prunes durable cache rows whose stale window expired more than `FINCOACH_PORTFOLIO_CACHE_EXPIRED_RETENTION_MS` ago, bounded to 1,000 rows per maintenance pass.
 
 Options support uses observed provider contracts: contract id, underlying, call/put, strike, expiration, bid, ask, last, volume, open interest, implied volatility, multiplier, and ACTIVE/EXPIRING/EXPIRED lifecycle. Expired virtual options require observed underlying settlement input; settlement is blocked if the required market observation is unavailable.
 

@@ -240,10 +240,20 @@ class PgOperationalBlockerStore implements Store {
            effect = EXCLUDED.effect,
            severity = EXCLUDED.severity,
            status = 'active',
-           last_seen_at = EXCLUDED.last_seen_at,
-           last_notified_at = COALESCE(EXCLUDED.last_notified_at, operational_blockers.last_notified_at),
+           first_seen_at = CASE
+             WHEN operational_blockers.status = 'resolved' THEN EXCLUDED.first_seen_at
+             ELSE LEAST(operational_blockers.first_seen_at, EXCLUDED.first_seen_at)
+           END,
+           last_seen_at = GREATEST(operational_blockers.last_seen_at, EXCLUDED.last_seen_at),
+           last_notified_at = CASE
+             WHEN operational_blockers.status = 'resolved' THEN NULL
+             ELSE COALESCE(EXCLUDED.last_notified_at, operational_blockers.last_notified_at)
+           END,
            resolved_at = NULL,
-           occurrence_count = operational_blockers.occurrence_count + EXCLUDED.occurrence_count,
+           occurrence_count = CASE
+             WHEN operational_blockers.status = 'resolved' THEN EXCLUDED.occurrence_count
+             ELSE operational_blockers.occurrence_count + EXCLUDED.occurrence_count
+           END,
            payload = EXCLUDED.payload
          RETURNING *`,
         [record.id, record.fingerprint, record.kind, record.code, record.title, record.whatBlocked, record.reason, JSON.stringify(record.currentValue), JSON.stringify(record.limitValue), record.configKey ?? null, record.configValueState ?? null, JSON.stringify(record.scope ?? {}), record.expected, record.action, record.effect ?? null, record.severity ?? "warning", record.firstSeenAt, record.lastSeenAt, record.lastNotifiedAt, record.occurrenceCount, JSON.stringify(safeRecord(record))],

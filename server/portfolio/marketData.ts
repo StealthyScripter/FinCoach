@@ -41,7 +41,7 @@ export type PortfolioMarketDataTelemetry = {
 type CacheableValue = PortfolioQuote | PortfolioHistoricalBar[] | PortfolioInstrument[] | PortfolioMarketStatus[] | PortfolioOptionContract[];
 type ProviderFetch<T extends CacheableValue> = (provider: PortfolioMarketDataProvider) => Promise<T>;
 type CacheEntry<T extends CacheableValue = CacheableValue> = { key: string; value: T; bytes: number; fetchedAt: number; expiresAt: number; staleUntil: number; providerTimestamp: string | null; provenance: Omit<PortfolioMarketDataProvenance, "freshnessState"> };
-type CacheKeyInput = { provider: string; endpoint: string; symbol?: string; interval?: string | null; assetClass?: AssetClass; exchange?: string | null; timezone?: string | null; adjusted?: boolean | null; outputSize?: string | null; startDate?: string | null; endDate?: string | null; contract?: string | null; expiration?: string | null; historicalDate?: string | null };
+type CacheKeyInput = { provider: string; endpoint: string; symbol?: string; interval?: string | null; assetClass?: AssetClass; exchange?: string | null; timezone?: string | null; adjusted?: boolean | null; outputSize?: string | null; startDate?: string | null; endDate?: string | null; contract?: string | null; expiration?: string | null; historicalDate?: string | null; requireGreeks?: boolean | null };
 type DurablePortfolioMarketDataCache = { get<T extends CacheableValue>(key: string): Promise<CacheEntry<T> | null>; set<T extends CacheableValue>(entry: CacheEntry<T>): Promise<void>; pruneExpired?(input?: { olderThan?: Date; limit?: number }): Promise<number> };
 
 const FIXTURE_PRICES: Record<string, { price: number; assetClass: AssetClass }> = {
@@ -422,7 +422,9 @@ export function createPortfolioMarketDataProvider(kind: PortfolioMarketDataProvi
 export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
   id = "portfolio-market-data-router";
   private readonly cache: PortfolioMarketDataCache;
+  private readonly providerLimiter: AsyncLimiter;
   private readonly inFlight = new Map<string, Promise<CacheEntry>>();
+  private readonly providerCooldownUntil = new Map<string, number>();
   private readonly symbolsRequested = new Set<string>();
   private readonly providerRequestKeys = new Set<string>();
   private readonly telemetryCounters = {
@@ -430,8 +432,9 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
     cacheFreshHits: 0, cacheStaleHits: 0, providerRateLimitEvents: 0,
     providerCallsByProvider: {} as Record<string, number>, providerCallsByEndpoint: {} as Record<string, number>, providerCreditsUsed: {} as Record<string, number>, providerCreditsRemaining: {} as Record<string, number>,
   };
-  constructor(private readonly providers: PortfolioMarketDataProvider[], private readonly config: Partial<Pick<PortfolioConfig, "cacheEnabled" | "cacheMaxEntries" | "cacheMaxBytes" | "cachePruneIntervalMs" | "cacheExpiredRetentionMs">> = { cacheEnabled: true, cacheMaxEntries: 2_000, cacheMaxBytes: null }, private readonly production = process.env.NODE_ENV === "production", private readonly durableCache: DurablePortfolioMarketDataCache | null = null) {
+  constructor(private readonly providers: PortfolioMarketDataProvider[], private readonly config: Partial<Pick<PortfolioConfig, "cacheEnabled" | "cacheMaxEntries" | "cacheMaxBytes" | "cachePruneIntervalMs" | "cacheExpiredRetentionMs" | "providerMaxConcurrency" | "providerRateLimitCooldownMs">> = { cacheEnabled: true, cacheMaxEntries: 2_000, cacheMaxBytes: null, providerMaxConcurrency: 8, providerRateLimitCooldownMs: 300_000 }, private readonly production = process.env.NODE_ENV === "production", private readonly durableCache: DurablePortfolioMarketDataCache | null = null) {
     this.cache = new PortfolioMarketDataCache(config.cacheMaxEntries ?? 2_000, config.cacheMaxBytes ?? null);
+    this.providerLimiter = new AsyncLimiter(config.providerMaxConcurrency ?? 8);
   }
   capabilities() {
     const usable = this.usableProviders();
@@ -444,7 +447,8 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
   async getHistoricalBars(symbol: string, assetClass: AssetClass, input: PortfolioHistoricalRequest = {}) {
     const endpoint = "time_series";
     const interval = input.interval ?? "1day";
-    return this.resolve({ endpoint, capability: "HISTORICAL_OHLCV", assetClass, cacheKey: { provider: "*", endpoint, symbol: symbol.toUpperCase(), assetClass, interval, timezone: input.timezone ?? "UTC", adjusted: input.adjusted ?? true, outputSize: input.outputSize ?? "compact", startDate: input.startDate ?? null, endDate: input.endDate ?? null }, ttl: ttlFor({ endpoint, interval, now: input.now ?? new Date() }), now: input.now ?? new Date(), fetcher: (provider) => {
+    const now = input.now ?? new Date();
+    return this.resolve({ endpoint, capability: "HISTORICAL_OHLCV", assetClass, cacheKey: { provider: "*", endpoint, symbol: symbol.toUpperCase(), assetClass, interval, timezone: input.timezone ?? "UTC", adjusted: input.adjusted ?? true, outputSize: input.outputSize ?? "compact", startDate: input.startDate ?? null, endDate: input.endDate ?? null }, ttl: historicalTtlFor({ interval, now, endDate: input.endDate }), now, fetcher: (provider) => {
       if (!provider.getHistoricalBars) throw providerError("capability_unavailable", "Historical OHLCV unavailable.");
       return provider.getHistoricalBars(symbol, assetClass, input);
     } });
@@ -465,7 +469,7 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
   }
   async getOptionChain(underlying: string, input: { expiration?: string; contract?: string; historicalDate?: string; requireGreeks?: boolean; now?: Date } = {}) {
     const endpoint = input.historicalDate ? "historical_options" : "realtime_options";
-    return this.resolve({ endpoint, capability: "OPTIONS_CHAIN", assetClass: "option", cacheKey: { provider: "*", endpoint, symbol: underlying.toUpperCase(), assetClass: "option", interval: input.historicalDate ? "historical" : "latest", expiration: input.expiration ?? null, contract: input.contract ?? null, historicalDate: input.historicalDate ?? null }, ttl: ttlFor({ endpoint, interval: input.historicalDate ? "1day" : "latest", now: input.now ?? new Date() }), now: input.now ?? new Date(), fetcher: (provider) => {
+    return this.resolve({ endpoint, capability: "OPTIONS_CHAIN", assetClass: "option", cacheKey: { provider: "*", endpoint, symbol: underlying.toUpperCase(), assetClass: "option", interval: input.historicalDate ? "historical" : "latest", expiration: input.expiration ?? null, contract: input.contract ?? null, historicalDate: input.historicalDate ?? null, requireGreeks: input.requireGreeks ?? null }, ttl: ttlFor({ endpoint, interval: input.historicalDate ? "1day" : "latest", now: input.now ?? new Date() }), now: input.now ?? new Date(), fetcher: (provider) => {
       if (!provider.getOptionChain) throw providerError("capability_unavailable", "Options chain unavailable.");
       return provider.getOptionChain(underlying, input);
     } });
@@ -526,6 +530,7 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
       }
     }
     for (const provider of candidates) {
+      if (this.providerOnCooldown(provider, input.now)) continue;
       const key = marketDataCacheKey({ ...input.cacheKey, provider: provider.id });
       const entry = await this.fetchWithCoalescing(key, provider, input);
       if (entry) return withProvenance(entry.value as T, entry as CacheEntry<T>, entry.provenance.cacheStatus, "fresh");
@@ -546,7 +551,7 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
       increment(this.telemetryCounters.providerCallsByProvider, provider.id);
       increment(this.telemetryCounters.providerCallsByEndpoint, input.endpoint);
       this.providerRequestKeys.add(`${provider.id}:${input.endpoint}:${key}`);
-      const value = await input.fetcher(provider);
+      const value = await this.providerLimiter.run(() => input.fetcher(provider));
       const providerTimestamp = latestTimestamp(value);
       const fetchedAt = input.now.getTime();
       const entry: CacheEntry<T> = { key, value, bytes: byteSize(value), fetchedAt, expiresAt: fetchedAt + input.ttl.expiresInMs, staleUntil: fetchedAt + input.ttl.expiresInMs + input.ttl.staleForMs, providerTimestamp, provenance: { provider: provider.id, symbol: symbolFromValue(value), endpoint: input.endpoint, interval: intervalFromKey(key), providerTimestamp, fetchedAt: new Date(fetchedAt).toISOString(), expiresAt: new Date(fetchedAt + input.ttl.expiresInMs).toISOString(), staleUntil: new Date(fetchedAt + input.ttl.expiresInMs + input.ttl.staleForMs).toISOString(), cacheStatus: "miss" } };
@@ -569,7 +574,10 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
     try {
       return await request;
     } catch (error) {
-      if (/rate_limited|quota/.test(String((error as { code?: string }).code ?? error))) this.telemetryCounters.providerRateLimitEvents += 1;
+      if (isRateLimitError(error)) {
+        this.telemetryCounters.providerRateLimitEvents += 1;
+        this.providerCooldownUntil.set(provider.id, input.now.getTime() + (this.config.providerRateLimitCooldownMs ?? 300_000));
+      }
       return null;
     } finally {
       this.inFlight.delete(key);
@@ -578,10 +586,13 @@ export class PortfolioMarketDataRouter implements PortfolioMarketDataProvider {
   private async backgroundRefresh<T extends CacheableValue>(key: string, input: { endpoint: string; capability: PortfolioMarketDataCapability; assetClass?: AssetClass; ttl: { expiresInMs: number; staleForMs: number }; now: Date; fetcher: ProviderFetch<T> }) {
     if (this.inFlight.has(key)) return;
     const cachedProvider = key.split("|")[1];
-    const provider = this.usableProviders().find((candidate) => candidate.id === cachedProvider && supports(candidate, input.capability, input.assetClass))
-      ?? this.usableProviders().find((candidate) => supports(candidate, input.capability, input.assetClass));
+    const provider = this.usableProviders().find((candidate) => candidate.id === cachedProvider && supports(candidate, input.capability, input.assetClass) && !this.providerOnCooldown(candidate, input.now))
+      ?? this.usableProviders().find((candidate) => supports(candidate, input.capability, input.assetClass) && !this.providerOnCooldown(candidate, input.now));
     if (!provider) return;
     await this.fetchWithCoalescing(key, provider, input).catch(() => null);
+  }
+  private providerOnCooldown(provider: PortfolioMarketDataProvider, now: Date) {
+    return (this.providerCooldownUntil.get(provider.id) ?? 0) > now.getTime();
   }
   private cacheEnabled() { return this.config.cacheEnabled !== false; }
   private usableProviders() { return this.providers.filter((provider) => !(this.production && provider.capabilities().fixture)); }
@@ -592,7 +603,37 @@ export function marketDataCacheKey(input: CacheKeyInput) {
     "portfolio-md", input.provider, input.endpoint, input.symbol ?? "*", input.assetClass ?? "*", input.interval ?? "*", input.exchange ?? "*",
     input.timezone ?? "*", input.adjusted === null || input.adjusted === undefined ? "*" : input.adjusted ? "adjusted" : "raw",
     input.outputSize ?? "*", input.startDate ?? "*", input.endDate ?? "*", input.expiration ?? "*", input.contract ?? "*", input.historicalDate ?? "*",
+    input.requireGreeks === null || input.requireGreeks === undefined ? "*" : input.requireGreeks ? "greeks" : "no-greeks",
   ].join("|").toLowerCase();
+}
+
+class AsyncLimiter {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+  constructor(private readonly limit: number) {}
+  async run<T>(work: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await work();
+    } finally {
+      this.release();
+    }
+  }
+  private async acquire() {
+    if (this.active < this.limit) {
+      this.active += 1;
+      return;
+    }
+    await new Promise<void>((resolve) => this.waiters.push(resolve));
+  }
+  private release() {
+    const next = this.waiters.shift();
+    if (next) {
+      next();
+      return;
+    }
+    this.active -= 1;
+  }
 }
 
 function instantiateProvider(kind: PortfolioMarketDataProviderKind, config: PortfolioConfig) {
@@ -611,6 +652,21 @@ function ttlFor(input: { endpoint: string; interval: string; now: Date }) {
   if (input.interval === "60min") return boundaryTtl(input.now, 60, 30_000);
   if (input.interval === "1day") return { expiresInMs: msUntilNextDailyCompletion(input.now), staleForMs: 6 * 3_600_000 };
   return { expiresInMs: 60_000, staleForMs: 300_000 };
+}
+
+function historicalTtlFor(input: { interval: string; now: Date; endDate?: string }) {
+  if (input.endDate && historicalRangeClosed(input.endDate, input.now)) {
+    return { expiresInMs: 7 * 86_400_000, staleForMs: 30 * 86_400_000 };
+  }
+  return ttlFor({ endpoint: "time_series", interval: input.interval, now: input.now });
+}
+
+function historicalRangeClosed(endDate: string, now: Date) {
+  const parsed = Date.parse(endDate.includes("T") ? endDate : `${endDate}T23:59:59.999Z`);
+  if (!Number.isFinite(parsed)) return false;
+  const today = new Date(now);
+  today.setUTCHours(0, 0, 0, 0);
+  return parsed < today.getTime();
 }
 
 function boundaryTtl(now: Date, minutes: number, graceMs: number) {
@@ -682,6 +738,9 @@ function errorCodeFromTwelveData(code: unknown) {
   return "provider_error";
 }
 export function providerError(code: string, message: string) { const error = new Error(message) as Error & { code: string }; error.code = code; return error; }
+function isRateLimitError(error: unknown) {
+  return /rate_limited|quota|provider_budget_exhausted/.test(String((error as { code?: string }).code ?? error));
+}
 
 function mapAlphaOption(row: Record<string, unknown>, underlying: string, source: string, now: Date): PortfolioOptionContract {
   const expiration = string(row.expiration) || string(row.expirationDate);
