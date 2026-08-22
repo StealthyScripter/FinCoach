@@ -51,6 +51,7 @@ function config() {
     webhookUrl: null,
     notificationsEnabled: true,
     signalsEnabled: false,
+    inboundPollingEnabled: true,
     dailySummaryHourUtc: 22,
     weeklySummaryDay: 0,
     weeklySummaryHourUtc: 22,
@@ -81,6 +82,15 @@ async function waitFor(predicate: () => boolean) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   assert.fail("condition not reached");
+}
+
+{
+  const receiver = new TelegramUpdateReceiver({ ...config(), inboundPollingEnabled: false }, new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), okFetch());
+  receiver.start();
+  const health = receiver.health();
+  assert.equal(health.running, false);
+  assert.equal(health.ownershipState, "blocked");
+  assert.equal(health.lastPollError, "telegram_inbound_polling_disabled");
 }
 
 console.log("telegram update receiver ownership tests passed");

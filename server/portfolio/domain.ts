@@ -86,6 +86,7 @@ export type PortfolioQuote = {
   stale: boolean;
   source: string;
   fixture: boolean;
+  marketData?: PortfolioMarketDataProvenance;
 };
 
 export type PortfolioHistoricalBar = {
@@ -102,6 +103,24 @@ export type PortfolioHistoricalBar = {
   observedAt: string;
   source: string;
   fixture: boolean;
+  marketData?: PortfolioMarketDataProvenance;
+};
+
+export type PortfolioMarketDataFreshnessState = "fresh" | "stale_revalidating" | "expired" | "unavailable";
+
+export type PortfolioMarketDataProvenance = {
+  provider: string;
+  symbol: string;
+  endpoint: string;
+  interval: string | null;
+  providerTimestamp: string | null;
+  fetchedAt: string;
+  expiresAt: string;
+  staleUntil: string;
+  cacheStatus: "miss" | "hit" | "coalesced" | "stale_hit";
+  freshnessState: PortfolioMarketDataFreshnessState;
+  apiCreditsUsed?: number | null;
+  apiCreditsLeft?: number | null;
 };
 
 export type PortfolioInstrument = {
@@ -274,6 +293,8 @@ export type PortfolioHealth = {
   marketDataAgeSeconds: number | null;
   schedulerHealth: "disabled" | "idle";
   readiness?: PortfolioReadiness;
+  marketDataTelemetry?: Record<string, unknown>;
+  marketDataProviderHealth?: Record<string, unknown>;
 };
 
 export type PortfolioReadiness = {

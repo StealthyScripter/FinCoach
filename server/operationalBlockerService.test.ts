@@ -113,3 +113,41 @@ const env = {
   });
   assert.equal(sent.length, before, "Telegram-disabled environment must not send");
 }
+
+{
+  const service = new OperationalBlockerService({ TELEGRAM_NOTIFICATIONS_ENABLED: "false" } as NodeJS.ProcessEnv, notifications);
+  const first = await service.record({
+    kind: "lifecycle",
+    code: "forward_test_candidate_rejected",
+    title: "Forward-test candidate rejected",
+    whatBlocked: "forward-test candidate",
+    reason: "court verdict not eligible",
+    currentValue: "reject",
+    limitValue: "approve_for_forward_test",
+    scope: { cycleId: "cycle-1", strategyId: "strategy-1", component: "forward-testing" },
+    expected: true,
+    action: "Let evidence mature.",
+    now: new Date("2026-08-14T21:00:00.000Z"),
+  });
+  const second = await service.record({
+    kind: "lifecycle",
+    code: "forward_test_candidate_rejected",
+    title: "Forward-test candidate rejected",
+    whatBlocked: "forward-test candidate",
+    reason: "court verdict not eligible",
+    currentValue: "reject",
+    limitValue: "approve_for_forward_test",
+    scope: { cycleId: "cycle-2", strategyId: "strategy-1", component: "forward-testing" },
+    expected: true,
+    action: "Let evidence mature.",
+    now: new Date("2026-08-14T22:00:00.000Z"),
+  });
+  assert.equal(first.fingerprint, second.fingerprint, "known repeated eligibility blockers aggregate across cycles");
+  const records = await service.list();
+  assert.equal(records.length, 1);
+  assert.equal(records[0].occurrenceCount, 2);
+  assert.equal(records[0].firstSeenAt, "2026-08-14T21:00:00.000Z");
+  assert.equal(records[0].lastSeenAt, "2026-08-14T22:00:00.000Z");
+}
+
+console.log("operational blocker service tests passed");

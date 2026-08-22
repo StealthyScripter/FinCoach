@@ -11,7 +11,7 @@ import { PortfolioResearchEngine, researchAllocation } from "./research";
 import { portfolioReadiness } from "./readiness";
 
 type RankedSummary = PortfolioSummary & { score: number; confidence: number };
-export type PortfolioPlatformLike = Pick<PortfolioPlatformService, "summaries" | "health">;
+export type PortfolioPlatformLike = Pick<PortfolioPlatformService, "summaries" | "health" | "maintenance">;
 
 export class PortfolioPlatformService {
   private initialized = false;
@@ -74,6 +74,7 @@ export class PortfolioPlatformService {
     const strategies = await this.repository.listStrategies();
     const portfolios = await this.repository.listPortfolios();
     const results: RankedSummary[] = [];
+    await this.prefetchSummaryQuotes(portfolios);
     for (const portfolio of portfolios) {
       const strategy = strategies.find((item) => item.id === portfolio.strategyId);
       if (!strategy) continue;
@@ -200,7 +201,15 @@ export class PortfolioPlatformService {
       marketDataAgeSeconds: this.lastRefresh ? Math.max(0, Math.round((now.getTime() - Date.parse(this.lastRefresh)) / 1000)) : null,
       schedulerHealth: this.config.autostart ? "idle" : "disabled",
       readiness: portfolioReadiness({ config: this.config, provider: this.marketData, blockers: this.blockers }),
+      marketDataTelemetry: "telemetry" in this.marketData && typeof this.marketData.telemetry === "function" ? this.marketData.telemetry() : undefined,
+      marketDataProviderHealth: "health" in this.marketData && typeof this.marketData.health === "function" ? this.marketData.health() : undefined,
     };
+  }
+
+  async maintenance(now = new Date()) {
+    const marketDataWithPrune = this.marketData as PortfolioMarketDataProvider & { pruneDurableCache?: (now?: Date) => Promise<{ pruned: number; durable: boolean }> };
+    if (typeof marketDataWithPrune.pruneDurableCache !== "function") return { marketDataCache: { durable: false, pruned: 0 }, liveExecutionBlocked: true };
+    return { marketDataCache: await marketDataWithPrune.pruneDurableCache(now), liveExecutionBlocked: true };
   }
 
   private async summary(strategy: PortfolioStrategy, portfolio: PortfolioAccount, now: Date): Promise<RankedSummary> {
@@ -224,6 +233,16 @@ export class PortfolioPlatformService {
       valued.push({ ...position, currentPrice, marketValue, unrealizedPnl: currentPrice ? round((currentPrice - position.averageCost) * position.quantity) : 0, allocationPct: pct(marketValue, nav), stale: quote?.stale ?? true });
     }
     return valued;
+  }
+
+  private async prefetchSummaryQuotes(portfolios: PortfolioAccount[]) {
+    const unique = new Map<string, { symbol: string; assetClass: AssetClass }>();
+    for (const portfolio of portfolios) {
+      for (const position of await this.repository.listPositions(portfolio.id)) {
+        unique.set(`${position.symbol}:${position.assetClass}`, { symbol: position.symbol, assetClass: position.assetClass });
+      }
+    }
+    await Promise.all([...unique.values()].map((item) => this.marketData.getQuote(item.symbol, item.assetClass).catch(() => null)));
   }
 
   private async quote(symbol: string, assetClass: AssetClass, now: Date) {

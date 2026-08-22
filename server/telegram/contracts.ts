@@ -11,6 +11,7 @@ export type TelegramEnvironmentConfig = {
   webhookUrl: string | null;
   notificationsEnabled: boolean;
   signalsEnabled: boolean;
+  inboundPollingEnabled: boolean;
   dailySummaryHourUtc: number;
   weeklySummaryDay: number;
   weeklySummaryHourUtc: number;

@@ -38,10 +38,16 @@ Required deployment additions:
 - `PUBLIC_REGISTRATION_ENABLED=false`
 - `FINCOACH_PORTFOLIO_ENABLED=true` only when the operator wants Portfolio online
 - `FINCOACH_PORTFOLIO_STARTING_CAPITAL=100000`
-- `FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER=alpha_vantage`
-- `ALPHA_VANTAGE_API_KEY=<provider secret>`
+- `FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDERS=twelve_data,alpha_vantage`
+- `TWELVE_DATA_API_KEY=<provider secret>` when Twelve Data is configured
+- `ALPHA_VANTAGE_API_KEY=<provider secret>` when Alpha Vantage is configured
 - `FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED=false`
 - `FINCOACH_PORTFOLIO_ALLOW_FIXTURE_PROVIDER=false`
+- `FINCOACH_PORTFOLIO_CACHE_ENABLED=true`
+- `FINCOACH_PORTFOLIO_CACHE_MAX_ENTRIES=1500`
+- `FINCOACH_PORTFOLIO_CACHE_MAX_BYTES=25000000`
+- `FINCOACH_PORTFOLIO_CACHE_PRUNE_INTERVAL_MS=3600000`
+- `FINCOACH_PORTFOLIO_CACHE_EXPIRED_RETENTION_MS=86400000`
 
 Safe defaults leave Portfolio disabled and live execution blocked.
 
@@ -60,10 +66,13 @@ The provider abstraction supports capability-driven routing across market-data p
 Current implementations:
 
 - `none`: production-safe unavailable provider that records blockers instead of inventing prices.
+- `twelve_data`: real provider for equity/ETF/index-proxy quote, intraday/daily OHLCV, symbol search, and US market status approximation. Requires `TWELVE_DATA_API_KEY`; the key is sent in the Authorization header rather than the request URL.
 - `alpha_vantage`: real provider for equity/ETF/index-proxy quote, historical daily OHLCV, symbol search, broad market status, and observed options chain/quote data where the provider account supports it. Requires `ALPHA_VANTAGE_API_KEY`.
 - `fixture`: deterministic test/development provider. It is marked as fixture/non-live and is rejected for production Portfolio activation.
 
 No live equity/ETF/options prices are fabricated. Unsupported instruments and provider capability gaps are reported as unavailable/degraded.
+
+`FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDERS` accepts a comma-separated provider chain. The router tries configured real providers by capability, coalesces identical in-flight requests, serves fresh cache hits inside the TTL window, serves stale-revalidating data only inside the stale window, and records provider health/telemetry on Portfolio health responses. Completed historical/reference responses are also eligible for the durable PostgreSQL cache when `DATABASE_URL` is available. The Portfolio scheduler prunes durable cache rows whose stale window expired more than `FINCOACH_PORTFOLIO_CACHE_EXPIRED_RETENTION_MS` ago, bounded to 1,000 rows per maintenance pass.
 
 Options support uses observed provider contracts: contract id, underlying, call/put, strike, expiration, bid, ask, last, volume, open interest, implied volatility, multiplier, and ACTIVE/EXPIRING/EXPIRED lifecycle. Expired virtual options require observed underlying settlement input; settlement is blocked if the required market observation is unavailable.
 
@@ -112,7 +121,7 @@ Migration `0020_auth_and_portfolio_platform.sql` is additive and creates:
 - `portfolio_decision_journal`
 - `portfolio_rankings`
 
-Migration `0021_portfolio_extended_tables.sql` adds durable orders, strategy versions, benchmarks, rebalances, allocations, and market-data cache tables. Migration `0022_portfolio_research_validation.sql` adds durable research hypotheses, backtests, walk-forward validation, and virtual forward-test evidence tables.
+Migration `0021_portfolio_orders_and_instruments.sql` adds durable orders, strategy versions, benchmarks, rebalances, allocations, and instruments. Migration `0022_portfolio_research_validation.sql` adds durable research hypotheses, backtests, walk-forward validation, and virtual forward-test evidence tables. Migration `0024_portfolio_market_data_cache.sql` adds the durable Portfolio market-data cache.
 
 These migrations use idempotent `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` statements inside transactions. They do not update, delete, truncate, or destructively rewrite existing rows.
 

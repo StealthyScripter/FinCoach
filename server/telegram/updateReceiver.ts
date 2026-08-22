@@ -48,6 +48,12 @@ export class TelegramUpdateReceiver {
 
   start() {
     if (this.running) return this;
+    if (!this.config.inboundPollingEnabled) {
+      this.ownershipState = "blocked";
+      this.lastPollError = "telegram_inbound_polling_disabled";
+      structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_not_started", message: "Telegram update receiver not started", reason: "telegram_inbound_polling_disabled" });
+      return this;
+    }
     if (!this.config.notificationsEnabled || !this.config.botToken) {
       console.warn("Telegram update receiver not started: bot token or notifications are not configured");
       structuredLogger.telegram({ level: "warn", event: "telegram_update_receiver_not_started", message: "Telegram update receiver not started", reason: "bot_token_or_notifications_not_configured" });
@@ -164,7 +170,7 @@ export class TelegramUpdateReceiver {
   }
 
   private reachabilityState(): "available" | "degraded" | "unavailable" | "unknown" {
-    if (!this.config.botToken || !this.config.notificationsEnabled) return "unavailable";
+    if (!this.config.inboundPollingEnabled || !this.config.botToken || !this.config.notificationsEnabled) return "unavailable";
     if (!this.lastPollSuccessAt && !this.lastPollFailureAt) return "unknown";
     if (this.consecutivePollFailures >= 3) return "unavailable";
     if (this.consecutivePollFailures > 0) return "degraded";

@@ -11,19 +11,21 @@ export function portfolioReadiness(input: { config: PortfolioConfig; provider: P
 } {
   const env = input.env ?? process.env;
   const capabilities = input.provider.capabilities();
+  const configuredProviders = input.config.marketDataProviders ?? [input.config.marketDataProvider];
   const softwareCapabilities = ["QUOTE", "HISTORICAL_OHLCV", "INSTRUMENT_SEARCH", "OPTIONS_CHAIN", "MARKET_STATUS"] as const;
   const codeReady = softwareCapabilities.every((capability) => capabilities.capabilities.includes(capability));
   const authReady = env.FINCOACH_AUTH_REQUIRED !== "false";
   const configReady = input.config.enabled
     && input.config.liveExecutionEnabled === false
-    && input.config.marketDataProvider === "alpha_vantage"
-    && Boolean(input.config.alphaVantageApiKey);
+    && configuredProviders.some((provider) => provider === "alpha_vantage" || provider === "twelve_data")
+    && (!configuredProviders.includes("alpha_vantage") || Boolean(input.config.alphaVantageApiKey))
+    && (!configuredProviders.includes("twelve_data") || Boolean(input.config.twelveDataApiKey));
   const providerReady = capabilities.live && !capabilities.fixture && capabilities.latestQuote && capabilities.historical;
   const runtimeReady = input.blockers.length === 0;
   const blockers = [
     ...input.blockers.map((item) => ({ code: String(item.code ?? "portfolio_blocker"), action: String(item.action ?? "Resolve Portfolio blocker.") })),
   ];
-  if (!configReady) blockers.push({ code: "portfolio_config_not_ready", action: "Set FINCOACH_PORTFOLIO_ENABLED=true, FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER=alpha_vantage, ALPHA_VANTAGE_API_KEY, and keep FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED=false." });
+  if (!configReady) blockers.push({ code: "portfolio_config_not_ready", action: "Set FINCOACH_PORTFOLIO_ENABLED=true, configure FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDERS with twelve_data and/or alpha_vantage plus matching API keys, and keep FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED=false." });
   if (!providerReady) blockers.push({ code: "portfolio_provider_not_verified", action: "Verify real provider health and capabilities before activation." });
   return {
     status: codeReady && configReady && providerReady && runtimeReady ? "ready" : "not_ready",

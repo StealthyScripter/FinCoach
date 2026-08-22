@@ -15,7 +15,23 @@ const revision = deploymentMetadata({
   FINCOACH_BUILD_ID: "build-17",
 } as NodeJS.ProcessEnv);
 
-assert.deepEqual(revision, { commit: "abc123def456", buildId: "build-17", source: "FINCOACH_BUILD_COMMIT" });
+assert.equal(revision.commit, "abc123def456");
+assert.equal(revision.buildId, "build-17");
+assert.equal(revision.source, "FINCOACH_BUILD_COMMIT");
+assert.equal(revision.runtimeCommit, "abc123def456");
+assert.equal(revision.revisionMatch, true);
+
+const mismatchedRevision = deploymentMetadata({
+  FINCOACH_BUILD_COMMIT: "runtime-old",
+  FINCOACH_BUILD_ID: "runtime-old-build",
+  GIT_COMMIT: "runtime-newer",
+} as NodeJS.ProcessEnv, { buildCommit: "embedded-new", buildId: "embedded-new" });
+assert.equal(mismatchedRevision.commit, "embedded-new");
+assert.equal(mismatchedRevision.buildId, "embedded-new");
+assert.equal(mismatchedRevision.buildCommit, "embedded-new");
+assert.equal(mismatchedRevision.runtimeCommit, "runtime-old");
+assert.equal(mismatchedRevision.runtimeBuildId, "runtime-old-build");
+assert.equal(mismatchedRevision.revisionMatch, false);
 
 const input = {
   cycleId: "cycle-1",

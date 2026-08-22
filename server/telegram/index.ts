@@ -32,7 +32,7 @@ export async function startTelegramOperations() {
   }
   const scheduler = telegramScheduler.start();
   const marketSnapshotScheduler = marketSnapshotService.start();
-  const updateReceiver = telegramUpdateReceiver.start();
+  const updateReceiver = config.inboundPollingEnabled ? telegramUpdateReceiver.start() : telegramUpdateReceiver;
   return { started: true, validation, scheduler, marketSnapshotScheduler, updateReceiver };
 }
 

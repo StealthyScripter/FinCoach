@@ -37,6 +37,7 @@ export class PortfolioScheduler {
     try {
       await this.service.summaries(new Date());
       if ("research" in this.service && typeof this.service.research === "function") await this.service.research(5, new Date());
+      if ("maintenance" in this.service && typeof this.service.maintenance === "function") await this.service.maintenance(new Date());
       this.lastRunAt = new Date().toISOString();
       this.lastError = null;
       this.providerState = "healthy";

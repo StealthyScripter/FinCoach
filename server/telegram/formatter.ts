@@ -212,6 +212,7 @@ export function redactedConfig(config: TelegramEnvironmentConfig) {
     webhookUrlConfigured: Boolean(config.webhookUrl),
     notificationsEnabled: config.notificationsEnabled,
     signalsEnabled: config.signalsEnabled,
+    inboundPollingEnabled: config.inboundPollingEnabled,
     dailySummaryHourUtc: config.dailySummaryHourUtc,
     weeklySummaryDay: config.weeklySummaryDay,
     weeklySummaryHourUtc: config.weeklySummaryHourUtc,

@@ -51,6 +51,16 @@ type Store = {
 
 const DEFAULT_REMINDER_MS = 6 * 60 * 60_000;
 const DEFAULT_LIMIT = 100;
+const CYCLE_AGGREGATED_CODES = new Set([
+  "forward_test_candidate_rejected",
+  "forward_testing_disabled",
+  "max_active_forward_tests_reached",
+  "max_active_forward_tests_zero",
+  "max_active_research_signals_reached",
+  "max_active_research_signals_zero",
+  "research_signal_creation_disabled",
+  "signal_candidate_rejected",
+]);
 
 export class OperationalBlockerService {
   private store: Store | null = null;
@@ -288,15 +298,22 @@ function normalizeEvent(event: OperationalBlockerEvent): OperationalBlockerEvent
 }
 
 function fingerprintFor(event: OperationalBlockerEvent) {
+  const scope = CYCLE_AGGREGATED_CODES.has(event.code) && event.expected ? withoutCycleId(event.scope) : event.scope;
   return createHash("sha256").update(JSON.stringify({
     kind: event.kind,
     code: event.code,
-    scope: event.scope ?? {},
+    scope: scope ?? {},
     currentValue: event.currentValue,
     limitValue: event.limitValue,
     configKey: event.configKey ?? null,
     configValueState: event.configValueState ?? null,
   })).digest("hex");
+}
+
+function withoutCycleId(scope: OperationalBlockerEvent["scope"]) {
+  if (!scope) return undefined;
+  const { cycleId: _cycleId, ...rest } = scope;
+  return rest;
 }
 
 function formatBlockerMessage(record: OperationalBlockerRecord) {

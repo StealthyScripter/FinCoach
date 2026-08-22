@@ -40,7 +40,7 @@ export FINCOACH_DB_BACKUP_PATH=/path/to/the/new/backup.dump
 export FINCOACH_DB_BACKUP_SHA256_PATH=/path/to/the/new/backup.dump.sha256
 ```
 
-Confirm migration status. Only `0023_auth_sessions` should be pending before applying this repair:
+Confirm migration status. Only the intended unreleased additive migrations, such as `0023_auth_sessions` and `0024_portfolio_market_data_cache`, should be pending before applying this repair:
 
 ```bash
 npm run db:migrate:status
@@ -62,7 +62,7 @@ npm run check
 env -u DATABASE_URL -u TEST_DATABASE_URL \
   -u TELEGRAM_BOT_TOKEN -u TELEGRAM_ALLOWED_USER_ID -u TELEGRAM_CHAT_ID -u TELEGRAM_SIGNAL_CHAT_ID \
   -u TELEGRAM_WEBHOOK_SECRET -u TELEGRAM_WEBHOOK_URL \
-  -u OANDA_API_TOKEN -u OANDA_ACCOUNT_ID -u ALPHA_VANTAGE_API_KEY -u FINCOACH_AUTH_SESSION_SECRET \
+  -u OANDA_API_TOKEN -u OANDA_ACCOUNT_ID -u ALPHA_VANTAGE_API_KEY -u TWELVE_DATA_API_KEY -u FINCOACH_AUTH_SESSION_SECRET \
   NODE_ENV=test \
   FINCOACH_LIVE_EXECUTION_ENABLED=false \
   FINCOACH_PAPER_EXECUTION_ENABLED=false \
@@ -71,6 +71,7 @@ env -u DATABASE_URL -u TEST_DATABASE_URL \
   FINCOACH_PORTFOLIO_ENABLED=true \
   FINCOACH_PORTFOLIO_MARKET_DATA_PROVIDER=fixture \
   FINCOACH_PORTFOLIO_ALLOW_FIXTURE_PROVIDER=true \
+  FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED=false \
   FINCOACH_TELEGRAM_POLL_LOCK_PATH="/tmp/fincoach-telegram-test-$$.lock" \
   npm test
 npm run build

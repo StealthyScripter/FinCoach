@@ -8,7 +8,6 @@ import { execFileSync } from "child_process";
 const allowlist = [
   "@google/generative-ai",
   "axios",
-  "connect-pg-simple",
   "cors",
   "date-fns",
   "drizzle-orm",

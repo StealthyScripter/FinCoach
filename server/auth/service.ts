@@ -1,7 +1,6 @@
 import { randomBytes, randomUUID, timingSafeEqual, pbkdf2Sync } from "crypto";
 import type { Express, Request, Response, NextFunction } from "express";
 import session from "express-session";
-import connectPgSimple from "connect-pg-simple";
 import { Pool } from "pg";
 import { structuredLogger } from "../structuredLogger";
 
@@ -31,6 +30,8 @@ const DEFAULT_ITERATIONS = 210_000;
 const KEY_LENGTH = 32;
 const DIGEST = "sha256";
 const authAttempts = new Map<string, { count: number; resetAt: number }>();
+const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+const SESSION_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
 
 export interface AuthRepository {
   create(user: AuthUser): Promise<AuthUser>;
@@ -329,21 +330,7 @@ function createAuthRepository() {
 
 function sessionStore() {
   if (!process.env.DATABASE_URL) return undefined;
-  const PgSession = connectPgSimple(session);
-  return new PgSession({
-    conString: process.env.DATABASE_URL,
-    createTableIfMissing: false,
-    tableName: "auth_sessions",
-    errorLog: (message: unknown, error?: unknown) => {
-      structuredLogger.application({
-        level: "error",
-        module: "auth",
-        event: "auth_session_store_error",
-        message: String(message),
-        error,
-      });
-    },
-  });
+  return new PgAuthSessionStore(process.env.DATABASE_URL);
 }
 
 function sessionSecret() {
@@ -371,6 +358,89 @@ function mapUser(row: Record<string, unknown>): AuthUser {
     updatedAt: new Date(String(row.updated_at)).toISOString(),
     lastLoginAt: row.last_login_at ? new Date(String(row.last_login_at)).toISOString() : null,
   };
+}
+
+class PgAuthSessionStore extends session.Store {
+  private readonly pool: Pool;
+  private readonly pruneTimer: NodeJS.Timeout;
+
+  constructor(databaseUrl: string) {
+    super();
+    this.pool = new Pool({ connectionString: databaseUrl });
+    this.pool.on("error", (error) => this.logError("PG auth session pool error", error));
+    this.pruneTimer = setInterval(() => void this.pruneExpired(), SESSION_PRUNE_INTERVAL_MS);
+    this.pruneTimer.unref();
+    void this.pruneExpired();
+  }
+
+  get(sid: string, callback: (err: unknown, session?: session.SessionData | null) => void) {
+    this.pool.query("SELECT sess FROM auth_sessions WHERE sid = $1 AND expire > now()", [sid])
+      .then((result) => callback(null, result.rows[0]?.sess ?? null))
+      .catch((error) => {
+        this.logError("Failed to load auth session", error);
+        callback(error);
+      });
+  }
+
+  set(sid: string, sess: session.SessionData, callback?: (err?: unknown) => void) {
+    const expire = sessionExpiration(sess);
+    this.pool.query(
+      `INSERT INTO auth_sessions (sid, sess, expire)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (sid) DO UPDATE SET sess = EXCLUDED.sess, expire = EXCLUDED.expire`,
+      [sid, JSON.stringify(sess), expire],
+    ).then(() => callback?.())
+      .catch((error) => {
+        this.logError("Failed to save auth session", error);
+        callback?.(error);
+      });
+  }
+
+  destroy(sid: string, callback?: (err?: unknown) => void) {
+    this.pool.query("DELETE FROM auth_sessions WHERE sid = $1", [sid])
+      .then(() => callback?.())
+      .catch((error) => {
+        this.logError("Failed to destroy auth session", error);
+        callback?.(error);
+      });
+  }
+
+  touch(sid: string, sess: session.SessionData, callback?: () => void) {
+    const expire = sessionExpiration(sess);
+    this.pool.query("UPDATE auth_sessions SET expire = $2 WHERE sid = $1", [sid, expire])
+      .then(() => callback?.())
+      .catch((error) => {
+        this.logError("Failed to touch auth session", error);
+        callback?.();
+      });
+  }
+
+  close() {
+    clearInterval(this.pruneTimer);
+    return this.pool.end();
+  }
+
+  private async pruneExpired() {
+    try {
+      await this.pool.query("DELETE FROM auth_sessions WHERE expire < now()");
+    } catch (error) {
+      this.logError("Failed to prune auth sessions", error);
+    }
+  }
+
+  private logError(message: string, error: unknown) {
+    structuredLogger.application({ level: "error", module: "auth", event: "auth_session_store_error", message, error });
+  }
+}
+
+function sessionExpiration(sess: session.SessionData) {
+  const expires = sess.cookie?.expires;
+  if (expires instanceof Date) return expires;
+  if (typeof expires === "string") {
+    const parsed = new Date(expires);
+    if (Number.isFinite(parsed.getTime())) return parsed;
+  }
+  return new Date(Date.now() + SESSION_TTL_MS);
 }
 
 function hashIdentifier(value: string) {

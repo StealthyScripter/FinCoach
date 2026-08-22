@@ -45,7 +45,7 @@ process.env.TELEGRAM_NOTIFICATIONS_ENABLED = "false";
     const response = await fetch(url(server, "/fails-after-headers"));
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "partial response");
-    assert.equal(delegated, true);
+    assert.equal(delegated, false);
   } finally {
     await close(server);
   }

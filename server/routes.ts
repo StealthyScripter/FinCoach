@@ -105,6 +105,8 @@ import { auditExportService } from "./execution/auditExportService";
 import { telegramBotService } from "./telegramService";
 import { registerTelegramOperationsRoutes } from "./telegram";
 import { registerV2OperationsRoutes } from "./v2/operations";
+import { v2OperationsService } from "./v2/operations/service";
+import { getFinCoachV2Runtime } from "./v2/runtime/composition";
 import { registerAuthRoutes, requireAuthenticatedRequest } from "./auth/service";
 import { registerPortfolioRoutes } from "./portfolio/routes";
 import { demoRunService } from "./demoRunService";
@@ -145,14 +147,49 @@ export async function registerRoutes(
       error: error instanceof Error ? error.message : "portfolio health unavailable",
       liveExecutionBlocked: true,
     }));
+    const v2Runtime = getFinCoachV2Runtime().status();
+    const v2Status = await v2OperationsService.statusAsync().catch((error) => ({
+      status: 200,
+      body: {
+        moduleHealth: { operations: "degraded" },
+        degradedReason: error instanceof Error ? error.message : "v2 status unavailable",
+        liveExecutionBlocked: true,
+      },
+    }));
+    const v2Body = v2Status.body as Record<string, unknown>;
+    const subsystemStates: Record<string, "healthy" | "degraded" | "unhealthy"> = {
+      storage: storageHealth.status === "unavailable" ? "degraded" : "healthy",
+      portfolio: subsystemState((portfolioHealth as { runtimeState?: unknown }).runtimeState),
+      v2: subsystemState((v2Body.moduleHealth as Record<string, unknown> | undefined)?.operations),
+    };
     res.json({
-      status: storageHealth.status === "unavailable" ? "degraded" : "healthy",
+      status: aggregateHealthStatus(subsystemStates),
       generatedAt: new Date().toISOString(),
       storageMode: storageHealth.mode,
       providers: providers.providers.length,
       subsystems: {
+        states: subsystemStates,
         fx: "available",
         portfolio: portfolioHealth,
+        v2: {
+          runtime: {
+            state: v2Runtime.state,
+            lastRunAt: v2Runtime.lastRunAt,
+            lastRunResult: v2Runtime.lastRunResult,
+            nextScheduledCycleAt: v2Runtime.nextScheduledCycleAt,
+            researchSchedulerActive: v2Runtime.researchSchedulerActive,
+          },
+          operations: {
+            moduleHealth: v2Body.moduleHealth,
+            latestSuccessfulCycle: v2Body.latestSuccessfulCycle,
+            latestFailedCycle: v2Body.latestFailedCycle,
+            pipeline: v2Body.pipeline,
+            forwardTests: v2Body.forwardTests,
+            signals: v2Body.signals,
+            degradedReason: v2Body.degradedReason,
+            blockers: v2Body.blockers,
+          },
+        },
       },
       liveExecutionBlocked: true,
       deployedRevision: deploymentMetadata(),
@@ -2100,6 +2137,20 @@ export async function registerRoutes(
   });
 
   return httpServer;
+}
+
+function subsystemState(value: unknown): "healthy" | "degraded" | "unhealthy" {
+  const normalized = String(value ?? "").toLowerCase();
+  if (["healthy", "available", "running", "idle"].includes(normalized)) return "healthy";
+  if (["unhealthy", "failed", "unavailable"].includes(normalized)) return "unhealthy";
+  if (["degraded", "not_ready", "blocked", "not_configured"].includes(normalized)) return "degraded";
+  return "healthy";
+}
+
+function aggregateHealthStatus(states: Record<string, "healthy" | "degraded" | "unhealthy">) {
+  if (Object.values(states).includes("unhealthy")) return "unhealthy";
+  if (Object.values(states).includes("degraded")) return "degraded";
+  return "healthy";
 }
 
 async function loadMetricsSnapshot() {

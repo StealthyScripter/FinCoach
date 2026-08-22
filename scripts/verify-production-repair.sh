@@ -91,6 +91,7 @@ for (const app of apps.filter((item) => item.name === appName)) {
     exec: env.pm_exec_path,
     args: env.args,
     telegramTransport: env.FINCOACH_TELEGRAM_TRANSPORT || null,
+    telegramInboundPollingEnabled: env.FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED || null,
     telegramNotificationsEnabled: env.TELEGRAM_NOTIFICATIONS_ENABLED || null,
     telegramBotTokenFingerprint: token ? crypto.createHash("sha256").update(token).digest("hex").slice(0, 12) : null,
     safetyFlags: {
@@ -156,9 +157,25 @@ else
   printf 'WARN: DATABASE_URL or psql unavailable; skipping auth_sessions schema check\n'
 fi
 
+section "Portfolio Market Data Cache"
+if [[ -n "${DATABASE_URL:-}" ]] && command -v psql >/dev/null 2>&1; then
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT to_regclass('portfolio_market_data_cache'); SELECT count(*)::int AS cache_rows, COALESCE(sum(payload_bytes),0)::bigint AS payload_bytes, count(*) FILTER (WHERE stale_until < now())::int AS expired_rows FROM portfolio_market_data_cache;" || true
+else
+  printf 'WARN: DATABASE_URL or psql unavailable; skipping portfolio cache check\n'
+fi
+
+section "V2 Pipeline Tables"
+if [[ -n "${DATABASE_URL:-}" ]] && command -v psql >/dev/null 2>&1; then
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT to_regclass('v2_market_observations'); SELECT count(*)::int FROM v2_market_observations; SELECT status, count(*)::int FROM v2_research_cycles GROUP BY status ORDER BY status; SELECT count(*)::int FROM v2_forward_tests; SELECT count(*)::int FROM v2_research_signals;" || true
+else
+  printf 'WARN: DATABASE_URL or psql unavailable; skipping V2 table checks\n'
+fi
+
 section "Application Health"
 if command -v curl >/dev/null 2>&1; then
   run_readonly "GET /api/health" curl -fsS "$BASE_URL/api/health"
+  run_readonly "GET /api/v2/status" curl -fsS "$BASE_URL/api/v2/status"
+  run_readonly "GET /api/portfolio/health" curl -fsS "$BASE_URL/api/portfolio/health"
 else
   printf 'WARN: curl not found\n'
 fi

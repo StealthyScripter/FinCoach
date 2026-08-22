@@ -17,6 +17,7 @@ export function loadTelegramConfig(env: NodeJS.ProcessEnv = process.env): Telegr
     webhookUrl: clean(env.TELEGRAM_WEBHOOK_URL),
     notificationsEnabled: parseBool(env.TELEGRAM_NOTIFICATIONS_ENABLED, true),
     signalsEnabled: parseBool(env.TELEGRAM_SIGNALS_ENABLED, true),
+    inboundPollingEnabled: parseBool(env.FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED, true),
     dailySummaryHourUtc: parseIntBounded(env.TELEGRAM_DAILY_SUMMARY_HOUR_UTC, 22, 0, 23),
     weeklySummaryDay: parseIntBounded(env.TELEGRAM_WEEKLY_SUMMARY_DAY, 0, 0, 6),
     weeklySummaryHourUtc: parseIntBounded(env.TELEGRAM_WEEKLY_SUMMARY_HOUR_UTC, 22, 0, 23),
