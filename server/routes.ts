@@ -159,7 +159,7 @@ export async function registerRoutes(
     const v2Body = v2Status.body as Record<string, unknown>;
     const subsystemStates: Record<string, "healthy" | "degraded" | "unhealthy"> = {
       storage: storageHealth.status === "unavailable" ? "degraded" : "healthy",
-      portfolio: subsystemState((portfolioHealth as { runtimeState?: unknown }).runtimeState),
+      portfolio: portfolioSubsystemState(portfolioHealth),
       v2: subsystemState((v2Body.moduleHealth as Record<string, unknown> | undefined)?.operations),
     };
     res.json({
@@ -2145,6 +2145,18 @@ function subsystemState(value: unknown): "healthy" | "degraded" | "unhealthy" {
   if (["unhealthy", "failed", "unavailable"].includes(normalized)) return "unhealthy";
   if (["degraded", "not_ready", "blocked", "not_configured"].includes(normalized)) return "degraded";
   return "healthy";
+}
+
+function portfolioSubsystemState(value: unknown): "healthy" | "degraded" | "unhealthy" {
+  const health = value as { enabled?: unknown; runtimeState?: unknown; providerHealth?: unknown; readiness?: { status?: unknown } } | null;
+  const runtime = subsystemState(health?.runtimeState);
+  if (runtime === "unhealthy") return "unhealthy";
+  if (health?.enabled !== true) return runtime;
+  return aggregateHealthStatus({
+    runtime,
+    provider: subsystemState(health.providerHealth),
+    readiness: subsystemState(health.readiness?.status),
+  });
 }
 
 function aggregateHealthStatus(states: Record<string, "healthy" | "degraded" | "unhealthy">) {
