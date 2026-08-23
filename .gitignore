@@ -17,8 +17,9 @@ replay-output/
 metrics-output/
 
 .env
+.env.*
+!.env.example
 .env.local
-.env.*.local
 
 .venv
 venv/

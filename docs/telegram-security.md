@@ -4,9 +4,9 @@
 
 Never log, print, return, expose, or commit:
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_WEBHOOK_SECRET`
-- `TELEGRAM_SIGNAL_SIGNING_SECRET`
+- `FINCOACH_TELEGRAM_BOT_TOKEN`
+- `FINCOACH_TELEGRAM_WEBHOOK_SECRET`
+- `FINCOACH_TELEGRAM_SIGNAL_SIGNING_SECRET`
 - OANDA tokens
 - OANDA account IDs
 - database credentials
@@ -16,7 +16,7 @@ Status outputs redact chat IDs and only report whether secrets are configured.
 
 ## Authorization
 
-Only `TELEGRAM_ALLOWED_USER_ID` may invoke commands.
+Only `FINCOACH_TELEGRAM_ALLOWED_USER_ID` may invoke commands.
 
 Unauthorized attempts are rejected and audited in `telegram_command_audit`.
 
@@ -51,7 +51,7 @@ Publishing a signal does not imply guaranteed profitability.
 
 ## HMAC
 
-Use a dedicated `TELEGRAM_SIGNAL_SIGNING_SECRET` for signal authenticity. Never reuse the Telegram bot token.
+Use a dedicated `FINCOACH_TELEGRAM_SIGNAL_SIGNING_SECRET` for signal authenticity. Never reuse the Telegram bot token.
 
 Consumers should canonicalize the signal fields and verify `HMAC-SHA256` before acting on messages.
 

@@ -112,9 +112,9 @@ try {
   const envChecks = validateDemoRunEnvironment({
     DATABASE_URL: "postgresql://user:password@example/db",
     MARKETPILOT_RUN_MODE: "demo_observation",
-    TELEGRAM_ALLOWED_USER_ID: "42",
-    TELEGRAM_BOT_TOKEN: "123456789:abcdefghijklmnopqrstuvwxyz",
-    TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+    FINCOACH_TELEGRAM_ALLOWED_USER_ID: "42",
+    FINCOACH_TELEGRAM_BOT_TOKEN: "123456789:abcdefghijklmnopqrstuvwxyz",
+    FINCOACH_TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
     OANDA_API_TOKEN: "oanda-token",
     OANDA_ACCOUNT_ID: "account",
     OANDA_ENV: "practice",
@@ -132,10 +132,10 @@ try {
     validateDemoRunEnvironment({
       DATABASE_URL: "postgresql://user:password@example/db",
       MARKETPILOT_RUN_MODE: "demo_observation",
-      TELEGRAM_CHAT_ID: "42",
-      TELEGRAM_BOT_TOKEN: "123456789:abcdefghijklmnopqrstuvwxyz",
-      TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-    }).find((item) => item.key === "TELEGRAM_ALLOWED_USER_ID")?.status,
+      FINCOACH_TELEGRAM_CHAT_ID: "42",
+      FINCOACH_TELEGRAM_BOT_TOKEN: "123456789:abcdefghijklmnopqrstuvwxyz",
+      FINCOACH_TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+    }).find((item) => item.key === "FINCOACH_TELEGRAM_ALLOWED_USER_ID")?.status,
     "configured",
   );
 

@@ -168,10 +168,10 @@ export class TelegramAuthGuard {
     const text = (update.message?.text ?? update.callback_query?.data ?? "").trim();
     const isGroup = Boolean(message && message.chat.type !== "private");
 
-    if (!this.env.TELEGRAM_WEBHOOK_SECRET?.trim()) {
+    if (!this.env.FINCOACH_TELEGRAM_WEBHOOK_SECRET?.trim()) {
       return this.reject(actorId, chatId, updateId, text, isGroup, "Telegram webhook secret is not configured");
     }
-    if (!secretHeader || secretHeader !== this.env.TELEGRAM_WEBHOOK_SECRET.trim()) {
+    if (!secretHeader || secretHeader !== this.env.FINCOACH_TELEGRAM_WEBHOOK_SECRET.trim()) {
       return this.reject(actorId, chatId, updateId, text, isGroup, "Invalid Telegram webhook secret");
     }
     const allowedUserId = getTelegramAllowedUserId(this.env);
@@ -488,12 +488,12 @@ export class TelegramBotService {
   status(): TelegramSystemStatus {
     const allowedUserId = getTelegramAllowedUserId(this.env);
     return {
-      configured: Boolean(this.env.TELEGRAM_BOT_TOKEN?.trim() && allowedUserId && this.env.TELEGRAM_WEBHOOK_SECRET?.trim()),
-      botTokenConfigured: Boolean(this.env.TELEGRAM_BOT_TOKEN?.trim()),
+      configured: Boolean(this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() && allowedUserId && this.env.FINCOACH_TELEGRAM_WEBHOOK_SECRET?.trim()),
+      botTokenConfigured: Boolean(this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim()),
       allowedUserIdConfigured: Boolean(allowedUserId),
-      webhookConfigured: Boolean(this.env.TELEGRAM_WEBHOOK_URL?.trim()),
-      webhookSecretConfigured: Boolean(this.env.TELEGRAM_WEBHOOK_SECRET?.trim()),
-      webhookUrlConfigured: Boolean(this.env.TELEGRAM_WEBHOOK_URL?.trim()),
+      webhookConfigured: Boolean(this.env.FINCOACH_TELEGRAM_WEBHOOK_URL?.trim()),
+      webhookSecretConfigured: Boolean(this.env.FINCOACH_TELEGRAM_WEBHOOK_SECRET?.trim()),
+      webhookUrlConfigured: Boolean(this.env.FINCOACH_TELEGRAM_WEBHOOK_URL?.trim()),
       allowedUserId: allowedUserId ? "[REDACTED]" : null,
       lastCommand: this.audit.snapshot()?.command ?? null,
       lastCommandAt: this.audit.snapshot()?.at ?? null,
@@ -563,7 +563,7 @@ export class TelegramBotService {
 
   async notifyAlert(alert: TelegramLifecycleAlert | Alert) {
     const allowedUserId = getTelegramAllowedUserId(this.env);
-    if (!this.env.TELEGRAM_BOT_TOKEN?.trim() || !allowedUserId) return { sent: false as const, reason: "Telegram is not configured" };
+    if (!this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() || !allowedUserId) return { sent: false as const, reason: "Telegram is not configured" };
     if (this.notifiedAlertIds.has(alert.id)) return { sent: false as const, reason: "Alert already sent" };
     const chatId = Number(allowedUserId);
     if (!Number.isFinite(chatId)) return { sent: false as const, reason: "Telegram allowed user ID is invalid" };
@@ -602,9 +602,9 @@ export class TelegramBotService {
   }
 
   async setWebhook() {
-    const token = this.env.TELEGRAM_BOT_TOKEN?.trim();
-    const url = this.env.TELEGRAM_WEBHOOK_URL?.trim();
-    const secret = this.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+    const token = this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim();
+    const url = this.env.FINCOACH_TELEGRAM_WEBHOOK_URL?.trim();
+    const secret = this.env.FINCOACH_TELEGRAM_WEBHOOK_SECRET?.trim();
     if (!token || !url || !secret) {
       return { ok: false as const, reason: "Telegram webhook URL, secret, or token is missing." };
     }
@@ -1528,7 +1528,7 @@ export class TelegramBotService {
   }
 
   private async sendMessage(chatId: number, message: TelegramOutboundMessage) {
-    const token = this.env.TELEGRAM_BOT_TOKEN?.trim();
+    const token = this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim();
     const correlationId = randomUUID();
     if (!token || !chatId) {
       this.lastSendStatus = { ok: false, lastError: "Telegram token or chat ID missing", at: new Date().toISOString() };
@@ -1597,7 +1597,7 @@ const telegramUpdateSchema = z.object({
 }).refine((value) => Boolean(value.message || value.callback_query), { message: "Telegram update must include a message or callback query" });
 
 function getTelegramAllowedUserId(env: NodeJS.ProcessEnv) {
-  return env.TELEGRAM_ALLOWED_USER_ID?.trim() || env.TELEGRAM_CHAT_ID?.trim() || "";
+  return env.FINCOACH_TELEGRAM_ALLOWED_USER_ID?.trim() || env.FINCOACH_TELEGRAM_CHAT_ID?.trim() || "";
 }
 
 function isLiveControlRequest(text: string) {

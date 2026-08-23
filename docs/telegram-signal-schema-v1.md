@@ -78,7 +78,7 @@ Rejected signals are persisted and audited.
 
 ## Authenticity
 
-If `TELEGRAM_SIGNAL_SIGNING_SECRET` is configured, signals include:
+If `FINCOACH_TELEGRAM_SIGNAL_SIGNING_SECRET` is configured, signals include:
 
 ```json
 {

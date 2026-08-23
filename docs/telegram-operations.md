@@ -10,28 +10,41 @@ Telegram operations alerts are reserved for operational incidents: configuration
 
 Set `FINCOACH_OPERATOR_ALERT_REPEAT_INTERVAL_MS=3600000` for hourly reminders while the same incident remains unresolved. Incidents are keyed by category, code, provider/broker, symbol when relevant, account/environment, and config key. The first occurrence sends immediately, repeated occurrences increment silently until the repeat interval, and resolution sends one recovery notification.
 
-Inbound polling is controlled separately by `FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED`. Setting it to `false` prevents the `getUpdates` polling loop but does not disable outbound operator alerts when `TELEGRAM_NOTIFICATIONS_ENABLED=true`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` are configured.
+Inbound command polling is controlled separately from outbound Telegram delivery. Setting it to disabled prevents the `getUpdates` polling loop but does not disable outbound operator alerts when `TELEGRAM_NOTIFICATIONS_ENABLED=true`, `FINCOACH_TELEGRAM_BOT_TOKEN`, and `FINCOACH_TELEGRAM_CHAT_ID` are configured.
+
+`getUpdates` polling fails closed. It starts only when all of these are explicitly set:
+
+- `FINCOACH_TELEGRAM_COMMAND_POLLING_ENABLED=true`
+- `FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED=true`
+- `FINCOACH_TELEGRAM_LONG_POLLING_ENABLED=true`
+- `FINCOACH_TELEGRAM_TRANSPORT=long_polling`
+
+Development and release-test environments must keep command polling, inbound polling, long polling, and webhook intake disabled.
 
 ## Configuration
 
 Required for operations notifications:
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+- `FINCOACH_TELEGRAM_BOT_TOKEN`
+- `FINCOACH_TELEGRAM_CHAT_ID`
 - `TELEGRAM_NOTIFICATIONS_ENABLED=true`
 
 Required for commands:
 
-- `TELEGRAM_ALLOWED_USER_ID`
-- `TELEGRAM_WEBHOOK_SECRET`
-- `TELEGRAM_WEBHOOK_URL`
+- `FINCOACH_TELEGRAM_ALLOWED_USER_ID`
+- `FINCOACH_TELEGRAM_COMMAND_POLLING_ENABLED=true`
+- `FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED=true`
+- `FINCOACH_TELEGRAM_LONG_POLLING_ENABLED=true`
+- `FINCOACH_TELEGRAM_TRANSPORT=long_polling`
+- `FINCOACH_TELEGRAM_WEBHOOK_SECRET`
+- `FINCOACH_TELEGRAM_WEBHOOK_URL`
 
 Required for machine-consumable signals:
 
-- `TELEGRAM_SIGNAL_CHAT_ID`
+- `FINCOACH_TELEGRAM_SIGNAL_CHAT_ID`
 - `TELEGRAM_SIGNALS_ENABLED=true`
 
-If `TELEGRAM_SIGNAL_CHAT_ID` is missing, signal delivery fails closed. Signals are not silently sent to the operations chat.
+If `FINCOACH_TELEGRAM_SIGNAL_CHAT_ID` is missing, signal delivery fails closed. Signals are not silently sent to the operations chat.
 
 ## Commands
 
@@ -69,7 +82,7 @@ Daily summaries run at `TELEGRAM_DAILY_SUMMARY_HOUR_UTC`.
 
 Weekly summaries run on `TELEGRAM_WEEKLY_SUMMARY_DAY` at `TELEGRAM_WEEKLY_SUMMARY_HOUR_UTC`.
 
-Reports are persisted in PostgreSQL and concise versions are sent to `TELEGRAM_CHAT_ID`.
+Reports are persisted in PostgreSQL and concise versions are sent to `FINCOACH_TELEGRAM_CHAT_ID`.
 
 ## Alerts
 

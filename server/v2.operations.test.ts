@@ -104,7 +104,7 @@ assert.deepEqual(app.routes, [
   "/api/v2/orchestration",
 ]);
 
-const telegram = new TelegramCommandRouter({ TELEGRAM_ALLOWED_USER_ID: "operator" } as NodeJS.ProcessEnv);
+const telegram = new TelegramCommandRouter({ FINCOACH_TELEGRAM_ALLOWED_USER_ID: "operator" } as NodeJS.ProcessEnv);
 assert.match(await telegram.handle({ command: "/v2_status", actorId: "operator", chatId: "chat" }), /V2 Status/);
 assert.match(await telegram.handle({ command: "/lessons", actorId: "operator", chatId: "chat" }), /lessons/);
 assert.match(await telegram.handle({ command: "/v2_status", actorId: "intruder", chatId: "chat" }), /unauthorized/);

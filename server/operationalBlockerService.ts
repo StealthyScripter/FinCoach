@@ -30,6 +30,10 @@ export type OperationalBlockerEvent = {
   effect?: string;
   severity?: OperationalBlockerSeverity;
   alertCategory?: OperationalAlertCategory;
+  category?: OperationalAlertCategory;
+  operatorActionable?: boolean;
+  telegramAlert?: boolean;
+  dedupeKey?: string;
   count?: number;
   now?: Date;
 };
@@ -47,6 +51,7 @@ export type OperationalBlockerRecord = OperationalBlockerEvent & {
 
 type Store = {
   upsertActive(record: OperationalBlockerRecord): Promise<OperationalBlockerRecord>;
+  resolveOne(fingerprint: string, now: Date): Promise<OperationalBlockerRecord | null>;
   resolveMissing(activeFingerprints: Set<string>, now: Date): Promise<OperationalBlockerRecord[]>;
   list(input?: { includeResolved?: boolean; limit?: number }): Promise<OperationalBlockerRecord[]>;
 };
@@ -89,12 +94,12 @@ export class OperationalBlockerService {
       code: normalized.code,
       kind: normalized.kind,
       expected: normalized.expected,
-      category: normalized.alertCategory,
+      category: normalized.alertCategory ?? normalized.category,
       provider: normalized.scope?.component,
       symbol: normalized.scope?.symbol,
       configKey: normalized.configKey,
     });
-    const fingerprint = fingerprintFor({ ...normalized, alertCategory });
+    const fingerprint = normalized.dedupeKey ? hash(normalized.dedupeKey) : fingerprintFor({ ...normalized, alertCategory });
     const base: OperationalBlockerRecord = {
       ...normalized,
       alertCategory,
@@ -143,6 +148,34 @@ export class OperationalBlockerService {
     return records;
   }
 
+  async resolve(input: Pick<OperationalBlockerEvent, "kind" | "code" | "scope" | "expected"> & { alertCategory?: OperationalAlertCategory; category?: OperationalAlertCategory; dedupeKey?: string; now?: Date }) {
+    const now = input.now ?? new Date();
+    const alertCategory = classifyOperationalAlert({
+      code: input.code,
+      kind: input.kind,
+      expected: input.expected,
+      category: input.alertCategory ?? input.category,
+      provider: input.scope?.component,
+      symbol: input.scope?.symbol,
+    });
+    const fingerprint = input.dedupeKey ? hash(input.dedupeKey) : fingerprintFor({
+      kind: input.kind,
+      code: input.code,
+      expected: input.expected,
+      scope: input.scope,
+      alertCategory,
+      title: "",
+      whatBlocked: "",
+      reason: "",
+      currentValue: null,
+      limitValue: null,
+      action: "",
+    } as OperationalBlockerEvent & { alertCategory: OperationalAlertCategory });
+    const resolved = await this.getStore().resolveOne(fingerprint, now);
+    if (resolved) await this.maybeNotifyRecovery(resolved, now);
+    return resolved;
+  }
+
   async list(input: { includeResolved?: boolean; limit?: number } = {}) {
     return this.getStore().list(input);
   }
@@ -182,6 +215,7 @@ export class OperationalBlockerService {
   }
 
   private shouldNotify(record: OperationalBlockerRecord, now: Date) {
+    if (record.telegramAlert === false || record.operatorActionable === false) return false;
     if (!shouldSendOperatorTelegramAlert({
       code: record.code,
       kind: record.kind,
@@ -193,13 +227,14 @@ export class OperationalBlockerService {
     })) return false;
     if (this.dormant && record.kind !== "lifecycle") return false;
     if (!this.env.TELEGRAM_NOTIFICATIONS_ENABLED || this.env.TELEGRAM_NOTIFICATIONS_ENABLED === "false") return false;
-    if (!this.env.TELEGRAM_BOT_TOKEN?.trim() || !this.env.TELEGRAM_CHAT_ID?.trim()) return false;
+    if (!this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() || !(this.env.FINCOACH_TELEGRAM_OPERATIONS_CHAT_ID?.trim() || this.env.FINCOACH_TELEGRAM_CHAT_ID?.trim())) return false;
     if (!record.lastNotifiedAt) return true;
     return now.getTime() - Date.parse(record.lastNotifiedAt) >= reminderMs(this.env);
   }
 
   private async maybeNotifyRecovery(record: OperationalBlockerRecord, now: Date) {
     if (!record.lastNotifiedAt) return;
+    if (record.telegramAlert === false || record.operatorActionable === false) return;
     if (!shouldSendOperatorTelegramAlert({
       code: record.code,
       kind: record.kind,
@@ -210,7 +245,7 @@ export class OperationalBlockerService {
       configKey: record.configKey,
     })) return;
     if (!this.env.TELEGRAM_NOTIFICATIONS_ENABLED || this.env.TELEGRAM_NOTIFICATIONS_ENABLED === "false") return;
-    if (!this.env.TELEGRAM_BOT_TOKEN?.trim() || !this.env.TELEGRAM_CHAT_ID?.trim()) return;
+    if (!this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() || !(this.env.FINCOACH_TELEGRAM_OPERATIONS_CHAT_ID?.trim() || this.env.FINCOACH_TELEGRAM_CHAT_ID?.trim())) return;
     await this.notifications.sendOperations("health", formatRecoveryMessage(record, now), {
       blockerFingerprint: record.fingerprint,
       blockerCode: record.code,
@@ -239,6 +274,14 @@ class InMemoryOperationalBlockerStore implements Store {
     } : record;
     this.records.set(record.fingerprint, merged);
     return merged;
+  }
+
+  async resolveOne(fingerprint: string, now: Date) {
+    const record = this.records.get(fingerprint);
+    if (!record || record.status !== "active") return null;
+    const next = { ...record, status: "resolved" as const, resolvedAt: now.toISOString(), lastSeenAt: now.toISOString() };
+    this.records.set(fingerprint, next);
+    return next;
   }
 
   async resolveMissing(activeFingerprints: Set<string>, now: Date) {
@@ -311,6 +354,18 @@ class PgOperationalBlockerStore implements Store {
     }
   }
 
+  async resolveOne(fingerprint: string, now: Date) {
+    try {
+      const result = await this.pool.query(
+        "UPDATE operational_blockers SET status = 'resolved', resolved_at = $1, last_seen_at = $1 WHERE status = 'active' AND fingerprint = $2 RETURNING *",
+        [now.toISOString(), fingerprint],
+      );
+      return result.rows[0] ? fromRow(result.rows[0]) : null;
+    } catch {
+      return this.fallback.resolveOne(fingerprint, now);
+    }
+  }
+
   async resolveMissing(activeFingerprints: Set<string>, now: Date) {
     try {
       const active = await this.list({ includeResolved: false, limit: 10_000 });
@@ -368,6 +423,10 @@ function fingerprintFor(event: OperationalBlockerEvent) {
     configKey: event.configKey ?? null,
     configValueState: event.configValueState ?? null,
   })).digest("hex");
+}
+
+function hash(value: string) {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function withoutCycleId(scope: OperationalBlockerEvent["scope"]) {

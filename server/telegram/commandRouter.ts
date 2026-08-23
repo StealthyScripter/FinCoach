@@ -92,6 +92,7 @@ export class TelegramCommandRouter {
       await this.audit(input, command, false, "rejected", "Unauthorized Telegram user");
       return "Request rejected: unauthorized user.";
     }
+    structuredLogger.telegram({ level: "info", event: "telegram_command_authorized", message: "Telegram command authorized", command });
     if (isLiveTradingCommand(input.command)) {
       demoOnlyPolicyService.recordBlocked({
         provider: "telegram",
@@ -296,7 +297,7 @@ export class TelegramCommandRouter {
   }
 
   private authorized(actorId: string) {
-    return Boolean(this.env.TELEGRAM_ALLOWED_USER_ID?.trim() && actorId === this.env.TELEGRAM_ALLOWED_USER_ID.trim());
+    return Boolean(this.env.FINCOACH_TELEGRAM_ALLOWED_USER_ID?.trim() && actorId === this.env.FINCOACH_TELEGRAM_ALLOWED_USER_ID.trim());
   }
 
   private async v2StatusMessage() {

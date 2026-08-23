@@ -51,7 +51,11 @@ function config() {
     webhookUrl: null,
     notificationsEnabled: true,
     signalsEnabled: false,
+    transport: "long_polling" as const,
+    commandPollingEnabled: true,
     inboundPollingEnabled: true,
+    longPollingEnabled: true,
+    webhookEnabled: false,
     dailySummaryHourUtc: 22,
     weeklySummaryDay: 0,
     weeklySummaryHourUtc: 22,
@@ -90,7 +94,37 @@ async function waitFor(predicate: () => boolean) {
   const health = receiver.health();
   assert.equal(health.running, false);
   assert.equal(health.ownershipState, "blocked");
-  assert.equal(health.lastPollError, "telegram_inbound_polling_disabled");
+  assert.equal(health.lastPollError, "fincoach_telegram_inbound_polling_disabled");
+}
+
+for (const [name, override] of [
+  ["command polling unset", { commandPollingEnabled: false }],
+  ["command polling false", { commandPollingEnabled: false }],
+  ["inbound false", { commandPollingEnabled: true, inboundPollingEnabled: false }],
+  ["long polling false", { commandPollingEnabled: true, inboundPollingEnabled: true, longPollingEnabled: false }],
+  ["transport not long polling", { commandPollingEnabled: true, inboundPollingEnabled: true, longPollingEnabled: true, transport: "webhook" as const }],
+] as const) {
+  let calls = 0;
+  const receiver = new TelegramUpdateReceiver({ ...config(), ...override }, new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+  }) as typeof fetch);
+  receiver.start();
+  assert.equal(receiver.health().running, false, name);
+  assert.equal(calls, 0, `${name} must not call getUpdates`);
+}
+
+{
+  let calls = 0;
+  const receiver = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), (async () => {
+    calls += 1;
+    if (calls === 1) return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+    return new Response(JSON.stringify({ ok: false, parameters: { retry_after: 1 } }), { status: 429, headers: { "retry-after": "1" } });
+  }) as typeof fetch);
+  receiver.start();
+  await waitFor(() => calls > 0);
+  assert.equal(receiver.health().running, true);
+  await receiver.stop();
 }
 
 console.log("telegram update receiver ownership tests passed");

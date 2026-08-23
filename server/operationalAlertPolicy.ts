@@ -27,7 +27,6 @@ export type OperationalAlertEvent = {
 const EXPECTED_POLICY_CODES = new Set([
   "rr_below_minimum",
   "spread_above_limit",
-  "risk_budget_exceeded",
   "correlation_limit",
   "strategy_not_eligible",
   "court_verdict_rejected",
@@ -36,17 +35,20 @@ const EXPECTED_POLICY_CODES = new Set([
   "confidence_below_threshold",
   "forward_test_candidate_rejected",
   "signal_candidate_rejected",
-  "max_active_forward_tests_reached",
-  "max_active_forward_tests_zero",
   "max_active_research_signals_reached",
   "max_active_research_signals_zero",
   "portfolio_max_active_strategies_reached",
-  "open_positions_limit_reached",
-  "practice_active_trade_cap_reached",
   "confirmation_expired",
-  "kill_switch_active",
   "insufficient_margin",
   "order_rejected",
+  "duplicate_signal",
+  "stale_signal",
+  "no_qualifying_setup",
+  "normal_strategy_rejection",
+  "strategy_validation_rejection",
+  "market_closed",
+  "weekend_market_closed",
+  "major_news_blackout",
 ]);
 
 const CONFIGURATION_CODES = new Set([
@@ -73,6 +75,21 @@ const PROVIDER_CODES = new Set([
   "provider_budget_exhausted",
   "rate_limited",
   "provider_quota_exhausted",
+]);
+
+const OPERATOR_ACTIONABLE_CAPACITY_CODES = new Set([
+  "max_daily_trade_capacity_reached",
+  "max_daily_trades_reached",
+  "max_concurrent_practice_trade_capacity_reached",
+  "practice_active_trade_cap_reached",
+  "open_positions_limit_reached",
+  "account_exposure_capacity_reached",
+  "global_exposure_capacity_reached",
+  "risk_budget_exceeded",
+  "max_active_forward_tests_reached",
+  "max_active_forward_tests_zero",
+  "kill_switch_active",
+  "telegram_getupdates_conflict",
 ]);
 
 const MARKET_DATA_CODES = new Set([
@@ -105,6 +122,7 @@ const SAFETY_CODES = new Set([
 export function classifyOperationalAlert(event: OperationalAlertEvent): OperationalAlertCategory {
   if (event.category) return event.category;
   const code = normalizeCode(event.code);
+  if (OPERATOR_ACTIONABLE_CAPACITY_CODES.has(code)) return "EXECUTION_INFRASTRUCTURE_FAILURE";
   if (event.expected === true || EXPECTED_POLICY_CODES.has(code)) return "EXPECTED_POLICY_REJECTION";
   if (CONFIGURATION_CODES.has(code)) return "CONFIGURATION_FAILURE";
   if (AUTHENTICATION_CODES.has(code) || /auth|credential|token/.test(code)) return "AUTHENTICATION_FAILURE";

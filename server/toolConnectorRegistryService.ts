@@ -190,32 +190,32 @@ export class ToolConnectorRegistryService {
           type: "notification_provider",
           providerName: "Telegram",
           connectorType: "notification_provider",
-          environmentLabel: this.env.TELEGRAM_BOT_TOKEN?.trim() ? "bridge" : "disabled",
+          environmentLabel: this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() ? "bridge" : "disabled",
           supportedAssetClasses: ["system", "alerts", "journal"],
           supportedCapabilities: ["status", "alerts", "digests", "confirmations", "kill_switch_control"],
           supportedActions: ["status", "alerts", "digests", "confirmations", "kill_switch_control"],
           disabledActions: ["live_order_submission", "withdrawals", "transfers"],
           safetyConstraints: ["Only the configured Telegram user may control the bot", "Risky actions require confirmation"],
           costLevel: "free",
-          authMethod: "env:TELEGRAM_BOT_TOKEN",
-          environment: this.env.TELEGRAM_BOT_TOKEN?.trim() ? "bridge" : "disabled",
-          health: this.env.TELEGRAM_BOT_TOKEN?.trim() && this.telegramAllowedUserId() && this.env.TELEGRAM_WEBHOOK_SECRET?.trim() && this.env.TELEGRAM_WEBHOOK_URL?.trim() ? "healthy" : "disabled",
+          authMethod: "env:FINCOACH_TELEGRAM_BOT_TOKEN",
+          environment: this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() ? "bridge" : "disabled",
+          health: this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() && this.telegramAllowedUserId() && this.env.FINCOACH_TELEGRAM_WEBHOOK_SECRET?.trim() && this.env.FINCOACH_TELEGRAM_WEBHOOK_URL?.trim() ? "healthy" : "disabled",
           limitations: [
             "Only the configured Telegram user may control the bot.",
             "Risky actions require confirmation.",
           ],
           liveExecutionSupport: false,
           sandboxSupport: true,
-          configured: Boolean(this.env.TELEGRAM_BOT_TOKEN?.trim() && this.telegramAllowedUserId() && this.env.TELEGRAM_WEBHOOK_SECRET?.trim() && this.env.TELEGRAM_WEBHOOK_URL?.trim()),
-          requiredEnvVars: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_ID", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_WEBHOOK_URL"],
+          configured: Boolean(this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() && this.telegramAllowedUserId() && this.env.FINCOACH_TELEGRAM_WEBHOOK_SECRET?.trim() && this.env.FINCOACH_TELEGRAM_WEBHOOK_URL?.trim()),
+          requiredEnvVars: ["FINCOACH_TELEGRAM_BOT_TOKEN", "FINCOACH_TELEGRAM_ALLOWED_USER_ID", "FINCOACH_TELEGRAM_WEBHOOK_SECRET", "FINCOACH_TELEGRAM_WEBHOOK_URL"],
           missingEnvVars: [
-            !this.env.TELEGRAM_BOT_TOKEN?.trim() ? "TELEGRAM_BOT_TOKEN" : null,
-            !this.telegramAllowedUserId() ? "TELEGRAM_ALLOWED_USER_ID" : null,
-            !this.env.TELEGRAM_WEBHOOK_SECRET?.trim() ? "TELEGRAM_WEBHOOK_SECRET" : null,
-            !this.env.TELEGRAM_WEBHOOK_URL?.trim() ? "TELEGRAM_WEBHOOK_URL" : null,
+            !this.env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim() ? "FINCOACH_TELEGRAM_BOT_TOKEN" : null,
+            !this.telegramAllowedUserId() ? "FINCOACH_TELEGRAM_ALLOWED_USER_ID" : null,
+            !this.env.FINCOACH_TELEGRAM_WEBHOOK_SECRET?.trim() ? "FINCOACH_TELEGRAM_WEBHOOK_SECRET" : null,
+            !this.env.FINCOACH_TELEGRAM_WEBHOOK_URL?.trim() ? "FINCOACH_TELEGRAM_WEBHOOK_URL" : null,
           ].filter((key): key is string => Boolean(key)),
           lastCheckedAt,
-          lastSyncAt: this.env.TELEGRAM_WEBHOOK_URL?.trim() ? lastCheckedAt : null,
+          lastSyncAt: this.env.FINCOACH_TELEGRAM_WEBHOOK_URL?.trim() ? lastCheckedAt : null,
         }),
         this.connector({
           id: "robinhood_stub",
@@ -376,7 +376,7 @@ export class ToolConnectorRegistryService {
   }
 
   private telegramAllowedUserId() {
-    return this.env.TELEGRAM_ALLOWED_USER_ID?.trim() || this.env.TELEGRAM_CHAT_ID?.trim() || "";
+    return this.env.FINCOACH_TELEGRAM_ALLOWED_USER_ID?.trim() || this.env.FINCOACH_TELEGRAM_CHAT_ID?.trim() || "";
   }
 
   constructor(private readonly env: NodeJS.ProcessEnv = process.env) {}

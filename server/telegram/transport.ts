@@ -21,6 +21,7 @@ export class TelegramTransport {
     }
 
     const startedAt = Date.now();
+    telegramMetrics.recordCommandReceived(command.receivedAt);
     structuredLogger.telegram({ level: "info", event: "telegram_command_received", message: "Telegram command received", updateId: update.updateId, command: command.command, messageId: command.messageId });
     try {
       const router = await this.getRouter();
@@ -32,6 +33,7 @@ export class TelegramTransport {
       const reply = normalizeReply(routerReply);
       if (!reply) {
         telegramMetrics.increment("updatesProcessed");
+        telegramMetrics.recordCommandProcessed();
         structuredLogger.telegram({ level: "info", event: "telegram_command_processed", message: "Telegram command processed without reply", updateId: update.updateId, command: command.command, durationMs: Date.now() - startedAt });
         return { processed: true as const, replied: false as const };
       }
@@ -46,7 +48,10 @@ export class TelegramTransport {
       if (delivery.sent) telegramMetrics.increment("repliesSent");
       else telegramMetrics.increment("replyFailures");
       telegramMetrics.increment("updatesProcessed");
-      structuredLogger.telegram({ level: delivery.sent ? "info" : "warn", event: "telegram_command_reply_completed", message: delivery.sent ? "Telegram command reply sent" : "Telegram command reply failed", updateId: update.updateId, command: command.command, durationMs: Date.now() - startedAt, delivery });
+      telegramMetrics.recordCommandProcessed();
+      if (delivery.sent) telegramMetrics.recordReplySent();
+      structuredLogger.telegram({ level: "info", event: "telegram_command_processed", message: "Telegram command processed", updateId: update.updateId, command: command.command, durationMs: Date.now() - startedAt });
+      structuredLogger.telegram({ level: delivery.sent ? "info" : "warn", event: "telegram_reply_sent", message: delivery.sent ? "Telegram command reply sent" : "Telegram command reply failed", updateId: update.updateId, command: command.command, durationMs: Date.now() - startedAt, delivery });
       return { processed: true as const, replied: delivery.sent };
     } catch (error) {
       telegramMetrics.increment("updatesFailed");

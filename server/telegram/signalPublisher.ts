@@ -61,7 +61,7 @@ export class TelegramSignalPublisher {
       if (gate.rejectionReasons.some((reason) => reason.toLowerCase().includes("stale"))) telegramMetrics.increment("staleSignalsSuppressed");
       if (gate.rejectionReasons.some((reason) => reason.toLowerCase().includes("kill switch"))) telegramMetrics.increment("killSwitchSuppressions");
       const signal = this.buildRejectedSignal(input, gate.fingerprint, gate.idempotencyKey);
-      const humanMessage = `Rejected FinCoach signal\nSignal ID: ${signal.signalId}\nSymbol: ${signal.displaySymbol}\nReasons: ${(config.signalChatId ? gate.rejectionReasons : [...gate.rejectionReasons, "TELEGRAM_SIGNAL_CHAT_ID is not configured; fail closed."]).join("; ")}\nLive execution: blocked`;
+      const humanMessage = `Rejected FinCoach signal\nSignal ID: ${signal.signalId}\nSymbol: ${signal.displaySymbol}\nReasons: ${(config.signalChatId ? gate.rejectionReasons : [...gate.rejectionReasons, "FINCOACH_TELEGRAM_SIGNAL_CHAT_ID is not configured; fail closed."]).join("; ")}\nLive execution: blocked`;
       const record = await this.repository.saveSignal({
         signalId: signal.signalId,
         schema: TELEGRAM_SIGNAL_SCHEMA,
@@ -71,7 +71,7 @@ export class TelegramSignalPublisher {
         symbol: signal.symbol,
         payload: signal,
         humanMessage,
-        rejectionReasons: config.signalChatId ? gate.rejectionReasons : [...gate.rejectionReasons, "TELEGRAM_SIGNAL_CHAT_ID is not configured; fail closed."],
+        rejectionReasons: config.signalChatId ? gate.rejectionReasons : [...gate.rejectionReasons, "FINCOACH_TELEGRAM_SIGNAL_CHAT_ID is not configured; fail closed."],
         publishedAt: null,
         expiresAt: signal.validUntil,
         lastUpdateAt: now,

@@ -33,6 +33,13 @@ export class TelegramMetrics {
     repliesSent: 0,
     replyFailures: 0,
     pollingReconnects: 0,
+    pollingConflicts: 0,
+  };
+  private commandLifecycle = {
+    lastCommandPollerStartDecision: null as Record<string, unknown> | null,
+    lastCommandReceivedAt: null as string | null,
+    lastCommandProcessedAt: null as string | null,
+    lastReplySentAt: null as string | null,
   };
   private summaryStatus = {
     daily: null as string | null,
@@ -100,6 +107,25 @@ export class TelegramMetrics {
     this.lastSchedulerError = redactMessage(error);
   }
 
+  recordCommandPollerStartDecision(decision: Record<string, unknown>) {
+    this.commandLifecycle.lastCommandPollerStartDecision = {
+      ...decision,
+      decidedAt: new Date().toISOString(),
+    };
+  }
+
+  recordCommandReceived(at = new Date().toISOString()) {
+    this.commandLifecycle.lastCommandReceivedAt = at;
+  }
+
+  recordCommandProcessed(at = new Date().toISOString()) {
+    this.commandLifecycle.lastCommandProcessedAt = at;
+  }
+
+  recordReplySent(at = new Date().toISOString()) {
+    this.commandLifecycle.lastReplySentAt = at;
+  }
+
   snapshot(): TelegramMetricsSnapshot {
     return {
       ...this.counters,
@@ -111,6 +137,7 @@ export class TelegramMetrics {
       signalResultsByOutcome: Object.fromEntries(this.signalResultsByOutcome.entries()),
       averageSignalR: averageOrNull(this.resultR),
       averageDeliveryLatencyMs: averageOrNull(this.deliveryLatencyMs),
+      ...this.commandLifecycle,
     };
   }
 }

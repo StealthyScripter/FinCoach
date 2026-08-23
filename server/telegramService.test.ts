@@ -19,10 +19,10 @@ import { paperAutomationService } from "./execution/paperAutomation";
 import { isAutomatedTestProcess } from "./processGuards";
 
 const env = {
-  TELEGRAM_BOT_TOKEN: "bot-token",
-  TELEGRAM_ALLOWED_USER_ID: "42",
-  TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-  TELEGRAM_WEBHOOK_URL: "https://example.com/telegram",
+  FINCOACH_TELEGRAM_BOT_TOKEN: "bot-token",
+  FINCOACH_TELEGRAM_ALLOWED_USER_ID: "42",
+  FINCOACH_TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+  FINCOACH_TELEGRAM_WEBHOOK_URL: "https://example.com/telegram",
   TELEGRAM_ALLOW_GROUPS: "false",
 };
 

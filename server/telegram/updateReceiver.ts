@@ -6,6 +6,7 @@ import { telegramTransport, type TelegramTransport } from "./transport";
 import { loadTelegramConfig } from "./telegramClient";
 import { telegramUpdateCursor, type TelegramUpdateCursor } from "./updateCursor";
 import { structuredLogger } from "../structuredLogger";
+import { operationalBlockerService } from "../operationalBlockerService";
 
 type TelegramApiUpdate = {
   update_id: number;
@@ -38,6 +39,9 @@ export class TelegramUpdateReceiver {
   private lastPollError: string | null = null;
   private lockPath: string | null = null;
   private ownershipState: "unclaimed" | "owned" | "blocked" | "conflict" = "unclaimed";
+  private lastCommandReceivedAt: string | null = null;
+  private lastCommandProcessedAt: string | null = null;
+  private lastReplySentAt: string | null = null;
 
   constructor(
     private readonly config: TelegramEnvironmentConfig = loadTelegramConfig(),
@@ -48,10 +52,18 @@ export class TelegramUpdateReceiver {
 
   start() {
     if (this.running) return this;
-    if (!this.config.inboundPollingEnabled) {
+    const decision = commandPollingStartDecision(this.config);
+    telegramMetrics.recordCommandPollerStartDecision(decision);
+    structuredLogger.telegram({
+      level: "info",
+      event: "telegram_command_poller_start_decision",
+      message: "Telegram command poller start decision evaluated",
+      ...decision,
+    });
+    if (!decision.started) {
       this.ownershipState = "blocked";
-      this.lastPollError = "telegram_inbound_polling_disabled";
-      structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_not_started", message: "Telegram update receiver not started", reason: "telegram_inbound_polling_disabled" });
+      this.lastPollError = decision.reason;
+      structuredLogger.telegram({ level: "info", event: "telegram_command_polling_not_started", message: "Telegram command polling not started", ...decision });
       return this;
     }
     if (!this.config.notificationsEnabled || !this.config.botToken) {
@@ -93,6 +105,13 @@ export class TelegramUpdateReceiver {
       reachabilityState: this.reachabilityState(),
       ownershipState: this.ownershipState,
       lockPath: this.lockPath,
+      commandPollingEnabled: this.config.commandPollingEnabled,
+      inboundPollingEnabled: this.config.inboundPollingEnabled,
+      longPollingEnabled: this.config.longPollingEnabled,
+      transport: this.config.transport,
+      lastCommandReceivedAt: this.lastCommandReceivedAt,
+      lastCommandProcessedAt: this.lastCommandProcessedAt,
+      lastReplySentAt: this.lastReplySentAt,
     };
   }
 
@@ -120,8 +139,16 @@ export class TelegramUpdateReceiver {
         this.lastPollSuccessAt = new Date().toISOString();
         this.consecutivePollFailures = 0;
         this.lastPollError = null;
+        if (this.ownershipState === "conflict") this.ownershipState = "owned";
+          await operationalBlockerService.resolve({
+            kind: "dependency",
+            code: "telegram_getupdates_conflict",
+            scope: { component: "telegram-getupdates" },
+            expected: false,
+            dedupeKey: "telegram:getupdates:ownership_conflict",
+          }).catch(() => undefined);
         if (updates.length > 0) telegramMetrics.increment("updatesReceived", updates.length);
-        if (updates.length > 0) structuredLogger.telegram({ level: "info", event: "telegram_updates_received", message: "Telegram updates received", updateCount: updates.length, offset });
+        if (updates.length > 0) structuredLogger.telegram({ level: "info", event: "telegram_update_received", message: "Telegram updates received", updateCount: updates.length, offset });
         for (const update of updates) {
           if (this.stopped) break;
           if (this.seenUpdateIds.has(update.update_id)) {
@@ -132,7 +159,17 @@ export class TelegramUpdateReceiver {
           this.seenUpdateIds.add(update.update_id);
           const normalized = normalizeUpdate(update);
           if (normalized) {
-            await this.transport.handle(normalized);
+            this.lastCommandReceivedAt = normalized.receivedAt;
+            telegramMetrics.recordCommandReceived(normalized.receivedAt);
+            const result = await this.transport.handle(normalized);
+            if (result?.processed) {
+              this.lastCommandProcessedAt = new Date().toISOString();
+              telegramMetrics.recordCommandProcessed(this.lastCommandProcessedAt);
+            }
+            if (result?.processed && "replied" in result && result.replied) {
+              this.lastReplySentAt = new Date().toISOString();
+              telegramMetrics.recordReplySent(this.lastReplySentAt);
+            }
           } else {
             telegramMetrics.increment("updatesIgnored");
             structuredLogger.telegram({ level: "info", event: "telegram_update_ignored", message: "Telegram update ignored", updateId: update.update_id, reason: "not_normalizable" });
@@ -145,6 +182,7 @@ export class TelegramUpdateReceiver {
         if (this.stopped && isAbortError(error)) return;
         if (error instanceof TelegramPollingConflictError) {
           telegramMetrics.increment("updatesFailed");
+          telegramMetrics.increment("pollingConflicts");
           this.lastPollFailureAt = new Date().toISOString();
           this.consecutivePollFailures += 1;
           this.lastPollError = error.message;
@@ -153,6 +191,24 @@ export class TelegramUpdateReceiver {
           this.stopped = true;
           this.releaseLock();
           structuredLogger.telegram({ level: "error", event: "telegram_polling_conflict", message: "Telegram getUpdates polling conflict; receiver stopped to avoid duplicate long polling", error });
+          await operationalBlockerService.record({
+            kind: "dependency",
+            code: "telegram_getupdates_conflict",
+            title: "Telegram getUpdates ownership conflict",
+            whatBlocked: "Telegram inbound command polling",
+            reason: "Telegram Bot API returned HTTP 409, which means another consumer owns getUpdates for this bot.",
+            currentValue: "conflict",
+            limitValue: "single getUpdates owner",
+            scope: { component: "telegram-getupdates" },
+            expected: false,
+            action: "Stop the competing poller or move FinCoach to webhook transport.",
+            effect: "Inbound Telegram commands such as /status are unavailable until ownership is restored. Outbound alerts may still work.",
+            severity: "warning",
+            alertCategory: "PROVIDER_FAILURE",
+            operatorActionable: true,
+            telegramAlert: true,
+            dedupeKey: "telegram:getupdates:ownership_conflict",
+          }).catch(() => undefined);
           return;
         }
         telegramMetrics.increment("updatesFailed");
@@ -170,7 +226,7 @@ export class TelegramUpdateReceiver {
   }
 
   private reachabilityState(): "available" | "degraded" | "unavailable" | "unknown" {
-    if (!this.config.inboundPollingEnabled || !this.config.botToken || !this.config.notificationsEnabled) return "unavailable";
+    if (!commandPollingStartDecision(this.config).started || !this.config.botToken || !this.config.notificationsEnabled) return "unavailable";
     if (!this.lastPollSuccessAt && !this.lastPollFailureAt) return "unknown";
     if (this.consecutivePollFailures >= 3) return "unavailable";
     if (this.consecutivePollFailures > 0) return "degraded";
@@ -215,6 +271,25 @@ export class TelegramUpdateReceiver {
     if (this.lockPath && this.ownershipState !== "blocked") releasePollingLock(this.lockPath);
     if (this.ownershipState === "owned") this.ownershipState = "unclaimed";
   }
+}
+
+export function commandPollingStartDecision(config: TelegramEnvironmentConfig) {
+  if (!config.commandPollingEnabled) return startDecision(config, false, "fincoach_telegram_command_polling_disabled");
+  if (!config.inboundPollingEnabled) return startDecision(config, false, "fincoach_telegram_inbound_polling_disabled");
+  if (!config.longPollingEnabled) return startDecision(config, false, "fincoach_telegram_long_polling_disabled");
+  if (config.transport !== "long_polling") return startDecision(config, false, "fincoach_telegram_transport_not_long_polling");
+  return startDecision(config, true, "all_gates_enabled");
+}
+
+function startDecision(config: TelegramEnvironmentConfig, started: boolean, reason: string) {
+  return {
+    started,
+    reason,
+    commandPollingEnabled: config.commandPollingEnabled,
+    inboundPollingEnabled: config.inboundPollingEnabled,
+    longPollingEnabled: config.longPollingEnabled,
+    transport: config.transport,
+  };
 }
 
 function normalizeUpdate(update: TelegramApiUpdate): TelegramNormalizedUpdate | null {

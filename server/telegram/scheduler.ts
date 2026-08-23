@@ -186,7 +186,7 @@ export function classifySchedulerError(error: unknown): ClassifiedError {
   const type = error instanceof Error ? error.name || "Error" : typeof error;
   const raw = error instanceof Error ? error.message : String(error);
   const message = String(redactTelegramSecrets(raw));
-  return { class: classifyErrorClass(error, message), type, message };
+  return { class: classifyErrorClass(error, raw), type, message };
 }
 
 function classifyErrorClass(error: unknown, message: string): ErrorClass {

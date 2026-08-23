@@ -8,10 +8,10 @@ If you have already pasted a Telegram token anywhere outside `.env`, rotate it i
 
 Use environment variables only:
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ALLOWED_USER_ID`
-- `TELEGRAM_WEBHOOK_SECRET`
-- `TELEGRAM_WEBHOOK_URL`
+- `FINCOACH_TELEGRAM_BOT_TOKEN`
+- `FINCOACH_TELEGRAM_ALLOWED_USER_ID`
+- `FINCOACH_TELEGRAM_WEBHOOK_SECRET`
+- `FINCOACH_TELEGRAM_WEBHOOK_URL`
 
 Recommended connector-related environment variables:
 
@@ -97,9 +97,9 @@ For the 7-day demo observation flow, see `docs/demo-run-reliability-test.md`.
 Webhook setup:
 
 - `POST /api/telegram/set-webhook` is admin/dev-only.
-- The webhook call uses `TELEGRAM_WEBHOOK_URL` and `TELEGRAM_WEBHOOK_SECRET`.
+- The webhook call uses `FINCOACH_TELEGRAM_WEBHOOK_URL` and `FINCOACH_TELEGRAM_WEBHOOK_SECRET`.
 - Telegram webhook requests must include `X-Telegram-Bot-Api-Secret-Token`.
-- Only the configured `TELEGRAM_ALLOWED_USER_ID` may control the bot.
+- Only the configured `FINCOACH_TELEGRAM_ALLOWED_USER_ID` may control the bot.
 
 Security model:
 

@@ -7,10 +7,10 @@ const configuredEnv = {
   OANDA_ACCOUNT_ID: "account",
   OANDA_ENV: "practice",
   METATRADER_DEMO_BRIDGE_URL: "https://bridge.example",
-  TELEGRAM_BOT_TOKEN: "telegram-token",
-  TELEGRAM_ALLOWED_USER_ID: "123456",
-  TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
-  TELEGRAM_WEBHOOK_URL: "https://example.com/telegram",
+  FINCOACH_TELEGRAM_BOT_TOKEN: "telegram-token",
+  FINCOACH_TELEGRAM_ALLOWED_USER_ID: "123456",
+  FINCOACH_TELEGRAM_WEBHOOK_SECRET: "webhook-secret",
+  FINCOACH_TELEGRAM_WEBHOOK_URL: "https://example.com/telegram",
   TRADINGVIEW_WEBHOOK_SECRET: "tradingview-secret",
 } satisfies NodeJS.ProcessEnv;
 

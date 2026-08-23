@@ -241,9 +241,9 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
   const validation = loadV2RuntimeConfig({
     ...disabledEnv,
     FINCOACH_TELEGRAM_TRANSPORT: "long_polling",
-    TELEGRAM_WEBHOOK_URL: "",
-    TELEGRAM_WEBHOOK_SECRET: "",
-    TELEGRAM_WEBHOOK_ENABLED: "false",
+    FINCOACH_TELEGRAM_WEBHOOK_URL: "",
+    FINCOACH_TELEGRAM_WEBHOOK_SECRET: "",
+    FINCOACH_TELEGRAM_WEBHOOK_ENABLED: "false",
   });
   assert.equal(validation.ok, true);
   assert.equal(validation.config.telegramTransport, "long_polling");
@@ -253,7 +253,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
   const validation = loadV2RuntimeConfig({
     ...disabledEnv,
     FINCOACH_TELEGRAM_TRANSPORT: "long_polling",
-    TELEGRAM_WEBHOOK_ENABLED: "true",
+    FINCOACH_TELEGRAM_WEBHOOK_ENABLED: "true",
   });
   assert.equal(validation.ok, false);
   assert.match(validation.errors.join("\n"), /Long polling and webhook/);
@@ -545,7 +545,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 
 {
   const router = new TelegramCommandRouter(
-    { TELEGRAM_ALLOWED_USER_ID: "123" } as NodeJS.ProcessEnv,
+    { FINCOACH_TELEGRAM_ALLOWED_USER_ID: "123" } as NodeJS.ProcessEnv,
     new TelegramReportingService(new InMemoryTelegramRepository()),
     new InMemoryTelegramRepository(),
   );

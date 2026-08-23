@@ -8,16 +8,26 @@ const DEFAULT_TIMEOUT_MS = 8_000;
 const MAX_ATTEMPTS = 3;
 
 export function loadTelegramConfig(env: NodeJS.ProcessEnv = process.env): TelegramEnvironmentConfig {
+  const chatId = clean(env.FINCOACH_TELEGRAM_CHAT_ID);
+  const operationsChatId = clean(env.FINCOACH_TELEGRAM_OPERATIONS_CHAT_ID) ?? chatId;
   return {
-    botToken: clean(env.TELEGRAM_BOT_TOKEN),
-    allowedUserId: clean(env.TELEGRAM_ALLOWED_USER_ID),
-    chatId: clean(env.TELEGRAM_CHAT_ID),
-    signalChatId: clean(env.TELEGRAM_SIGNAL_CHAT_ID),
-    webhookSecret: clean(env.TELEGRAM_WEBHOOK_SECRET),
-    webhookUrl: clean(env.TELEGRAM_WEBHOOK_URL),
+    botToken: clean(env.FINCOACH_TELEGRAM_BOT_TOKEN),
+    allowedUserId: clean(env.FINCOACH_TELEGRAM_ALLOWED_USER_ID),
+    chatId: operationsChatId,
+    operationsChatId,
+    signalChatId: clean(env.FINCOACH_TELEGRAM_SIGNAL_CHAT_ID),
+    webhookSecret: clean(env.FINCOACH_TELEGRAM_WEBHOOK_SECRET),
+    webhookUrl: clean(env.FINCOACH_TELEGRAM_WEBHOOK_URL),
+    apiId: clean(env.FINCOACH_TELEGRAM_API_ID),
+    apiHash: clean(env.FINCOACH_TELEGRAM_API_HASH),
+    channelId: clean(env.FINCOACH_TELEGRAM_CHANNEL_ID),
     notificationsEnabled: parseBool(env.TELEGRAM_NOTIFICATIONS_ENABLED, true),
     signalsEnabled: parseBool(env.TELEGRAM_SIGNALS_ENABLED, true),
-    inboundPollingEnabled: parseBool(env.FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED, true),
+    transport: parseTransport(env.FINCOACH_TELEGRAM_TRANSPORT),
+    commandPollingEnabled: parseBool(env.FINCOACH_TELEGRAM_COMMAND_POLLING_ENABLED, false),
+    inboundPollingEnabled: parseBool(env.FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED, false),
+    longPollingEnabled: parseBool(env.FINCOACH_TELEGRAM_LONG_POLLING_ENABLED, false),
+    webhookEnabled: parseBool(env.FINCOACH_TELEGRAM_WEBHOOK_ENABLED, false),
     dailySummaryHourUtc: parseIntBounded(env.TELEGRAM_DAILY_SUMMARY_HOUR_UTC, 22, 0, 23),
     weeklySummaryDay: parseIntBounded(env.TELEGRAM_WEEKLY_SUMMARY_DAY, 0, 0, 6),
     weeklySummaryHourUtc: parseIntBounded(env.TELEGRAM_WEEKLY_SUMMARY_HOUR_UTC, 22, 0, 23),
@@ -25,21 +35,28 @@ export function loadTelegramConfig(env: NodeJS.ProcessEnv = process.env): Telegr
     minSignalConfidence: parseIntBounded(env.TELEGRAM_MIN_SIGNAL_CONFIDENCE, 75, 0, 100),
     minSignalEvidenceScore: parseFloatBounded(env.TELEGRAM_MIN_SIGNAL_EVIDENCE_SCORE, 0.75, 0, 1),
     signalCooldownMinutes: parseIntBounded(env.TELEGRAM_SIGNAL_COOLDOWN_MINUTES, 60, 0, 24 * 60),
-    signalSigningSecret: clean(env.TELEGRAM_SIGNAL_SIGNING_SECRET),
+    signalSigningSecret: clean(env.FINCOACH_TELEGRAM_SIGNAL_SIGNING_SECRET),
   };
 }
 
 export function validateTelegramConfig(config: TelegramEnvironmentConfig): TelegramConfigValidation {
   const errors = [
-    config.notificationsEnabled && !config.botToken ? "TELEGRAM_BOT_TOKEN is required when notifications are enabled" : null,
-    config.notificationsEnabled && !config.chatId ? "TELEGRAM_CHAT_ID is required for operational notifications" : null,
-    config.signalsEnabled && !config.botToken ? "TELEGRAM_BOT_TOKEN is required when signals are enabled" : null,
-    config.signalsEnabled && !config.signalChatId ? "TELEGRAM_SIGNAL_CHAT_ID is required for signal delivery; fail closed" : null,
-    config.botToken && config.signalSigningSecret && config.botToken === config.signalSigningSecret ? "TELEGRAM_SIGNAL_SIGNING_SECRET must not reuse TELEGRAM_BOT_TOKEN" : null,
+    config.notificationsEnabled && !config.botToken ? "FINCOACH_TELEGRAM_BOT_TOKEN is required when notifications are enabled" : null,
+    config.notificationsEnabled && !config.chatId ? "FINCOACH_TELEGRAM_CHAT_ID or FINCOACH_TELEGRAM_OPERATIONS_CHAT_ID is required for operational notifications" : null,
+    config.signalsEnabled && !config.botToken ? "FINCOACH_TELEGRAM_BOT_TOKEN is required when signals are enabled" : null,
+    config.signalsEnabled && !config.signalChatId ? "FINCOACH_TELEGRAM_SIGNAL_CHAT_ID is required for signal delivery; fail closed" : null,
+    config.botToken && config.signalSigningSecret && config.botToken === config.signalSigningSecret ? "FINCOACH_TELEGRAM_SIGNAL_SIGNING_SECRET must not reuse FINCOACH_TELEGRAM_BOT_TOKEN" : null,
+    config.commandPollingEnabled && !config.inboundPollingEnabled ? "FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED=true is required when command polling is enabled" : null,
+    config.commandPollingEnabled && !config.longPollingEnabled ? "FINCOACH_TELEGRAM_LONG_POLLING_ENABLED=true is required when command polling is enabled" : null,
+    config.commandPollingEnabled && config.transport !== "long_polling" ? "FINCOACH_TELEGRAM_TRANSPORT=long_polling is required when command polling is enabled" : null,
+    config.commandPollingEnabled && !config.botToken ? "FINCOACH_TELEGRAM_BOT_TOKEN is required when command polling is enabled" : null,
+    config.commandPollingEnabled && !config.allowedUserId ? "FINCOACH_TELEGRAM_ALLOWED_USER_ID is required when command polling is enabled" : null,
+    config.transport === "webhook" && config.longPollingEnabled ? "Webhook transport cannot run with FINCOACH_TELEGRAM_LONG_POLLING_ENABLED=true" : null,
+    config.transport === "long_polling" && config.webhookEnabled ? "Long polling transport cannot run with FINCOACH_TELEGRAM_WEBHOOK_ENABLED=true" : null,
   ].filter((item): item is string => Boolean(item));
   const warnings = [
-    !config.webhookSecret ? "TELEGRAM_WEBHOOK_SECRET is not configured; webhook command intake will fail closed" : null,
-    !config.allowedUserId ? "TELEGRAM_ALLOWED_USER_ID is not configured; commands will fail closed" : null,
+    !config.webhookSecret ? "FINCOACH_TELEGRAM_WEBHOOK_SECRET is not configured; webhook command intake will fail closed" : null,
+    !config.allowedUserId ? "FINCOACH_TELEGRAM_ALLOWED_USER_ID is not configured; commands will fail closed" : null,
   ].filter((item): item is string => Boolean(item));
   return { ok: errors.length === 0, errors, warnings, redacted: redactedConfig(config) };
 }
@@ -93,6 +110,18 @@ export class TelegramClient {
   async sendDocument(request: TelegramSendRequest & { filename: string; content: string; mimeType?: string }): Promise<TelegramSendResult> {
     const text = `${request.text}\n\nDocument export is recorded in metadata: ${request.filename}`;
     return this.sendMessage({ ...request, text, metadata: { ...request.metadata, documentFilename: request.filename, documentHash: hashText(request.content), mimeType: request.mimeType ?? "application/json" } });
+  }
+
+  async getMe() {
+    if (!this.config.botToken) return { ok: false as const, errorCode: "not_configured", errorMessage: "Telegram bot token is not configured" };
+    try {
+      const response = await this.fetchWithTimeout(`https://api.telegram.org/bot${this.config.botToken}/getMe`, { method: "POST" });
+      if (!response.ok) return { ok: false as const, errorCode: `telegram_${response.status}`, errorMessage: `Telegram getMe failed with HTTP ${response.status}` };
+      const json = await response.json().catch(() => ({}));
+      return { ok: Boolean((json as { ok?: boolean }).ok), result: (json as { result?: unknown }).result ?? null };
+    } catch (error) {
+      return { ok: false as const, errorCode: error instanceof DOMException && error.name === "AbortError" ? "timeout" : "network_error", errorMessage: error instanceof Error ? error.message : "Telegram getMe failed" };
+    }
   }
 
   private async sendTelegramMethod(method: string, request: TelegramSendRequest, body: Record<string, unknown>): Promise<TelegramSendResult> {
@@ -224,6 +253,12 @@ function clean(value: string | undefined) {
 function parseBool(value: string | undefined, fallback: boolean) {
   if (value === undefined) return fallback;
   return ["true", "1", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function parseTransport(value: string | undefined): TelegramEnvironmentConfig["transport"] {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "long_polling" || normalized === "webhook") return normalized;
+  return "disabled";
 }
 
 function parseIntBounded(value: string | undefined, fallback: number, min: number, max: number) {

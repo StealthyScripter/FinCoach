@@ -15,13 +15,18 @@ const scheduleEnv = {
   TELEGRAM_DAILY_SUMMARY_HOUR_UTC: "22",
   TELEGRAM_WEEKLY_SUMMARY_DAY: "0",
   TELEGRAM_WEEKLY_SUMMARY_HOUR_UTC: "22",
-  TELEGRAM_BOT_TOKEN: "test-token-never-print",
-  TELEGRAM_CHAT_ID: "123456",
-  TELEGRAM_SIGNAL_CHAT_ID: "-100111222333",
-  TELEGRAM_ALLOWED_USER_ID: "123456",
+  FINCOACH_TELEGRAM_BOT_TOKEN: "test-token-never-print",
+  FINCOACH_TELEGRAM_CHAT_ID: "123456",
+  FINCOACH_TELEGRAM_SIGNAL_CHAT_ID: "-100111222333",
+  FINCOACH_TELEGRAM_ALLOWED_USER_ID: "123456",
   TELEGRAM_NOTIFICATIONS_ENABLED: "true",
   TELEGRAM_SIGNALS_ENABLED: "true",
-  TELEGRAM_SIGNAL_SIGNING_SECRET: "test-signing-secret",
+  FINCOACH_TELEGRAM_TRANSPORT: "long_polling",
+  FINCOACH_TELEGRAM_COMMAND_POLLING_ENABLED: "true",
+  FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED: "true",
+  FINCOACH_TELEGRAM_LONG_POLLING_ENABLED: "true",
+  FINCOACH_TELEGRAM_WEBHOOK_ENABLED: "false",
+  FINCOACH_TELEGRAM_SIGNAL_SIGNING_SECRET: "test-signing-secret",
 };
 
 class MatrixRepository extends InMemoryTelegramRepository {
@@ -445,7 +450,7 @@ await withEnv(scheduleEnv, async () => {
   assert.equal(classifySchedulerError(new Error("demo-only live execution blocked")).class, "safety");
   assert.equal(classifySchedulerError(new Error("invariant violation: impossible state")).class, "invariant");
   assert.equal(classifySchedulerError(new Error("invalid summary date")).class, "data_integrity");
-  assert.equal(classifySchedulerError(new Error("TELEGRAM_CHAT_ID config missing")).class, "configuration");
+  assert.equal(classifySchedulerError(new Error("FINCOACH_TELEGRAM_CHAT_ID config missing")).class, "configuration");
   assert.equal(classifySchedulerError(new Error("mystery failure")).class, "unknown", "unknown errors must fail closed, not skip");
 }
 
@@ -457,7 +462,7 @@ await withEnv(scheduleEnv, async () => {
       sent.push(text);
       return { sent: true as const };
     },
-  } as never, { TELEGRAM_BOT_TOKEN: secret } as never);
+  } as never, { FINCOACH_TELEGRAM_BOT_TOKEN: secret } as never);
   monitor.reportUnhandledRejection(new Error(`escaped ${secret}`));
   await new Promise((resolve) => setTimeout(resolve, 0));
   monitor.reportUnhandledRejection(new Error(`escaped ${secret}`));
@@ -466,7 +471,7 @@ await withEnv(scheduleEnv, async () => {
   assert.equal(sent.length, 2, "dedupe should suppress only identical process alerts");
   assert.ok(sent.every((text) => !text.includes(secret)), "process alert payload must redact secrets");
   assert.ok(sent.every((text) => !text.includes(" at ")), "Telegram alert must not include stack trace");
-  assert.equal(normalizeProcessFailure(new Error(`escaped ${secret}`), { TELEGRAM_BOT_TOKEN: secret }).message.includes(secret), false);
+  assert.equal(normalizeProcessFailure(new Error(`escaped ${secret}`), { FINCOACH_TELEGRAM_BOT_TOKEN: secret }).message.includes(secret), false);
 }
 
 {

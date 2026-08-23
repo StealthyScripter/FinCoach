@@ -8,6 +8,7 @@ import { telegramRepository } from "./repository";
 import { redactChatId } from "./formatter";
 import { telegramUpdateReceiver } from "./updateReceiver";
 import { telegramLifecycleMonitor } from "./lifecycleMonitor";
+import { telegramMetrics } from "./metrics";
 
 const processStartedAt = Date.now();
 
@@ -21,6 +22,7 @@ export async function buildTelegramStatus() {
   const risk = executionRiskService.snapshot();
   const clientHealth = telegramClient.health();
   const receiverHealth = telegramUpdateReceiver.health();
+  const metrics = telegramMetrics.snapshot();
   return {
     generatedAt: new Date().toISOString(),
     finCoachState: "running",
@@ -43,6 +45,23 @@ export async function buildTelegramStatus() {
       signalChat: redactChatId(config.signalChatId),
       client: telegramClient.health(),
       updateReceiver: receiverHealth,
+      outbound: {
+        configured: clientHealth.configured,
+        reachable: clientHealth.lastSuccessfulSendAt !== null || clientHealth.consecutiveFailureCount === 0,
+        enabled: clientHealth.enabled,
+        lastSuccessfulSendAt: clientHealth.lastSuccessfulSendAt,
+        lastFailedSendAt: clientHealth.lastFailedSendAt,
+      },
+      commands: {
+        enabled: config.commandPollingEnabled && config.inboundPollingEnabled && config.longPollingEnabled && config.transport === "long_polling",
+        pollerRunning: receiverHealth.running,
+        ownershipState: receiverHealth.ownershipState,
+        reachabilityState: receiverHealth.reachabilityState,
+        lastSuccessfulPollAt: receiverHealth.lastPollSuccessAt,
+        lastCommandReceivedAt: receiverHealth.lastCommandReceivedAt ?? metrics.lastCommandReceivedAt,
+        lastCommandProcessedAt: receiverHealth.lastCommandProcessedAt ?? metrics.lastCommandProcessedAt,
+        lastReplySentAt: receiverHealth.lastReplySentAt ?? metrics.lastReplySentAt,
+      },
       telegramTransport: {
         configured: clientHealth.configured,
         receiverRunning: receiverHealth.running,

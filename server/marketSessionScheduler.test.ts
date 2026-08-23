@@ -91,7 +91,7 @@ async function impactScoresAreAuditableAndBounded() {
 }
 
 async function openExchangesCommandIncludesTradableMarkets() {
-  setEnv({ TELEGRAM_ALLOWED_USER_ID: "42", FINCOACH_V2_SYMBOLS: "EUR_USD" });
+  setEnv({ FINCOACH_TELEGRAM_ALLOWED_USER_ID: "42", FINCOACH_V2_SYMBOLS: "EUR_USD" });
   const router = new TelegramCommandRouter(process.env, undefined as never, new InMemoryTelegramRepository());
   const message = await router.handle({ command: "/open_exchanges", actorId: "42", chatId: "chat" });
   assert.ok(message.includes("Currently Tradable Markets"));

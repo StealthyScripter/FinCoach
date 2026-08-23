@@ -227,8 +227,15 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.leaseTtlMs <= 0) errors.push("FINCOACH_V2_LEASE_TTL_MS must be > 0.");
   if (config.leaseRenewIntervalMs <= 0) errors.push("FINCOACH_V2_LEASE_RENEW_INTERVAL_MS must be > 0.");
   if (config.leaseRenewIntervalMs >= config.leaseTtlMs) errors.push("FINCOACH_V2_LEASE_RENEW_INTERVAL_MS must be less than FINCOACH_V2_LEASE_TTL_MS.");
-  if (config.telegramTransport === "webhook" && env.TELEGRAM_LONG_POLLING_ENABLED === "true") errors.push("Webhook and long polling cannot both be active.");
-  if (config.telegramTransport === "long_polling" && env.TELEGRAM_WEBHOOK_ENABLED === "true") errors.push("Long polling and webhook cannot both be active.");
+  if (config.telegramTransport === "webhook" && env.FINCOACH_TELEGRAM_LONG_POLLING_ENABLED === "true") errors.push("Webhook and long polling cannot both be active.");
+  if (config.telegramTransport === "long_polling" && env.FINCOACH_TELEGRAM_WEBHOOK_ENABLED === "true") errors.push("Long polling and webhook cannot both be active.");
+  if (env.FINCOACH_TELEGRAM_COMMAND_POLLING_ENABLED === "true") {
+    if (env.FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED !== "true") errors.push("FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED=true is required when command polling is enabled.");
+    if (env.FINCOACH_TELEGRAM_LONG_POLLING_ENABLED !== "true") errors.push("FINCOACH_TELEGRAM_LONG_POLLING_ENABLED=true is required when command polling is enabled.");
+    if (config.telegramTransport !== "long_polling") errors.push("FINCOACH_TELEGRAM_TRANSPORT=long_polling is required when command polling is enabled.");
+    if (!env.FINCOACH_TELEGRAM_BOT_TOKEN?.trim()) errors.push("FINCOACH_TELEGRAM_BOT_TOKEN is required when command polling is enabled.");
+    if (!env.FINCOACH_TELEGRAM_ALLOWED_USER_ID?.trim()) errors.push("FINCOACH_TELEGRAM_ALLOWED_USER_ID is required when command polling is enabled.");
+  }
   if (config.weekendDormancy.enabled && config.weekendDormancy.postCloseObservationHours > 48) errors.push("FINCOACH_POST_CLOSE_OBSERVATION_HOURS must be <= 48.");
   if (config.weekendDormancy.enabled && config.weekendDormancy.preOpenWakeMinutes > 24 * 60) errors.push("FINCOACH_PRE_OPEN_WAKE_MINUTES must be <= 1440.");
   if (config.weeklyResearchSchedule.enabled) {

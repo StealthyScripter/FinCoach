@@ -6,8 +6,8 @@ export type DemoRunEnvCheck = {
 
 const SECRET_KEYS = new Set([
   "DATABASE_URL",
-  "TELEGRAM_BOT_TOKEN",
-  "TELEGRAM_WEBHOOK_SECRET",
+  "FINCOACH_TELEGRAM_BOT_TOKEN",
+  "FINCOACH_TELEGRAM_WEBHOOK_SECRET",
   "OANDA_API_TOKEN",
   "OANDA_ACCOUNT_ID",
   "METATRADER_DEMO_BRIDGE_SECRET",
@@ -29,8 +29,8 @@ export function validateDemoRunEnvironment(env: NodeJS.ProcessEnv = process.env)
     required("DATABASE_URL", env),
     equals("MARKETPILOT_RUN_MODE", env, "demo_observation"),
     telegramAllowedUser(env),
-    required("TELEGRAM_BOT_TOKEN", env),
-    required("TELEGRAM_WEBHOOK_SECRET", env),
+    required("FINCOACH_TELEGRAM_BOT_TOKEN", env),
+    required("FINCOACH_TELEGRAM_WEBHOOK_SECRET", env),
     demoOnlyEnabled(env),
     liveFlagsDisabled(env),
     oandaPracticeOnly(env),
@@ -72,13 +72,13 @@ function liveFlagsDisabled(env: NodeJS.ProcessEnv): DemoRunEnvCheck {
 }
 
 function telegramAllowedUser(env: NodeJS.ProcessEnv): DemoRunEnvCheck {
-  if (env.TELEGRAM_ALLOWED_USER_ID?.trim()) {
-    return { key: "TELEGRAM_ALLOWED_USER_ID", status: "configured", message: "TELEGRAM_ALLOWED_USER_ID is configured." };
+  if (env.FINCOACH_TELEGRAM_ALLOWED_USER_ID?.trim()) {
+    return { key: "FINCOACH_TELEGRAM_ALLOWED_USER_ID", status: "configured", message: "FINCOACH_TELEGRAM_ALLOWED_USER_ID is configured." };
   }
-  if (env.TELEGRAM_CHAT_ID?.trim()) {
-    return { key: "TELEGRAM_ALLOWED_USER_ID", status: "configured", message: "TELEGRAM_CHAT_ID is configured as the allowed Telegram control ID." };
+  if (env.FINCOACH_TELEGRAM_CHAT_ID?.trim()) {
+    return { key: "FINCOACH_TELEGRAM_ALLOWED_USER_ID", status: "configured", message: "FINCOACH_TELEGRAM_CHAT_ID is configured as the allowed Telegram control ID." };
   }
-  return { key: "TELEGRAM_ALLOWED_USER_ID", status: "missing", message: "TELEGRAM_ALLOWED_USER_ID is missing." };
+  return { key: "FINCOACH_TELEGRAM_ALLOWED_USER_ID", status: "missing", message: "FINCOACH_TELEGRAM_ALLOWED_USER_ID is missing." };
 }
 
 function oandaPracticeOnly(env: NodeJS.ProcessEnv): DemoRunEnvCheck {

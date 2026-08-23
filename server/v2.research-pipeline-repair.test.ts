@@ -104,7 +104,7 @@ import { marketSessionRulesService } from "./execution/marketSessionRules";
 
 {
   const router = new TelegramCommandRouter(
-    { TELEGRAM_ALLOWED_USER_ID: "operator" } as NodeJS.ProcessEnv,
+    { FINCOACH_TELEGRAM_ALLOWED_USER_ID: "operator" } as NodeJS.ProcessEnv,
     new TelegramReportingService(new InMemoryTelegramRepository()),
     new InMemoryTelegramRepository(),
   );

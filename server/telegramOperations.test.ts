@@ -31,16 +31,21 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000) {
 }
 
 const baseEnv = {
-  TELEGRAM_BOT_TOKEN: "telegram-token-never-print",
-  TELEGRAM_ALLOWED_USER_ID: "123456",
-  TELEGRAM_CHAT_ID: "123456",
-  TELEGRAM_SIGNAL_CHAT_ID: "-100999888777",
+  FINCOACH_TELEGRAM_BOT_TOKEN: "telegram-token-never-print",
+  FINCOACH_TELEGRAM_ALLOWED_USER_ID: "123456",
+  FINCOACH_TELEGRAM_CHAT_ID: "123456",
+  FINCOACH_TELEGRAM_SIGNAL_CHAT_ID: "-100999888777",
   TELEGRAM_NOTIFICATIONS_ENABLED: "true",
   TELEGRAM_SIGNALS_ENABLED: "true",
+  FINCOACH_TELEGRAM_TRANSPORT: "long_polling",
+  FINCOACH_TELEGRAM_COMMAND_POLLING_ENABLED: "true",
+  FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED: "true",
+  FINCOACH_TELEGRAM_LONG_POLLING_ENABLED: "true",
+  FINCOACH_TELEGRAM_WEBHOOK_ENABLED: "false",
   TELEGRAM_MIN_SIGNAL_CONFIDENCE: "75",
   TELEGRAM_MIN_SIGNAL_EVIDENCE_SCORE: "0.75",
   TELEGRAM_SIGNAL_COOLDOWN_MINUTES: "60",
-  TELEGRAM_SIGNAL_SIGNING_SECRET: "dedicated-signing-secret",
+  FINCOACH_TELEGRAM_SIGNAL_SIGNING_SECRET: "dedicated-signing-secret",
 };
 
 const telegramTestRoot = mkdtempSync(join(tmpdir(), "fincoach-telegram-operations-"));
@@ -148,6 +153,28 @@ function fakeLifecycleNotifications(input: { sent?: boolean; delayMs?: number; t
 
 {
   const repo = new InMemoryTelegramRepository();
+  const calls: string[] = [];
+  const outboundOnlyEnv = {
+    ...baseEnv,
+    FINCOACH_TELEGRAM_COMMAND_POLLING_ENABLED: "false",
+    FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED: "false",
+    FINCOACH_TELEGRAM_LONG_POLLING_ENABLED: "false",
+  };
+  const client = new TelegramClient(loadTelegramConfig(outboundOnlyEnv), repo, async (url) => {
+    calls.push(String(url));
+    return String(url).endsWith("/getMe")
+      ? jsonResponse({ ok: true, result: { username: "fincoach_test_bot" } })
+      : jsonResponse({ ok: true, result: { message_id: 44 } });
+  });
+  const sent = await client.sendMessage({ kind: "test", destination: "operations", chatId: "123456", text: "outbound only" });
+  const me = await client.getMe();
+  assert.equal(sent.ok, true);
+  assert.equal(me.ok, true);
+  assert.equal(calls.some((url) => url.includes("/getUpdates")), false);
+}
+
+{
+  const repo = new InMemoryTelegramRepository();
   let calls = 0;
   const client = new TelegramClient(loadTelegramConfig(baseEnv), repo, async () => {
     calls += 1;
@@ -172,8 +199,8 @@ function fakeLifecycleNotifications(input: { sent?: boolean; delayMs?: number; t
 }
 
 {
-  const redacted = JSON.stringify(redactTelegramSecrets({ TELEGRAM_BOT_TOKEN: baseEnv.TELEGRAM_BOT_TOKEN, nested: { apiKey: "secret" } }));
-  assert.ok(!redacted.includes(baseEnv.TELEGRAM_BOT_TOKEN));
+  const redacted = JSON.stringify(redactTelegramSecrets({ FINCOACH_TELEGRAM_BOT_TOKEN: baseEnv.FINCOACH_TELEGRAM_BOT_TOKEN, nested: { apiKey: "secret" } }));
+  assert.ok(!redacted.includes(baseEnv.FINCOACH_TELEGRAM_BOT_TOKEN));
   assert.ok(!redacted.includes("secret"));
 }
 
@@ -350,7 +377,7 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
 
 {
   const secret = "telegram-token-never-print";
-  const normalized = normalizeProcessFailure(new Error(`failed with ${secret}`), { TELEGRAM_BOT_TOKEN: secret });
+  const normalized = normalizeProcessFailure(new Error(`failed with ${secret}`), { FINCOACH_TELEGRAM_BOT_TOKEN: secret });
   assert.equal(normalized.type, "Error");
   assert.ok(!normalized.message.includes(secret));
   assert.ok(normalized.message.includes("[REDACTED]"));
@@ -363,7 +390,7 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
       sent.push(text);
       return { sent: true as const };
     },
-  } as never, { TELEGRAM_BOT_TOKEN: "secret-token-123" } as never);
+  } as never, { FINCOACH_TELEGRAM_BOT_TOKEN: "secret-token-123" } as never);
   monitor.reportUnhandledRejection(new TypeError("bad async state secret-token-123"));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(sent.length, 1);
@@ -603,9 +630,9 @@ await withTelegramScheduleEnv({
 }
 
 {
-  const config = validateTelegramConfig(loadTelegramConfig({ ...baseEnv, TELEGRAM_SIGNAL_CHAT_ID: "" }));
+  const config = validateTelegramConfig(loadTelegramConfig({ ...baseEnv, FINCOACH_TELEGRAM_SIGNAL_CHAT_ID: "" }));
   assert.equal(config.ok, false);
-  assert.ok(config.errors.some((error) => error.includes("TELEGRAM_SIGNAL_CHAT_ID")));
+  assert.ok(config.errors.some((error) => error.includes("FINCOACH_TELEGRAM_SIGNAL_CHAT_ID")));
 }
 
 {

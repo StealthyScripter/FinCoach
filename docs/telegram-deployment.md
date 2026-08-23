@@ -3,21 +3,21 @@
 ## Bot Setup
 
 1. Create or configure `@WendotFinanceBot` in BotFather.
-2. Store the bot token in `.env` as `TELEGRAM_BOT_TOKEN`.
+2. Store the bot token in `.env` as `FINCOACH_TELEGRAM_BOT_TOKEN`.
 3. Do not print or commit `.env`.
-4. Configure `TELEGRAM_CHAT_ID` for human operations alerts.
-5. Configure `TELEGRAM_SIGNAL_CHAT_ID` for machine-consumable signals.
-6. Configure `TELEGRAM_ALLOWED_USER_ID` for command authorization.
+4. Configure `FINCOACH_TELEGRAM_CHAT_ID` for human operations alerts.
+5. Configure `FINCOACH_TELEGRAM_SIGNAL_CHAT_ID` for machine-consumable signals.
+6. Configure `FINCOACH_TELEGRAM_ALLOWED_USER_ID` for command authorization.
 
-Signals fail closed if `TELEGRAM_SIGNAL_CHAT_ID` is missing.
+Signals fail closed if `FINCOACH_TELEGRAM_SIGNAL_CHAT_ID` is missing.
 
 ## Webhook Mode
 
 Set:
 
 ```env
-TELEGRAM_WEBHOOK_URL=
-TELEGRAM_WEBHOOK_SECRET=
+FINCOACH_TELEGRAM_WEBHOOK_URL=
+FINCOACH_TELEGRAM_WEBHOOK_SECRET=
 ```
 
 Telegram sends webhook updates to:

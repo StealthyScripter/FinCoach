@@ -1317,7 +1317,12 @@ export class FinCoachV2Runtime {
 
   private async startDormantServicesForReadiness() {
     operationalBlockerService.setDormant(false);
-    if (this.env.FINCOACH_TELEGRAM_TRANSPORT === "long_polling") {
+    if (
+      this.env.FINCOACH_TELEGRAM_COMMAND_POLLING_ENABLED === "true" &&
+      this.env.FINCOACH_TELEGRAM_INBOUND_POLLING_ENABLED === "true" &&
+      this.env.FINCOACH_TELEGRAM_LONG_POLLING_ENABLED === "true" &&
+      this.env.FINCOACH_TELEGRAM_TRANSPORT === "long_polling"
+    ) {
       const telegram = await import("../../telegram");
       telegram.telegramScheduler.start();
       telegram.telegramUpdateReceiver.start();

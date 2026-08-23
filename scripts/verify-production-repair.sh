@@ -38,7 +38,7 @@ for (const line of fs.readFileSync(path, "utf8").split(/\r?\n/)) {
   }
   const key = line.slice(0, index);
   const value = line.slice(index + 1);
-  if (key === "TELEGRAM_BOT_TOKEN" && value) {
+  if (key === "FINCOACH_TELEGRAM_BOT_TOKEN" && value) {
     console.log(`${key}=sha256:${crypto.createHash("sha256").update(value).digest("hex").slice(0, 12)}`);
   } else if (sensitive.test(key)) {
     console.log(`${key}=[REDACTED]`);
@@ -82,7 +82,7 @@ const path = process.argv[3];
 const apps = JSON.parse(fs.readFileSync(path, "utf8"));
 for (const app of apps.filter((item) => item.name === appName)) {
   const env = app.pm2_env || {};
-  const token = env.TELEGRAM_BOT_TOKEN || "";
+  const token = env.FINCOACH_TELEGRAM_BOT_TOKEN || "";
   console.log(JSON.stringify({
     name: app.name,
     pid: app.pid,

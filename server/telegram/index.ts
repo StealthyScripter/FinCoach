@@ -24,7 +24,16 @@ const manualSummarySchema = z.object({
 export async function startTelegramOperations() {
   const config = loadTelegramConfig();
   const validation = validateTelegramConfig(config);
-  if (process.env.FINCOACH_TELEGRAM_TRANSPORT !== "long_polling") {
+  const commandPollingReady = config.commandPollingEnabled && config.inboundPollingEnabled && config.longPollingEnabled && config.transport === "long_polling";
+  telegramMetrics.recordCommandPollerStartDecision({
+    commandPollingEnabled: config.commandPollingEnabled,
+    inboundPollingEnabled: config.inboundPollingEnabled,
+    longPollingEnabled: config.longPollingEnabled,
+    transport: config.transport,
+    started: commandPollingReady,
+    reason: commandPollingReady ? "all_gates_enabled" : "command_polling_disabled_or_incoherent",
+  });
+  if (config.transport !== "long_polling") {
     return { started: false, validation, reason: "telegram_transport_not_long_polling" };
   }
   if (!config.notificationsEnabled || !config.botToken || !config.chatId) {
@@ -32,7 +41,7 @@ export async function startTelegramOperations() {
   }
   const scheduler = telegramScheduler.start();
   const marketSnapshotScheduler = marketSnapshotService.start();
-  const updateReceiver = config.inboundPollingEnabled ? telegramUpdateReceiver.start() : telegramUpdateReceiver;
+  const updateReceiver = commandPollingReady ? telegramUpdateReceiver.start() : telegramUpdateReceiver;
   return { started: true, validation, scheduler, marketSnapshotScheduler, updateReceiver };
 }
 

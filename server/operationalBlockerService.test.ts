@@ -12,8 +12,8 @@ const notifications = {
 
 const env = {
   TELEGRAM_NOTIFICATIONS_ENABLED: "true",
-  TELEGRAM_BOT_TOKEN: "test-token-never-print",
-  TELEGRAM_CHAT_ID: "123456",
+  FINCOACH_TELEGRAM_BOT_TOKEN: "test-token-never-print",
+  FINCOACH_TELEGRAM_CHAT_ID: "123456",
   FINCOACH_OPERATIONAL_ALERT_REMINDER_MINUTES: "60",
 } as NodeJS.ProcessEnv;
 
@@ -78,6 +78,12 @@ const env = {
   assert.equal(shouldSendOperatorTelegramAlert({ code: "broker_authentication_failed", expected: false }), true);
   assert.equal(shouldSendOperatorTelegramAlert({ code: "reconciliation_stale", expected: false }), true);
   assert.equal(shouldSendOperatorTelegramAlert({ code: "market_data_provider_fallback_active", kind: "fallback", expected: false }), true);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "max_daily_trade_capacity_reached", kind: "limit", expected: true }), true);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "practice_active_trade_cap_reached", kind: "limit", expected: true }), true);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "telegram_getupdates_conflict", kind: "dependency", expected: false }), true);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "normal_strategy_rejection", expected: true }), false);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "market_closed", expected: true }), false);
+  assert.equal(shouldSendOperatorTelegramAlert({ code: "weekend_market_closed", expected: true }), false);
   assert.equal(
     operatorIncidentKey({ code: "broker_authentication_failed", broker: "oanda_practice", account: "practice", environment: "practice" }),
     operatorIncidentKey({ code: "BROKER_AUTHENTICATION_FAILED", broker: "oanda_practice", account: "practice", environment: "practice" }),
