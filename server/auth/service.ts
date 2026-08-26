@@ -215,6 +215,49 @@ export function configureAuth(app: Express) {
   }));
 }
 
+export async function assertAuthSessionSchema(databaseUrl = process.env.DATABASE_URL) {
+  if (!databaseUrl) return { checked: false as const, reason: "database_url_not_configured" };
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const result = await pool.query(
+      `SELECT column_name, data_type, is_nullable
+       FROM information_schema.columns
+       WHERE table_schema = ANY (current_schemas(false))
+         AND table_name = 'auth_sessions'
+       ORDER BY ordinal_position`,
+    );
+    const columns = new Map(result.rows.map((row) => [String(row.column_name), row]));
+    const problems: string[] = [];
+    for (const [column, expected] of [
+      ["sid", /^(character varying|varchar|text)$/i],
+      ["sess", /^json\b/i],
+      ["expire", /^timestamp without time zone$/i],
+    ] as const) {
+      const row = columns.get(column);
+      if (!row) problems.push(`missing column ${column}`);
+      else if (!expected.test(String(row.data_type))) problems.push(`column ${column} has type ${row.data_type}`);
+      if (row && row.is_nullable !== "NO") problems.push(`column ${column} must be NOT NULL`);
+    }
+    const primaryKey = await pool.query(
+      `SELECT 1
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu
+         ON tc.constraint_name = kcu.constraint_name
+        AND tc.table_schema = kcu.table_schema
+       WHERE tc.table_schema = ANY (current_schemas(false))
+         AND tc.table_name = 'auth_sessions'
+         AND tc.constraint_type = 'PRIMARY KEY'
+         AND kcu.column_name = 'sid'
+       LIMIT 1`,
+    );
+    if (primaryKey.rowCount === 0) problems.push("missing primary key on sid");
+    if (problems.length) throw new Error(`auth_sessions schema is not migrated correctly: ${problems.join("; ")}`);
+    return { checked: true as const };
+  } finally {
+    await pool.end();
+  }
+}
+
 export function registerAuthRoutes(app: Express, service = authService) {
   app.get("/api/auth/session", async (req, res) => {
     const user = await service.currentUser(req.session.userId);
@@ -276,7 +319,7 @@ function establishSession(req: Request, user: PublicUser) {
 function publicApi(path: string) {
   const pathname = path.split("?")[0];
   return pathname === "/api/health"
-    || pathname.startsWith("/api/health/")
+    || pathname === "/api/health/storage"
     || pathname === "/api/auth/session"
     || pathname === "/api/auth/signup"
     || pathname === "/api/auth/signin"

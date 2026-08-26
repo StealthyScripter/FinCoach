@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { TelegramUpdateReceiver } from "./telegram/updateReceiver";
+import { TelegramUpdateReceiver, type TelegramPollingCoordinator, type TelegramPollingLeadership } from "./telegram/updateReceiver";
 import { InMemoryTelegramRepository } from "./telegram/repository";
 import { TelegramUpdateCursor } from "./telegram/updateCursor";
 
@@ -16,6 +16,7 @@ try {
     writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
     const receiver = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), okFetch());
     receiver.start();
+    await waitFor(() => receiver.health().ownershipState === "blocked");
     const health = receiver.health();
     assert.equal(health.running, false);
     assert.equal(health.ownershipState, "blocked");
@@ -88,6 +89,22 @@ async function waitFor(predicate: () => boolean) {
   assert.fail("condition not reached");
 }
 
+class FakeDistributedCoordinator implements TelegramPollingCoordinator {
+  private held = false;
+
+  async tryAcquire(_botToken: string) {
+    if (this.held) return { acquired: false as const, reason: "telegram_polling_leader_exists", kind: "postgres" as const };
+    this.held = true;
+    const leadership: TelegramPollingLeadership = {
+      kind: "postgres",
+      release: async () => {
+        this.held = false;
+      },
+    };
+    return { acquired: true as const, leadership };
+  }
+}
+
 {
   const receiver = new TelegramUpdateReceiver({ ...config(), inboundPollingEnabled: false }, new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), okFetch());
   receiver.start();
@@ -95,6 +112,38 @@ async function waitFor(predicate: () => boolean) {
   assert.equal(health.running, false);
   assert.equal(health.ownershipState, "blocked");
   assert.equal(health.lastPollError, "fincoach_telegram_inbound_polling_disabled");
+}
+
+{
+  const coordinator = new FakeDistributedCoordinator();
+  let firstCalls = 0;
+  let secondCalls = 0;
+  const first = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), (async () => {
+    firstCalls += 1;
+    return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+  }) as typeof fetch, coordinator);
+  const second = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), (async () => {
+    secondCalls += 1;
+    return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+  }) as typeof fetch, coordinator);
+  first.start();
+  second.start();
+  await waitFor(() => first.health().ownershipState === "owned");
+  await waitFor(() => second.health().ownershipState === "standby");
+  assert.equal(first.health().leadershipKind, "postgres");
+  assert.equal(secondCalls, 0, "standby receiver must not poll");
+  await first.stop();
+  second.stop();
+
+  const successor = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), (async () => {
+    secondCalls += 1;
+    return new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+  }) as typeof fetch, coordinator);
+  successor.start();
+  await waitFor(() => successor.health().ownershipState === "owned");
+  await waitFor(() => secondCalls > 0);
+  assert.ok(firstCalls > 0, "first leader should poll");
+  await successor.stop();
 }
 
 for (const [name, override] of [

@@ -1,5 +1,7 @@
+import { createHash } from "crypto";
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
+import { Client } from "pg";
 import type { TelegramEnvironmentConfig, TelegramNormalizedUpdate } from "./contracts";
 import { telegramMetrics } from "./metrics";
 import { telegramTransport, type TelegramTransport } from "./transport";
@@ -25,20 +27,34 @@ type TelegramApiMessage = {
 const LONG_POLL_TIMEOUT_SECONDS = 30;
 const REQUEST_TIMEOUT_MS = 35_000;
 const MAX_BACKOFF_MS = 30_000;
+const EMPTY_POLL_YIELD_MS = 250;
 const DEFAULT_LOCK_PATH = join("/tmp", "fincoach-telegram-getupdates.lock");
+
+export type TelegramPollingLeadership = {
+  kind: "postgres" | "filesystem";
+  release(): Promise<void>;
+};
+
+export interface TelegramPollingCoordinator {
+  tryAcquire(botToken: string): Promise<{ acquired: true; leadership: TelegramPollingLeadership } | { acquired: false; reason: string; kind: "postgres" | "filesystem" }>;
+}
 
 export class TelegramUpdateReceiver {
   private running = false;
   private stopped = false;
   private loop: Promise<void> | null = null;
   private inFlight: AbortController | null = null;
+  private retryTimer: NodeJS.Timeout | null = null;
+  private resolveRetrySleep: (() => void) | null = null;
   private seenUpdateIds = new Set<number>();
   private lastPollSuccessAt: string | null = null;
   private lastPollFailureAt: string | null = null;
   private consecutivePollFailures = 0;
   private lastPollError: string | null = null;
   private lockPath: string | null = null;
-  private ownershipState: "unclaimed" | "owned" | "blocked" | "conflict" = "unclaimed";
+  private ownershipState: "unclaimed" | "claiming" | "owned" | "standby" | "blocked" | "conflict" = "unclaimed";
+  private leadershipKind: "postgres" | "filesystem" | null = null;
+  private leadership: TelegramPollingLeadership | null = null;
   private lastCommandReceivedAt: string | null = null;
   private lastCommandProcessedAt: string | null = null;
   private lastReplySentAt: string | null = null;
@@ -48,6 +64,7 @@ export class TelegramUpdateReceiver {
     private readonly cursor: TelegramUpdateCursor = telegramUpdateCursor,
     private readonly transport: TelegramTransport = telegramTransport,
     private readonly fetcher: typeof fetch = globalThis.fetch.bind(globalThis),
+    private readonly coordinator: TelegramPollingCoordinator = createTelegramPollingCoordinator(),
   ) {}
 
   start() {
@@ -71,25 +88,42 @@ export class TelegramUpdateReceiver {
       structuredLogger.telegram({ level: "warn", event: "telegram_update_receiver_not_started", message: "Telegram update receiver not started", reason: "bot_token_or_notifications_not_configured" });
       return this;
     }
-    const lock = acquirePollingLock(process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH ?? DEFAULT_LOCK_PATH);
-    this.lockPath = lock.path;
+    this.ownershipState = "claiming";
+    void this.acquireLeadershipAndPoll().catch((error) => {
+      this.running = false;
+      this.stopped = true;
+      this.ownershipState = "blocked";
+      this.lastPollError = error instanceof Error ? error.message : String(error);
+      structuredLogger.telegram({ level: "error", event: "telegram_polling_leadership_failed", message: "Telegram polling leadership check failed", error });
+    });
+    return this;
+  }
+
+  private async acquireLeadershipAndPoll() {
+    const lock = await this.coordinator.tryAcquire(this.config.botToken!);
     if (!lock.acquired) {
+      this.leadershipKind = lock.kind;
+      this.running = false;
+      this.stopped = false;
       this.ownershipState = "blocked";
       this.lastPollError = lock.reason;
-      structuredLogger.telegram({ level: "error", event: "telegram_update_receiver_ownership_blocked", message: "Telegram update receiver not started because another local owner holds getUpdates polling", reason: lock.reason, lockPath: lock.path });
-      return this;
+      if (lock.reason === "telegram_polling_leader_exists") this.ownershipState = "standby";
+      structuredLogger.telegram({ level: "warn", event: "telegram_update_receiver_standby", message: "Telegram update receiver not started because another owner holds getUpdates polling", reason: lock.reason, leadershipKind: lock.kind });
+      return;
     }
+    this.leadership = lock.leadership;
+    this.leadershipKind = lock.leadership.kind;
+    if (lock.leadership.kind === "filesystem") this.lockPath = process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH ?? DEFAULT_LOCK_PATH;
     this.ownershipState = "owned";
     this.running = true;
     this.stopped = false;
-    structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_started", message: "Telegram update receiver started" });
+    structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_started", message: "Telegram update receiver started", leadershipKind: lock.leadership.kind });
     this.loop = this.pollLoop();
     void this.loop.catch((error) => {
       this.running = false;
       console.warn(`Telegram update receiver stopped unexpectedly: ${error instanceof Error ? error.message : String(error)}`);
       structuredLogger.telegram({ level: "error", event: "telegram_update_receiver_stopped_unexpectedly", message: "Telegram update receiver stopped unexpectedly", error });
     });
-    return this;
   }
 
   health() {
@@ -104,6 +138,7 @@ export class TelegramUpdateReceiver {
       lastPollError: this.lastPollError,
       reachabilityState: this.reachabilityState(),
       ownershipState: this.ownershipState,
+      leadershipKind: this.leadershipKind,
       lockPath: this.lockPath,
       commandPollingEnabled: this.config.commandPollingEnabled,
       inboundPollingEnabled: this.config.inboundPollingEnabled,
@@ -119,8 +154,11 @@ export class TelegramUpdateReceiver {
     this.stopped = true;
     this.running = false;
     this.inFlight?.abort();
+    this.resolveRetrySleep?.();
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     await this.loop?.catch(() => undefined);
-    this.releaseLock();
+    await this.releaseLock();
     structuredLogger.telegram({ level: "info", event: "telegram_update_receiver_stopped", message: "Telegram update receiver stopped" });
   }
 
@@ -149,6 +187,7 @@ export class TelegramUpdateReceiver {
           }).catch(() => undefined);
         if (updates.length > 0) telegramMetrics.increment("updatesReceived", updates.length);
         if (updates.length > 0) structuredLogger.telegram({ level: "info", event: "telegram_update_received", message: "Telegram updates received", updateCount: updates.length, offset });
+        if (updates.length === 0) await this.sleep(EMPTY_POLL_YIELD_MS);
         for (const update of updates) {
           if (this.stopped) break;
           if (this.seenUpdateIds.has(update.update_id)) {
@@ -189,7 +228,7 @@ export class TelegramUpdateReceiver {
           this.ownershipState = "conflict";
           this.running = false;
           this.stopped = true;
-          this.releaseLock();
+          await this.releaseLock();
           structuredLogger.telegram({ level: "error", event: "telegram_polling_conflict", message: "Telegram getUpdates polling conflict; receiver stopped to avoid duplicate long polling", error });
           await operationalBlockerService.record({
             kind: "dependency",
@@ -220,7 +259,7 @@ export class TelegramUpdateReceiver {
         this.lastPollError = error instanceof Error ? error.message : String(error);
         console.warn(`Telegram update polling failed; retrying in ${Math.round(delayMs / 1000)}s: ${error instanceof Error ? error.message : String(error)}`);
         structuredLogger.telegram({ level: "error", event: "telegram_polling_failed", message: "Telegram update polling failed", retryAttempt: attempt, nextRetryAt: new Date(Date.now() + delayMs).toISOString(), retryDelayMs: delayMs, error });
-        await sleep(delayMs);
+        await this.sleep(delayMs);
       }
     }
   }
@@ -267,8 +306,24 @@ export class TelegramUpdateReceiver {
     }
   }
 
-  private releaseLock() {
-    if (this.lockPath && this.ownershipState !== "blocked") releasePollingLock(this.lockPath);
+  private sleep(ms: number) {
+    if (this.stopped) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.resolveRetrySleep = resolve;
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        this.resolveRetrySleep = null;
+        resolve();
+      }, ms);
+      this.retryTimer.unref();
+    });
+  }
+
+  private async releaseLock() {
+    await this.leadership?.release().catch((error) => {
+      structuredLogger.telegram({ level: "warn", event: "telegram_polling_leadership_release_failed", message: "Telegram polling leadership release failed", error });
+    });
+    this.leadership = null;
     if (this.ownershipState === "owned") this.ownershipState = "unclaimed";
   }
 }
@@ -345,6 +400,66 @@ function acquirePollingLock(path: string): { acquired: true; path: string } | { 
   }
 }
 
+function createTelegramPollingCoordinator(databaseUrl = process.env.DATABASE_URL): TelegramPollingCoordinator {
+  if (databaseUrl) return new PgTelegramPollingCoordinator(databaseUrl);
+  return new FilesystemTelegramPollingCoordinator(process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH ?? DEFAULT_LOCK_PATH);
+}
+
+class FilesystemTelegramPollingCoordinator implements TelegramPollingCoordinator {
+  constructor(private readonly path: string) {}
+
+  async tryAcquire(_botToken: string) {
+    const lock = acquirePollingLock(this.path);
+    if (!lock.acquired) return { acquired: false as const, reason: lock.reason, kind: "filesystem" as const };
+    return {
+      acquired: true as const,
+      leadership: {
+        kind: "filesystem" as const,
+        release: async () => releasePollingLock(lock.path),
+      },
+    };
+  }
+}
+
+class PgTelegramPollingCoordinator implements TelegramPollingCoordinator {
+  constructor(private readonly databaseUrl: string) {}
+
+  async tryAcquire(botToken: string) {
+    const client = new Client({ connectionString: this.databaseUrl });
+    await client.connect();
+    try {
+      const [key1, key2] = advisoryLockKeys(`fincoach:telegram:getupdates:${tokenFingerprint(botToken)}`);
+      const result = await client.query("SELECT pg_try_advisory_lock($1, $2) AS acquired", [key1, key2]);
+      if (result.rows[0]?.acquired !== true) {
+        await client.end();
+        return { acquired: false as const, reason: "telegram_polling_leader_exists", kind: "postgres" as const };
+      }
+      return {
+        acquired: true as const,
+        leadership: {
+          kind: "postgres" as const,
+          release: async () => {
+            await client.query("SELECT pg_advisory_unlock($1, $2)", [key1, key2]).catch(() => undefined);
+            await client.end();
+          },
+        },
+      };
+    } catch (error) {
+      await client.end().catch(() => undefined);
+      throw error;
+    }
+  }
+}
+
+function tokenFingerprint(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function advisoryLockKeys(value: string): [number, number] {
+  const hash = createHash("sha256").update(value).digest();
+  return [hash.readInt32BE(0), hash.readInt32BE(4)];
+}
+
 function releasePollingLock(path: string) {
   try {
     const raw = readFileSync(path, "utf8");
@@ -378,10 +493,6 @@ function isAbortError(error: unknown) {
 
 function backoff(attempt: number) {
   return Math.min(1_000 * 2 ** Math.max(0, attempt - 1), MAX_BACKOFF_MS);
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export const telegramUpdateReceiver = new TelegramUpdateReceiver();

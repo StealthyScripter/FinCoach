@@ -16,6 +16,7 @@ const authPortfolioMigration = readFileSync("migrations/0020_auth_and_portfolio_
 const portfolioOrdersMigration = readFileSync("migrations/0021_portfolio_orders_and_instruments.sql", "utf-8");
 const portfolioResearchMigration = readFileSync("migrations/0022_portfolio_research_validation.sql", "utf-8");
 const authSessionsMigration = readFileSync("migrations/0023_auth_sessions.sql", "utf-8");
+const authSessionsIndexCleanupMigration = readFileSync("migrations/0025_auth_sessions_index_cleanup.sql", "utf-8");
 
 const requiredTables = [
   "users",
@@ -316,6 +317,13 @@ assert.match(authSessionsMigration, /CREATE INDEX IF NOT EXISTS idx_auth_session
 assert.doesNotMatch(authSessionsMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
 assert.match(authSessionsMigration, /BEGIN;/i);
 assert.match(authSessionsMigration, /COMMIT;/i);
+
+assert.match(authSessionsIndexCleanupMigration, /DROP INDEX "IDX_session_expire"/i);
+assert.match(authSessionsIndexCleanupMigration, /DROP INDEX auth_sessions_expire_idx/i);
+assert.match(authSessionsIndexCleanupMigration, /CREATE INDEX IF NOT EXISTS idx_auth_sessions_expire\b/i);
+assert.doesNotMatch(authSessionsIndexCleanupMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
+assert.match(authSessionsIndexCleanupMigration, /BEGIN;/i);
+assert.match(authSessionsIndexCleanupMigration, /COMMIT;/i);
 
 for (const table of [
   "portfolio_instruments",

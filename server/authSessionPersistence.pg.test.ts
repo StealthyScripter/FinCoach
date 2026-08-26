@@ -3,7 +3,7 @@ import express from "express";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { Client } from "pg";
-import { AuthService, configureAuth, PgAuthRepository, registerAuthRoutes } from "./auth/service";
+import { assertAuthSessionSchema, AuthService, configureAuth, PgAuthRepository, registerAuthRoutes } from "./auth/service";
 
 process.env.TELEGRAM_NOTIFICATIONS_ENABLED = "false";
 
@@ -22,9 +22,19 @@ if (!databaseUrl) {
     try {
       await scoped.query(readFileSync("migrations/0020_auth_and_portfolio_platform.sql", "utf8"));
       await scoped.query(readFileSync("migrations/0023_auth_sessions.sql", "utf8"));
+      await scoped.query(`CREATE INDEX "IDX_session_expire" ON auth_sessions (expire)`);
+      await scoped.query(`CREATE INDEX auth_sessions_expire_idx ON auth_sessions (expire)`);
+      await scoped.query(readFileSync("migrations/0025_auth_sessions_index_cleanup.sql", "utf8"));
+      await scoped.query(readFileSync("migrations/0025_auth_sessions_index_cleanup.sql", "utf8"));
+      assert.deepEqual(await authSessionIndexes(scopedDatabaseUrl), ["auth_sessions_pkey", "idx_auth_sessions_expire"]);
+      await scoped.query(
+        "INSERT INTO auth_sessions (sid, sess, expire) VALUES ($1, $2, now() - interval '1 minute')",
+        ["expired-session", JSON.stringify({ cookie: {} })],
+      );
     } finally {
       await scoped.end();
     }
+    assert.deepEqual(await assertAuthSessionSchema(scopedDatabaseUrl), { checked: true });
 
     const previous = snapshotEnv([
       "DATABASE_URL",
@@ -50,6 +60,7 @@ if (!databaseUrl) {
     const server = createServer(app);
     await listen(server);
     try {
+      await waitFor(async () => await sessionRowCount(scopedDatabaseUrl) === 0);
       const provisioned = await service.provisionUser("operator@example.com", "StrongPassword123!");
       assert.equal(provisioned.ok, true);
       const created = await post(server, "/api/auth/signin", { email: "operator@example.com", password: "StrongPassword123!" });
@@ -163,6 +174,26 @@ async function sessionRowCount(connectionString: string) {
   } finally {
     await client.end();
   }
+}
+
+async function authSessionIndexes(connectionString: string) {
+  const client = new Client({ connectionString });
+  await client.connect();
+  try {
+    const result = await client.query("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'auth_sessions' ORDER BY indexname");
+    return result.rows.map((row) => String(row.indexname));
+  } finally {
+    await client.end();
+  }
+}
+
+async function waitFor(predicate: () => Promise<boolean>) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail("condition not reached");
 }
 
 function withSearchPath(connectionString: string, schema: string) {

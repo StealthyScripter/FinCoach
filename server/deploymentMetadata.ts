@@ -13,6 +13,7 @@ export type DeploymentMetadata = {
   runtimeBuildId: string | null;
   /** Runtime environment commit, exposed only for mismatch detection. */
   runtimeCommit: string | null;
+  runtimeMetadataState: "absent" | "matching" | "stale" | "runtime_only";
   /** Git worktree commit visible to the process, when available. */
   gitCommit: string | null;
   revisionMatch: boolean | null;
@@ -51,7 +52,8 @@ export function deploymentMetadata(env: NodeJS.ProcessEnv = process.env, embedde
   const sanitizedGitCommit = sanitizeIdentifier(gitCommit);
   const commit = sanitizedBuiltCommit ?? sanitizedRuntimeCommit ?? sanitizedGitCommit ?? UNKNOWN;
   const buildId = sanitizedBuiltId ?? sanitizedRuntimeBuildId ?? commit;
-  const revisionMatch = sanitizedRuntimeCommit && commit !== UNKNOWN ? sanitizedRuntimeCommit === commit : null;
+  const runtimeMetadataState = runtimeState(sanitizedBuiltCommit, sanitizedRuntimeCommit);
+  const revisionMatch = sanitizedRuntimeCommit && sanitizedBuiltCommit ? sanitizedRuntimeCommit === sanitizedBuiltCommit : sanitizedBuiltCommit ? true : null;
   return {
     commit,
     buildId,
@@ -59,6 +61,7 @@ export function deploymentMetadata(env: NodeJS.ProcessEnv = process.env, embedde
     buildCommit: sanitizedBuiltCommit ?? UNKNOWN,
     runtimeBuildId: sanitizedRuntimeBuildId,
     runtimeCommit: sanitizedRuntimeCommit,
+    runtimeMetadataState,
     gitCommit: sanitizedGitCommit,
     revisionMatch,
   };
@@ -84,6 +87,12 @@ function buildConstant(_name: string, read: () => string | undefined) {
   } catch {
     return undefined;
   }
+}
+
+function runtimeState(buildCommit: string | null, runtimeCommit: string | null): DeploymentMetadata["runtimeMetadataState"] {
+  if (!runtimeCommit) return "absent";
+  if (!buildCommit) return "runtime_only";
+  return runtimeCommit === buildCommit ? "matching" : "stale";
 }
 
 function safeGitCommit() {

@@ -14,12 +14,13 @@ import { structuredLogger } from "./structuredLogger";
 import { deploymentMetadata } from "./deploymentMetadata";
 import { strategyResearchSchedulerService } from "./strategyResearchSchedulerService";
 import { getStorageHealth } from "./storageMode";
-import { configureAuth } from "./auth/service";
+import { assertAuthSessionSchema, configureAuth } from "./auth/service";
 import { portfolioScheduler } from "./portfolio/scheduler";
-import { createHttpErrorHandler } from "./httpErrorHandler";
+import { createHttpErrorHandler, installExpressAsyncErrorPropagation } from "./httpErrorHandler";
 
 const app = express();
 const httpServer = createServer(app);
+installExpressAsyncErrorPropagation(app);
 
 declare module "http" {
   interface IncomingMessage {
@@ -36,8 +37,6 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
-configureAuth(app);
-app.use("/api", createApiRateLimiter());
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -94,6 +93,10 @@ app.use((req, res, next) => {
     throw new Error(`MarketPilot demo-only safety check failed: ${demoOnlyEnvironment.violations.join(", ") || "demo-only mode disabled"}`);
   }
   structuredLogger.audit({ level: "info", event: "startup_safety_check_passed", message: "MarketPilot demo-only safety check passed" });
+  const authSessionSchema = await assertAuthSessionSchema();
+  structuredLogger.audit({ level: "info", event: "auth_session_schema_checked", message: "Auth session schema check completed", authSessionSchema });
+  configureAuth(app);
+  app.use("/api", createApiRateLimiter());
   await strategyEvidenceStore.bootstrap();
   configureWeeklyTransitionNotifier((input) => input.kind === "open"
     ? weeklyMarketNotificationService.sendOpen(input)

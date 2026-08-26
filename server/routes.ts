@@ -103,7 +103,7 @@ import {
 import { strategyLabService } from "./execution/strategyLabService";
 import { auditExportService } from "./execution/auditExportService";
 import { telegramBotService } from "./telegramService";
-import { registerTelegramOperationsRoutes } from "./telegram";
+import { registerTelegramOperationsRoutes, telegramUpdateReceiver } from "./telegram";
 import { registerV2OperationsRoutes } from "./v2/operations";
 import { v2OperationsService } from "./v2/operations/service";
 import { getFinCoachV2Runtime } from "./v2/runtime/composition";
@@ -141,6 +141,39 @@ export async function registerRoutes(
   });
 
   app.get("/api/health", async (_req, res) => {
+    const storageHealth = getStorageHealth();
+    const telegram = telegramUpdateReceiver.health();
+    const subsystemStates: Record<string, "healthy" | "degraded" | "unhealthy"> = {
+      storage: storageHealth.status === "unavailable" ? "unhealthy" : subsystemState(storageHealth.status),
+      telegram: telegramHealthState(telegram),
+      brokerReconciliation: brokerReconciliationSubsystemState(sandboxBrokerRuntime.reconciliationHealth()),
+    };
+    const body = {
+      status: aggregateHealthStatus(subsystemStates),
+      generatedAt: new Date().toISOString(),
+      storageMode: storageHealth.mode,
+      subsystems: {
+        states: subsystemStates,
+        telegram: {
+          state: telegramPublicState(telegram),
+          ownershipState: telegram.ownershipState,
+          reachabilityState: telegram.reachabilityState,
+          consecutivePollFailures: telegram.consecutivePollFailures,
+        },
+      },
+      deployedRevision: publicDeploymentRevision(),
+    };
+    res.json(body);
+  });
+
+  app.get("/api/health/storage", async (_req, res) => {
+    res.json(getStorageHealth());
+  });
+
+  registerAuthRoutes(app);
+  app.use("/api", requireAuthenticatedRequest);
+
+  app.get("/api/health/diagnostics", async (_req, res) => {
     const storageHealth = getStorageHealth();
     const providers = providerRegistryService.getSnapshot();
     const portfolioHealth = await portfolioPlatformService.health().catch((error) => ({
@@ -203,16 +236,9 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/health/storage", async (_req, res) => {
-    res.json(getStorageHealth());
-  });
-
   app.get("/api/health/providers", async (_req, res) => {
     res.json(providerRegistryService.getSnapshot());
   });
-
-  registerAuthRoutes(app);
-  app.use("/api", requireAuthenticatedRequest);
   registerTelegramOperationsRoutes(app);
   registerV2OperationsRoutes(app);
   registerPortfolioRoutes(app);
@@ -2180,6 +2206,36 @@ function brokerReconciliationSubsystemState(value: unknown): "healthy" | "degrad
   if (status === "failed") return "unhealthy";
   if (status === "stale" || status === "discrepancy" || status === "never_run") return "degraded";
   return "healthy";
+}
+
+function telegramHealthState(value: Record<string, unknown>): "healthy" | "degraded" | "unhealthy" {
+  const ownership = String(value.ownershipState ?? "unknown");
+  const reachability = String(value.reachabilityState ?? "unknown");
+  if (ownership === "conflict") return "degraded";
+  if (ownership === "blocked" || reachability === "unavailable") return "unhealthy";
+  if (ownership === "standby" || reachability === "degraded" || reachability === "unknown") return "degraded";
+  return "healthy";
+}
+
+function telegramPublicState(value: Record<string, unknown>) {
+  const ownership = String(value.ownershipState ?? "unknown");
+  const reachability = String(value.reachabilityState ?? "unknown");
+  if (ownership === "standby") return "standby";
+  if (ownership === "blocked") return "disabled_or_unconfigured";
+  if (ownership === "conflict") return "conflict_detected";
+  if (reachability === "degraded" || reachability === "unavailable") return "transient_outage";
+  return "healthy";
+}
+
+function publicDeploymentRevision() {
+  const metadata = deploymentMetadata();
+  return {
+    commit: metadata.commit,
+    buildId: metadata.buildId,
+    source: metadata.source,
+    revisionMatch: metadata.revisionMatch,
+    runtimeMetadataState: metadata.runtimeMetadataState,
+  };
 }
 
 function aggregateHealthStatus(states: Record<string, "healthy" | "degraded" | "unhealthy">) {

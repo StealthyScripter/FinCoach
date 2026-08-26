@@ -19,7 +19,8 @@ assert.equal(revision.commit, "abc123def456");
 assert.equal(revision.buildId, "build-17");
 assert.equal(revision.source, "FINCOACH_BUILD_COMMIT");
 assert.equal(revision.runtimeCommit, "abc123def456");
-assert.equal(revision.revisionMatch, true);
+assert.equal(revision.runtimeMetadataState, "runtime_only");
+assert.equal(revision.revisionMatch, null);
 
 const mismatchedRevision = deploymentMetadata({
   FINCOACH_BUILD_COMMIT: "runtime-old",
@@ -31,7 +32,23 @@ assert.equal(mismatchedRevision.buildId, "embedded-new");
 assert.equal(mismatchedRevision.buildCommit, "embedded-new");
 assert.equal(mismatchedRevision.runtimeCommit, "runtime-old");
 assert.equal(mismatchedRevision.runtimeBuildId, "runtime-old-build");
+assert.equal(mismatchedRevision.runtimeMetadataState, "stale");
 assert.equal(mismatchedRevision.revisionMatch, false);
+
+const absentRuntimeRevision = deploymentMetadata({} as NodeJS.ProcessEnv, { buildCommit: "embedded-only", buildId: "artifact-1" });
+assert.equal(absentRuntimeRevision.commit, "embedded-only");
+assert.equal(absentRuntimeRevision.buildId, "artifact-1");
+assert.equal(absentRuntimeRevision.runtimeMetadataState, "absent");
+assert.equal(absentRuntimeRevision.revisionMatch, true);
+
+const pm2StaleEnvRevision = deploymentMetadata({
+  FINCOACH_BUILD_COMMIT: "old-pm2-env",
+  FINCOACH_BUILD_ID: "old-pm2-build",
+} as NodeJS.ProcessEnv, { buildCommit: "new-artifact", buildId: "new-artifact" });
+assert.equal(pm2StaleEnvRevision.commit, "new-artifact");
+assert.equal(pm2StaleEnvRevision.buildId, "new-artifact");
+assert.equal(pm2StaleEnvRevision.runtimeMetadataState, "stale");
+assert.equal(pm2StaleEnvRevision.revisionMatch, false);
 
 const input = {
   cycleId: "cycle-1",
