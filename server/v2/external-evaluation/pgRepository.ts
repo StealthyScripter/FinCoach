@@ -21,6 +21,14 @@ export class PgExternalEvaluationRepository {
   saveEvaluation(evaluation: ExternalEvaluation) { return this.evaluations.save(evaluation).then(result => ({ inserted: result.inserted, evaluation: result.record, record: result.record, conflict: result.conflict })); }
   saveReconciliation(record: ReconciledOutcome) { if (!this.reconciliations.has(record.reconciliationId)) this.reconciliations.set(record.reconciliationId, record); return this.reconciliations.get(record.reconciliationId)!; }
   getEvaluation(id: string) { return this.evaluations.get(id); }
+  async getForSignal(signalId: string) {
+    const result = await this.db.query("SELECT payload FROM v2_external_evaluations WHERE payload->>'signalId' = $1 ORDER BY created_at ASC, record_id ASC LIMIT 1", [signalId]);
+    return (result.rows[0]?.payload as ExternalEvaluation | undefined) ?? null;
+  }
+  async hasForSignal(signalId: string) {
+    const result = await this.db.query("SELECT 1 FROM v2_external_evaluations WHERE payload->>'signalId' = $1 LIMIT 1", [signalId]);
+    return Boolean(result.rowCount);
+  }
   async listEvaluations(input: { limit?: number; offset?: number } = {}) { return (await this.evaluations.list(input)).items; }
   async eligibleForJournal(input: { limit: number }) {
     const result = await this.db.query(

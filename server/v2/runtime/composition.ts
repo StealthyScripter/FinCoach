@@ -32,7 +32,7 @@ import { CourtroomV2Service, forwardTestVerdictEligibility } from "../courtroom"
 import { RankingV2Service, type RankingCandidateInput, type StrategyRankingDecision } from "../ranking";
 import { ForwardTestingV2Service, type ForwardTestRecord } from "../forward-testing";
 import { SignalsV2Service, evaluateSignalEligibility, type V2ResearchSignal } from "../signals";
-import { ExternalEvaluationV2Service, type ExternalEvaluation } from "../external-evaluation";
+import { ExternalEvaluationV2Service, type ExternalEvaluation, type ExternalEvaluationInput } from "../external-evaluation";
 import { ResearchJournalV2Service, type ResearchJournalEntry } from "../journal";
 import { LearningV2Service, type LearningLesson, type LearningOutcome } from "../learning";
 import { StrategyLifecycleV2Service, type StrategyLifecycleDecision } from "../strategy-lifecycle";
@@ -56,6 +56,7 @@ import { envState, operationalBlockerService, type OperationalBlockerEvent } fro
 import { resolveResearchInstrument, validateResearchUniverse } from "../researchUniverse";
 import { activeFxResearchSession, type FxResearchSessionId } from "../fxResearchSessions";
 import { classifyRegimeFromObservation, instantiateStrategyTemplates } from "../strategyTemplates";
+import { evaluateSignalFromFrozenCandles } from "./signalOutcomeEvaluator";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
 type WeeklyTransitionNotifier = (input: { kind: "open" | "close"; boundaryAt: string; window: WeeklyResearchWindowState; aggregate: AggregateTradableWindow }) => Promise<unknown>;
@@ -1128,7 +1129,15 @@ export class FinCoachV2Runtime {
       now: input.now,
       guard: input.guard,
     });
-    evaluationsCount = await createEvaluationsFromSignals({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
+    evaluationsCount = await createEvaluationsFromSignals({
+      repositories,
+      marketData: { candlesForSignal: signal => researchCandles(this.config, this.env, signal.symbol, normalizeTimeframe(signal.timeframe), input.now, 80) },
+      cycleId: input.cycleId,
+      correlationId: input.correlationId,
+      now: input.now,
+      limit: artifactLimit(this.config),
+      guard: input.guard,
+    });
     journalEntriesCount = await createJournalEntriesFromEvaluations({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
     lessonsCount = await createLessonsFromJournalEntries({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, limit: artifactLimit(this.config), guard: input.guard });
     lifecycleDecisionsCount = await createLifecycleDecisionsFromLessons({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
@@ -1947,6 +1956,7 @@ type ForwardTestSource = { strategy: StrategyDefinition; backtest: BacktestResul
 type ForwardTestRepositoryLike = {
   save(record: ForwardTestRecord): Promise<unknown> | unknown;
   listPage?(input?: { limit?: number; offset?: number; strategyId?: string; status?: string }): Promise<{ items: Record<string, unknown>[]; total: number }> | { items: Record<string, unknown>[]; total: number };
+  countActive?(): Promise<number> | number;
 };
 type ForwardTestSourceRepositoryLike = {
   strategies?: { get(id: string): Promise<StrategyDefinition | null> | StrategyDefinition | null };
@@ -2164,8 +2174,10 @@ export async function createForwardTestsFromRanking(input: {
 }
 
 async function activeForwardTestCount(repository: ForwardTestRepositoryLike | undefined) {
-  if (!repository?.listPage) return 0;
+  if (!repository) return 0;
   try {
+    if (repository.countActive) return Number(await repository.countActive());
+    if (!repository.listPage) return 0;
     const page = await repository.listPage({ limit: 1, offset: 0, status: "monitoring" });
     return Number(page.total ?? 0);
   } catch {
@@ -2213,6 +2225,7 @@ type ForwardTestingSignalSourceRepositoryLike = {
 type SignalRepositoryLike = {
   save(record: V2ResearchSignal): Promise<unknown> | unknown;
   listPage?(input?: { limit?: number; offset?: number }): Promise<{ total: number }> | { total: number };
+  countActive?(at: Date): Promise<number> | number;
 };
 
 export async function createSignalsFromForwardTests(input: {
@@ -2302,7 +2315,7 @@ export async function createSignalsFromForwardTests(input: {
     structuredLogger.v2({ level: "error", event: "signal_persistence_unavailable", message: "V2 signal repository is unavailable", cycleId: input.cycleId, correlationId: input.correlationId });
     return 0;
   }
-  const activeSignals = signalRepository.listPage ? Number((await signalRepository.listPage({ limit: 1, offset: 0 })).total ?? 0) : 0;
+  const activeSignals = signalRepository.countActive ? Number(await signalRepository.countActive(input.now)) : 0;
   if (activeSignals >= limit) {
     await operationalBlockerService.record({
       kind: "limit",
@@ -2426,12 +2439,15 @@ function signalRequestFromForwardTest(forwardTest: ForwardTestRecord, now: Date)
 }
 
 type SignalSourceRepositoryLike = { eligibleForEvaluation?(input: { now: Date; limit: number }): Promise<V2ResearchSignal[]> | V2ResearchSignal[] };
-type EvaluationRepositoryLike = { saveEvaluation(record: ExternalEvaluation): Promise<unknown> | unknown; eligibleForJournal?(input: { limit: number }): Promise<ExternalEvaluation[]> | ExternalEvaluation[] };
+type EvaluationRepositoryLike = { saveEvaluation(record: ExternalEvaluation): Promise<unknown> | unknown; getForSignal?(signalId: string): Promise<ExternalEvaluation | null> | ExternalEvaluation | null; hasForSignal?(signalId: string): Promise<boolean> | boolean; eligibleForJournal?(input: { limit: number }): Promise<ExternalEvaluation[]> | ExternalEvaluation[] };
 type JournalRepositoryLike = { append(record: ResearchJournalEntry): Promise<unknown> | unknown; eligibleForLesson?(input: { limit: number }): Promise<ResearchJournalEntry[]> | ResearchJournalEntry[] };
 type LearningRepositoryLike = { saveLesson(record: LearningLesson): Promise<unknown> | unknown; eligibleForLifecycleDecision?(input: { limit: number }): Promise<LearningLesson[]> | LearningLesson[] };
 type LifecycleRepositoryLike = { save(record: StrategyLifecycleDecision): Promise<unknown> | unknown };
+type StrategySourceRepositoryLike = { get(id: string): Promise<StrategyDefinition | null> | StrategyDefinition | null };
+type ForwardTestCompletionRepositoryLike = { complete(forwardTestId: string, evaluationId: string, completedAt: Date): Promise<unknown> | unknown };
+type SignalMarketDataSource = { candlesForSignal(signal: V2ResearchSignal): Promise<NormalizedCandle[]> | NormalizedCandle[] };
 
-export async function createEvaluationsFromSignals(input: { repositories: { signals?: SignalSourceRepositoryLike; evaluations?: EvaluationRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number; guard?: CycleLeaseGuard }) {
+export async function createEvaluationsFromSignals(input: { repositories: { signals?: SignalSourceRepositoryLike; evaluations?: EvaluationRepositoryLike; forwardTesting?: ForwardTestCompletionRepositoryLike }; marketData?: SignalMarketDataSource; cycleId: string; correlationId: string; now: Date; limit: number; guard?: CycleLeaseGuard }) {
   const source = input.repositories.signals;
   const target = input.repositories.evaluations;
   if (!source?.eligibleForEvaluation || !target?.saveEvaluation) return 0;
@@ -2441,12 +2457,32 @@ export async function createEvaluationsFromSignals(input: { repositories: { sign
     const eligibility = evaluateSignalForEvaluationEligibility(signal, input.now);
     structuredLogger.v2({ level: "info", event: "evaluation_candidate_evaluated", message: "V2 evaluation candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, signalId: signal.signalId, eligibility });
     if (!eligibility.eligible) continue;
+    const existing = target.getForSignal ? await target.getForSignal(signal.signalId) : undefined;
+    if (!target.getForSignal && target.hasForSignal && await target.hasForSignal(signal.signalId)) continue;
     if (inserted >= input.limit) break;
-    const evaluation = service.receive(evaluationInputFromSignal(signal, input.now));
+    let frozen: ExternalEvaluationInput | ExternalEvaluation | null = existing ?? null;
+    if (!frozen) {
+      if (!input.marketData) continue;
+      let candles: NormalizedCandle[];
+      try {
+        candles = await input.marketData.candlesForSignal(signal);
+      } catch (error) {
+        structuredLogger.v2Error({ level: "warn", event: "evaluation_market_data_unavailable", message: "V2 evaluation deferred because authoritative market data is unavailable", cycleId: input.cycleId, correlationId: input.correlationId, signalId: signal.signalId, error });
+        continue;
+      }
+      const frozenResult = evaluateSignalFromFrozenCandles(signal, candles, input.now);
+      frozen = frozenResult.evaluation;
+      structuredLogger.v2({ level: "info", event: "signal_frozen_candles_evaluated", message: "V2 signal evaluated from frozen post-signal candles", cycleId: input.cycleId, correlationId: input.correlationId, signalId: signal.signalId, result: frozenResult.reason, evidenceHash: frozenResult.evidenceHash });
+    }
+    if (!frozen) continue;
+    const evaluation = existing ? { evaluation: existing } : service.receive(frozen);
     if (!evaluation.evaluation) continue;
     try {
-      const saved = await guarded(input.guard, "evaluation_save", () => target.saveEvaluation(evaluation.evaluation!));
+      const saved = existing ? { inserted: false, evaluation: existing, record: existing, conflict: "idempotent" as const } : await guarded(input.guard, "evaluation_save", () => target.saveEvaluation(evaluation.evaluation!));
       const persisted = evaluationFromSaveResult(saved) ?? evaluation.evaluation;
+      if (persisted && input.repositories.forwardTesting?.complete && ["tp", "sl", "expired", "cancelled"].includes(persisted.outcome)) {
+        await guarded(input.guard, "forward_test_complete", () => input.repositories.forwardTesting!.complete(signal.forwardTestId, persisted.evaluationId, input.now));
+      }
       if (!saveInserted(saved)) {
         structuredLogger.v2({ level: "info", event: "evaluation_duplicate_suppressed", message: "Duplicate V2 evaluation suppressed", cycleId: input.cycleId, correlationId: input.correlationId, evaluationId: persisted.evaluationId, signalId: signal.signalId, conflict: conflictFromSaveResult(saved) ?? "idempotent" });
         continue;
@@ -2516,10 +2552,10 @@ export async function createLessonsFromJournalEntries(input: { repositories: { j
   return inserted;
 }
 
-export async function createLifecycleDecisionsFromLessons(input: { repositories: { learning?: LearningRepositoryLike; lifecycle?: LifecycleRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number; guard?: CycleLeaseGuard }) {
+export async function createLifecycleDecisionsFromLessons(input: { repositories: { learning?: LearningRepositoryLike; lifecycle?: LifecycleRepositoryLike; strategies?: StrategySourceRepositoryLike }; cycleId: string; correlationId: string; now: Date; limit: number; guard?: CycleLeaseGuard }) {
   const source = input.repositories.learning;
   const target = input.repositories.lifecycle;
-  if (!source?.eligibleForLifecycleDecision || !target?.save) return 0;
+  if (!source?.eligibleForLifecycleDecision || !target?.save || !input.repositories.strategies?.get) return 0;
   const service = new StrategyLifecycleV2Service();
   let inserted = 0;
   for (const lesson of await source.eligibleForLifecycleDecision({ limit: input.limit * 4 })) {
@@ -2527,7 +2563,17 @@ export async function createLifecycleDecisionsFromLessons(input: { repositories:
     structuredLogger.v2({ level: "info", event: "lifecycle_candidate_evaluated", message: "V2 lifecycle candidate evaluated", cycleId: input.cycleId, correlationId: input.correlationId, lessonId: lesson.lessonId, eligibility });
     if (!eligibility.eligible) continue;
     if (inserted >= input.limit) break;
-    const decision = service.recordDecision(lifecycleInputFromLesson(lesson, input.now));
+    const strategyId = lesson.strategyId;
+    if (!strategyId) {
+      structuredLogger.v2({ level: "warn", event: "lifecycle_strategy_lineage_unresolved", message: "V2 lifecycle decision rejected because lesson has no explicit durable strategy lineage", cycleId: input.cycleId, correlationId: input.correlationId, lessonId: lesson.lessonId });
+      continue;
+    }
+    const strategy = await input.repositories.strategies.get(strategyId);
+    if (!strategy) {
+      structuredLogger.v2({ level: "warn", event: "lifecycle_strategy_lineage_unresolved", message: "V2 lifecycle decision rejected because durable strategy lineage could not be resolved", cycleId: input.cycleId, correlationId: input.correlationId, lessonId: lesson.lessonId, strategyId });
+      continue;
+    }
+    const decision = service.recordDecision(lifecycleInputFromLesson(lesson, strategy.strategyId, input.now));
     if (!decision.decision) continue;
     try {
       const saved = await guarded(input.guard, "lifecycle_save", () => target.save(decision.decision!));
@@ -2544,25 +2590,19 @@ export async function createLifecycleDecisionsFromLessons(input: { repositories:
   return inserted;
 }
 
-function evaluationInputFromSignal(signal: V2ResearchSignal, now: Date) {
-  const positive = signal.takeProfit > signal.entryPrice;
-  const outcome = positive ? "tp" as const : "expired" as const;
-  return { evaluationId: stableHash({ signalId: signal.signalId, evaluator: "fincoach-deterministic-research-evaluator-v1" }), signalId: signal.signalId, evaluatorVersion: "fincoach-deterministic-research-evaluator-v1", entryReached: true, slReached: false, tpReached: positive, outcome, r: positive ? 1 : 0, profitLoss: positive ? 1 : 0, mfe: positive ? 1 : 0, mae: 0, holdingDurationMinutes: 60, dataSource: "fincoach-research-simulation", evaluatedAt: now.toISOString(), notes: "Deterministic research-only evaluation; no broker or execution call performed.", lineageEventIds: [...signal.lineageEventIds, signal.signalId], correlationId: signal.correlationId, causationId: signal.causationId };
-}
-
 function journalInputFromEvaluation(evaluation: ExternalEvaluation, now: Date) {
-  return { journalEntryId: stableHash({ evaluationId: evaluation.evaluationId, subject: "external_evaluation" }), subjectType: "external_evaluation" as const, subjectId: evaluation.evaluationId, sourceModule: "external-evaluation" as const, summary: `Research signal evaluation ${evaluation.outcome}.`, evidence: { evaluationId: evaluation.evaluationId, signalId: evaluation.signalId, outcome: evaluation.outcome, r: evaluation.r }, conclusion: evaluation.r > 0 ? "positive research outcome" : "nonpositive research outcome", limitations: ["deterministic research-only evaluation"], supersedesEntryId: null, createdAt: now.toISOString(), lineageEventIds: [...evaluation.lineageEventIds, evaluation.evaluationId], correlationId: evaluation.correlationId, causationId: evaluation.causationId };
+  return { journalEntryId: stableHash({ evaluationId: evaluation.evaluationId, subject: "external_evaluation" }), subjectType: "external_evaluation" as const, subjectId: evaluation.evaluationId, sourceModule: "external-evaluation" as const, summary: `Research signal evaluation ${evaluation.outcome}.`, evidence: { strategyId: evaluation.strategyId, forwardTestId: evaluation.forwardTestId, signalId: evaluation.signalId, evaluationId: evaluation.evaluationId, evidenceHash: evaluation.evidenceHash, outcome: evaluation.outcome, r: evaluation.r }, conclusion: evaluation.r > 0 ? "positive research outcome" : "nonpositive research outcome", limitations: ["research-only evaluation from frozen post-signal candles"], supersedesEntryId: null, createdAt: now.toISOString(), lineageEventIds: [...evaluation.lineageEventIds, evaluation.evaluationId], correlationId: evaluation.correlationId, causationId: evaluation.causationId };
 }
 
 function lessonRequestFromJournal(journal: ResearchJournalEntry) {
-  const evidence = journal.evidence as { outcome?: "tp" | "sl" | "expired" | "cancelled"; r?: number; signalId?: string };
+  const evidence = journal.evidence as { outcome?: "tp" | "sl" | "expired" | "cancelled"; r?: number; signalId?: string; strategyId?: string; forwardTestId?: string; evaluationId?: string };
   const outcome: LearningOutcome = evidence.outcome ?? "unknown";
-  return { topic: `signal:${evidence.signalId ?? journal.subjectId}`, journalEntries: [{ journalEntryId: journal.journalEntryId, subjectId: journal.subjectId, outcome, r: Number(evidence.r ?? 0), tags: [String(outcome)], limitations: journal.limitations, createdAt: journal.createdAt, lineageEventIds: journal.lineageEventIds }], minimumSamples: 1, correlationId: journal.correlationId, causationId: journal.causationId };
+  return { topic: evidence.strategyId ?? "", strategyId: evidence.strategyId, journalEntries: [{ journalEntryId: journal.journalEntryId, subjectId: journal.subjectId, outcome, r: Number(evidence.r ?? 0), tags: [String(outcome)], limitations: journal.limitations, createdAt: journal.createdAt, lineageEventIds: [...new Set([...journal.lineageEventIds, evidence.strategyId, evidence.forwardTestId, evidence.signalId, evidence.evaluationId, journal.journalEntryId].filter((id): id is string => Boolean(id)))] }], minimumSamples: 1, correlationId: journal.correlationId, causationId: journal.causationId };
 }
 
-function lifecycleInputFromLesson(lesson: LearningLesson, now: Date) {
+function lifecycleInputFromLesson(lesson: LearningLesson, strategyId: string, now: Date) {
   const toState = lesson.attribution.averageR > 0 ? "candidate" as const : "degraded" as const;
-  return { decisionId: stableHash({ lessonId: lesson.lessonId, toState }), strategyId: lesson.topic, fromState: "forward-test" as const, toState, reason: `Research lesson outcome averageR=${lesson.attribution.averageR}`, metrics: { expectancy: lesson.attribution.averageR, drawdown: 0, calibration: lesson.confidence, evidenceAgeDays: 0, regimeMismatch: 0, externalDisagreement: 0, edgeDecay: lesson.attribution.averageR > 0 ? 0 : 0.4 }, createdAt: now.toISOString(), lineageEventIds: [...lesson.lineageEventIds, lesson.lessonId], correlationId: lesson.correlationId, causationId: lesson.causationId };
+  return { decisionId: stableHash({ lessonId: lesson.lessonId, toState }), strategyId, fromState: "forward-test" as const, toState, reason: `Research lesson outcome averageR=${lesson.attribution.averageR}`, metrics: { expectancy: lesson.attribution.averageR, drawdown: 0, calibration: lesson.confidence, evidenceAgeDays: 0, regimeMismatch: 0, externalDisagreement: 0, edgeDecay: lesson.attribution.averageR > 0 ? 0 : 0.4 }, createdAt: now.toISOString(), lineageEventIds: [...lesson.lineageEventIds, lesson.lessonId], correlationId: lesson.correlationId, causationId: lesson.causationId };
 }
 
 function evaluationFromSaveResult(saved: unknown): ExternalEvaluation | null { const r = saved as { record?: ExternalEvaluation; evaluation?: ExternalEvaluation; existing?: ExternalEvaluation }; return r.record ?? r.evaluation ?? r.existing ?? null; }

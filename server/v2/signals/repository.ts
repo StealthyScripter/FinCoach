@@ -18,6 +18,9 @@ export class InMemorySignalRepository {
     const limit = input.limit ?? 100;
     return { items: filtered.slice(offset, offset + limit), total: filtered.length };
   }
+  countActive(at: Date) {
+    return this.list().filter(signal => Date.parse(signal.validUntil) > at.getTime()).length;
+  }
   health() {
     return { availability: this.signals.size > 0 ? "available" : "available_empty", total: this.signals.size };
   }

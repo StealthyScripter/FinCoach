@@ -79,6 +79,10 @@ export class PgV2OperationsRepository {
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'skipped') AS evaluations_skipped_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'duplicate_suppressed') AS duplicates_suppressed_hour,
         (SELECT count(*)::int FROM v2_detector_evaluations WHERE created_at >= $1 AND status = 'failed') AS failures_hour,
+        (SELECT count(*)::int FROM v2_research_signals WHERE (payload->>'validUntil')::timestamptz > $2::timestamptz) AS signals_active,
+        (SELECT count(*)::int FROM v2_research_signals WHERE (payload->>'validUntil')::timestamptz <= $2::timestamptz) AS signals_expired,
+        (SELECT count(*)::int FROM v2_forward_tests current WHERE current.payload->>'status' = 'monitoring' AND NOT EXISTS (SELECT 1 FROM v2_forward_tests terminal WHERE terminal.supersedes_id = current.record_id)) AS forward_tests_active,
+        (SELECT count(*)::int FROM v2_forward_tests WHERE payload->>'status' IN ('completed', 'failed', 'cancelled', 'blocked')) AS forward_tests_terminal,
         (SELECT max(candle_end) FROM v2_market_observations) AS most_recent_market_data_timestamp`,
       [currentHour, generatedAt],
     );
@@ -109,6 +113,8 @@ export class PgV2OperationsRepository {
       lessons: Number(windows.lifetime.lessons ?? 0),
       lifecycleDecisions: Number(windows.lifetime.lifecycleDecisions ?? 0),
       pilotScorecards: Number(windows.lifetime.pilotScorecards ?? 0),
+      signalCapacity: { totalHistorical: Number(windows.lifetime.signals ?? 0), active: Number(row.signals_active ?? 0), expired: Number(row.signals_expired ?? 0) },
+      forwardTestCapacity: { totalHistoricalArtifacts: Number(windows.lifetime.forwardTests ?? 0), activeMonitoring: Number(row.forward_tests_active ?? 0), terminal: Number(row.forward_tests_terminal ?? 0) },
       detectorEvaluations: {
         recordsCurrentHour: Number((windows.currentHour as Record<string, unknown>).detectorEvaluations ?? 0),
         attemptedCurrentHour: Number(row.evaluations_attempted_hour ?? 0),
@@ -577,9 +583,11 @@ function sanitizeStoredReason(value: unknown) {
 
 function summarizeForwardTestEligibility(rankings: Record<string, unknown>[], strategies: Map<string, Record<string, unknown>>, forwardTests: Record<string, unknown>[] = []) {
   const candidates = rankings.flatMap(ranking => Array.isArray(ranking.candidates) ? ranking.candidates as Record<string, unknown>[] : []);
-  const active = forwardTests.filter(test => String(test.status ?? "") === "monitoring");
-  const completed = forwardTests.filter(test => String(test.status ?? "") === "completed");
-  const forwardKeys = new Map(forwardTests.map(test => [`${test.strategyId}:${test.courtCaseId}`, test]));
+  const superseded = new Set(forwardTests.map(test => String(test.supersedesId ?? "")).filter(Boolean));
+  const effective = forwardTests.filter(test => !superseded.has(String(test.forwardTestId ?? "")));
+  const active = effective.filter(test => String(test.status ?? "") === "monitoring");
+  const completed = effective.filter(test => String(test.status ?? "") === "completed");
+  const forwardKeys = new Map(effective.map(test => [`${test.strategyId}:${test.courtCaseId}`, test]));
   const criteria = {
     durableStrategySourceAvailable: { passed: 0, failed: 0 },
     verdictEligible: { passed: 0, failed: 0 },

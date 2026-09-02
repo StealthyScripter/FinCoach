@@ -26,6 +26,7 @@ export class LearningV2Service {
       lessonId,
       schemaVersion: "fincoach.v2.learning-lesson.1",
       topic: request.topic,
+      strategyId: request.strategyId,
       attribution,
       confidence,
       evidenceJournalEntryIds: entries.map(entry => entry.journalEntryId),

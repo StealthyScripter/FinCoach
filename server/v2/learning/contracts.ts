@@ -23,6 +23,7 @@ export type LearningLesson = {
   lessonId: string;
   schemaVersion: "fincoach.v2.learning-lesson.1";
   topic: string;
+  strategyId?: string;
   attribution: LearningAttribution;
   confidence: number;
   evidenceJournalEntryIds: readonly string[];
@@ -36,6 +37,7 @@ export type LearningLesson = {
 
 export type LearningRequest = {
   topic: string;
+  strategyId?: string;
   journalEntries: readonly LearningJournalEvidence[];
   minimumSamples: number;
   supersedesLessonId?: string | null;

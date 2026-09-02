@@ -63,6 +63,8 @@ export type V2ResearchPipelineCounts = {
   lessons: number;
   lifecycleDecisions: number;
   pilotScorecards: number;
+  signalCapacity?: { totalHistorical: number; active: number; expired: number };
+  forwardTestCapacity?: { totalHistoricalArtifacts: number; activeMonitoring: number; terminal: number };
   detectorEvaluations: {
     recordsCurrentHour: number;
     attemptedCurrentHour: number;

@@ -5,7 +5,7 @@ import type { LearningLesson } from "../learning";
 
 export type TransitionEligibilityReason =
   | "eligible"
-  | "expired_signal"
+  | "evaluation_horizon_incomplete"
   | "missing_lineage"
   | "unknown_or_open_evaluation"
   | "ineligible_evaluation_outcome"
@@ -18,7 +18,7 @@ export type TransitionEligibility = { eligible: boolean; reason: TransitionEligi
 
 export function evaluateSignalForEvaluationEligibility(signal: V2ResearchSignal, now: Date): TransitionEligibility {
   if (!signal.demoOnly || !signal.lineageEventIds.length) return { eligible: false, reason: "missing_lineage" };
-  if (Date.parse(signal.validUntil) <= now.getTime()) return { eligible: false, reason: "expired_signal" };
+  if (Date.parse(signal.validUntil) > now.getTime()) return { eligible: false, reason: "evaluation_horizon_incomplete" };
   return { eligible: true, reason: "eligible" };
 }
 

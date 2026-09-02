@@ -1,5 +1,6 @@
 import type { ForwardTestRecord } from "./contracts";
 import { evaluateSignalEligibility } from "../signals/eligibility";
+import { createHash } from "node:crypto";
 
 export type EligibleForwardTestsForSignalQuery = {
   now: Date;
@@ -18,8 +19,9 @@ export class InMemoryForwardTestingRepository {
   list() { return [...this.records.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.forwardTestId.localeCompare(b.forwardTestId)); }
   async eligibleForSignal(input: EligibleForwardTestsForSignalQuery) {
     void input.now;
+    const superseded = new Set(this.list().map(record => record.supersedesId).filter((id): id is string => Boolean(id)));
     return this.list()
-      .filter(record => evaluateSignalEligibility(record, { now: input.now }).eligible)
+      .filter(record => !superseded.has(record.forwardTestId) && evaluateSignalEligibility(record, { now: input.now }).eligible)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.forwardTestId.localeCompare(b.forwardTestId))
       .slice(0, input.limit);
   }
@@ -28,6 +30,20 @@ export class InMemoryForwardTestingRepository {
     const offset = input.offset ?? 0;
     const limit = input.limit ?? 100;
     return { items: filtered.slice(offset, offset + limit), total: filtered.length };
+  }
+  countActive() {
+    const superseded = new Set(this.list().map(record => record.supersedesId).filter((id): id is string => Boolean(id)));
+    return this.list().filter(record => record.status === "monitoring" && !superseded.has(record.forwardTestId)).length;
+  }
+  complete(forwardTestId: string, evaluationId: string, completedAt: Date) {
+    const source = this.records.get(forwardTestId);
+    if (!source || source.status !== "monitoring") return { inserted: false, record: source ?? null };
+    const terminalId = createHash("sha256").update(`${forwardTestId}:completed:${evaluationId}`).digest("hex").slice(0, 32);
+    const existing = this.records.get(terminalId);
+    if (existing) return { inserted: false, record: existing };
+    const record: ForwardTestRecord = { ...source, forwardTestId: terminalId, status: "completed", reason: "authoritative signal evaluation finalized", ruleEvaluation: { ...source.ruleEvaluation, finalEvaluationId: evaluationId }, createdAt: completedAt.toISOString(), lineageEventIds: [...new Set([...source.lineageEventIds, forwardTestId, evaluationId])], causationId: evaluationId, supersedesId: forwardTestId };
+    this.records.set(terminalId, record);
+    return { inserted: true, record };
   }
   health() {
     return { availability: this.records.size > 0 ? "available" : "available_empty", total: this.records.size };

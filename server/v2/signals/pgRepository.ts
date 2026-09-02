@@ -24,7 +24,7 @@ export class PgSignalRepository {
       `SELECT payload FROM v2_research_signals
        WHERE (payload->>'demoOnly')::boolean = true
          AND jsonb_array_length(lineage_event_ids) > 0
-         AND (payload->>'validUntil')::timestamptz > $2::timestamptz
+         AND (payload->>'validUntil')::timestamptz <= $2::timestamptz
        ORDER BY created_at DESC, record_id ASC
        LIMIT $1`,
       [input.limit, input.now.toISOString()],
@@ -33,5 +33,13 @@ export class PgSignalRepository {
   }
   async list(input: { limit?: number; offset?: number; strategyId?: string; symbol?: string } = {}) { return (await this.evidence.list(input)).items; }
   listPage(input: { limit?: number; offset?: number; strategyId?: string; symbol?: string } = {}) { return this.evidence.list(input); }
+  async countActive(at: Date) {
+    const result = await this.db.query(
+      `SELECT count(*)::int AS total FROM v2_research_signals
+       WHERE (payload->>'validUntil')::timestamptz > $1::timestamptz`,
+      [at.toISOString()],
+    );
+    return Number(result.rows[0]?.total ?? 0);
+  }
   health() { return this.evidence.health(); }
 }
