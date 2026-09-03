@@ -195,7 +195,17 @@ app.use((req, res, next) => {
       });
     },
   );
-})();
+})().catch((error) => {
+  structuredLogger.application({
+    level: "fatal",
+    module: "startup",
+    event: "application_startup_failed",
+    message: "FinCoach application startup failed",
+    error,
+  });
+  console.error("FinCoach application startup failed:", error);
+  process.exitCode = 1;
+});
 
 function isAutomatedTestProcess(env: NodeJS.ProcessEnv = process.env) {
   const argv = process.argv.join(" ");

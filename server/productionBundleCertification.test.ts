@@ -78,11 +78,12 @@ async function certifyBundleProcess(databaseUrl?: string) {
       METATRADER_LIVE_BRIDGE_URL: "",
     },
   });
-  const output: string[] = [];
-  child.stdout.on("data", (chunk) => output.push(String(chunk)));
-  child.stderr.on("data", (chunk) => output.push(String(chunk)));
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+  child.stderr.on("data", (chunk) => { stderr += String(chunk); });
   try {
-    await waitForHttp(port, child, output);
+    await waitForHttp(port, child, () => ({ stdout, stderr }));
     const healthStarted = Date.now();
     const health = await fetch(`http://127.0.0.1:${port}/api/health`);
     const healthText = await health.text();
@@ -143,10 +144,11 @@ async function freePort() {
   return port;
 }
 
-async function waitForHttp(port: number, child: ChildProcessWithoutNullStreams, output: string[]) {
+async function waitForHttp(port: number, child: ChildProcessWithoutNullStreams, output: () => { stdout: string; stderr: string }) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    assert.equal(child.exitCode, null, `bundle exited early:\n${output.join("")}`);
+    const captured = output();
+    assert.equal(child.exitCode, null, `bundle exited early (exitCode=${child.exitCode}, signal=${child.signalCode})\nSTDOUT:\n${captured.stdout}\nSTDERR:\n${captured.stderr}`);
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/health`);
       if (response.ok) return;
@@ -154,7 +156,8 @@ async function waitForHttp(port: number, child: ChildProcessWithoutNullStreams, 
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
   }
-  assert.fail(`bundle did not become ready:\n${output.join("")}`);
+  const captured = output();
+  assert.fail(`bundle did not become ready (exitCode=${child.exitCode}, signal=${child.signalCode})\nSTDOUT:\n${captured.stdout}\nSTDERR:\n${captured.stderr}`);
 }
 
 async function stop(child: ChildProcessWithoutNullStreams) {
