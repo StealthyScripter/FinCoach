@@ -214,6 +214,36 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}
 {
   const validation = loadV2RuntimeConfig({
     ...disabledEnv,
+    NODE_ENV: "production",
+    DATABASE_URL: "postgres://user:pass@localhost:5432/fincoach",
+    FINCOACH_V2_RUNTIME_ENABLED: "true",
+    FINCOACH_V2_RESEARCH_ENABLED: "true",
+    FINCOACH_V2_PILOT_ENABLED: "true",
+    FINCOACH_V2_PROVIDER_RESEARCH_ENABLED: "false",
+  });
+  assert.equal(validation.ok, true);
+  assert.equal(validation.config.providerResearchEnabled, false);
+  assert.equal(validation.config.researchDataMode, "synthetic");
+}
+
+{
+  const env = {
+    ...disabledEnv,
+    NODE_ENV: "production",
+    DATABASE_URL: "postgres://user:pass@localhost:5432/fincoach",
+    FINCOACH_V2_RUNTIME_ENABLED: "true",
+    FINCOACH_V2_RESEARCH_ENABLED: "true",
+    FINCOACH_V2_PILOT_ENABLED: "true",
+    FINCOACH_V2_PROVIDER_RESEARCH_ENABLED: "true",
+    OANDA_ENV: "practice",
+  } as NodeJS.ProcessEnv;
+  const runtime = createFinCoachV2Runtime(env);
+  await assert.rejects(() => runtime.initialize(), /V2 provider research requires OANDA_API_TOKEN.*OANDA_ACCOUNT_ID/);
+}
+
+{
+  const validation = loadV2RuntimeConfig({
+    ...disabledEnv,
     DATABASE_URL: "postgres://user:pass@localhost:5432/fincoach",
     FINCOACH_V2_RUNTIME_ENABLED: "true",
     FINCOACH_V2_RESEARCH_ENABLED: "true",

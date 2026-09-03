@@ -66,6 +66,7 @@ async function certifyBundleProcess(databaseUrl?: string) {
       FINCOACH_TELEGRAM_LONG_POLLING_ENABLED: "false",
       FINCOACH_BUILD_COMMIT: "stale-pm2-env",
       FINCOACH_BUILD_ID: "stale-pm2-build",
+      FINCOACH_V2_PROVIDER_RESEARCH_ENABLED: "false",
       MARKETPILOT_DEMO_ONLY: "true",
       OANDA_ENV: "practice",
       BROKER_ENV: "",

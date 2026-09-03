@@ -7,6 +7,7 @@ export type V2RuntimeConfig = {
   autostart: boolean;
   pilotEnabled: boolean;
   researchEnabled: boolean;
+  providerResearchEnabled: boolean;
   forwardTestingEnabled: boolean;
   researchSignalEnabled: boolean;
   telegramSignalPublicationEnabled: boolean;
@@ -113,6 +114,7 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
     autostart: bool(env.FINCOACH_V2_AUTOSTART, false),
     pilotEnabled: bool(env.FINCOACH_V2_PILOT_ENABLED, false),
     researchEnabled: bool(env.FINCOACH_V2_RESEARCH_ENABLED, false),
+    providerResearchEnabled: bool(env.FINCOACH_V2_PROVIDER_RESEARCH_ENABLED, true),
     forwardTestingEnabled: bool(env.FINCOACH_V2_FORWARD_TESTING_ENABLED, false),
     researchSignalEnabled: bool(env.FINCOACH_V2_RESEARCH_SIGNAL_ENABLED, false),
     telegramSignalPublicationEnabled: bool(env.FINCOACH_V2_TELEGRAM_SIGNAL_PUBLICATION_ENABLED, false),
@@ -186,7 +188,9 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
       maxEvents: Math.min(50, int(env.FINCOACH_MARKET_SNAPSHOT_MAX_EVENTS, 12)),
       lookaheadHours: Math.min(168, int(env.FINCOACH_MARKET_SNAPSHOT_LOOKAHEAD_HOURS, 24)),
     },
-    researchDataMode: env.FINCOACH_V2_RESEARCH_DATA_MODE?.trim().toLowerCase() === "provider" || env.NODE_ENV === "production" ? "provider" : "synthetic",
+    researchDataMode: !bool(env.FINCOACH_V2_PROVIDER_RESEARCH_ENABLED, true)
+      ? "synthetic"
+      : env.FINCOACH_V2_RESEARCH_DATA_MODE?.trim().toLowerCase() === "provider" || env.NODE_ENV === "production" ? "provider" : "synthetic",
     weekendDormancy: {
       enabled: bool(env.FINCOACH_WEEKEND_DORMANCY_ENABLED, true),
       postCloseObservationHours: Math.max(0, num(env.FINCOACH_POST_CLOSE_OBSERVATION_HOURS, 2)),
@@ -208,8 +212,8 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
   if (config.researchEnabled && !config.runtimeEnabled) errors.push("Research cannot be enabled when V2 runtime is disabled.");
   if (config.pilotEnabled && !config.researchEnabled) errors.push("Pilot cannot be enabled when V2 research is disabled.");
   if (config.autostart && (!config.runtimeEnabled || !config.pilotEnabled || !config.researchEnabled)) errors.push("Autostart requires runtime, pilot, and research enabled.");
-  if (config.researchDataMode === "synthetic" && env.NODE_ENV === "production") errors.push("Synthetic V2 research data is prohibited in production.");
-  if (config.researchEnabled && config.researchDataMode === "provider") {
+  if (config.researchDataMode === "synthetic" && env.NODE_ENV === "production" && config.providerResearchEnabled) errors.push("Synthetic V2 research data is prohibited in production.");
+  if (config.researchEnabled && config.providerResearchEnabled && config.researchDataMode === "provider") {
     if ((env.OANDA_ENV?.trim().toLowerCase() || "practice") !== "practice") errors.push("V2 provider research requires OANDA_ENV=practice.");
     if (!env.OANDA_API_TOKEN?.trim()) errors.push("V2 provider research requires OANDA_API_TOKEN.");
     if (!env.OANDA_ACCOUNT_ID?.trim()) errors.push("V2 provider research requires OANDA_ACCOUNT_ID.");
@@ -269,6 +273,7 @@ export function loadV2RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V2Run
       FINCOACH_V2_AUTOSTART: provenance(env.FINCOACH_V2_AUTOSTART, config.autostart),
       FINCOACH_V2_RUNTIME_ENABLED: provenance(env.FINCOACH_V2_RUNTIME_ENABLED, config.runtimeEnabled),
       FINCOACH_V2_RESEARCH_ENABLED: provenance(env.FINCOACH_V2_RESEARCH_ENABLED, config.researchEnabled),
+      FINCOACH_V2_PROVIDER_RESEARCH_ENABLED: provenance(env.FINCOACH_V2_PROVIDER_RESEARCH_ENABLED, config.providerResearchEnabled),
       FINCOACH_V2_PILOT_ENABLED: provenance(env.FINCOACH_V2_PILOT_ENABLED, config.pilotEnabled),
       FINCOACH_V2_FORWARD_TESTING_ENABLED: provenance(env.FINCOACH_V2_FORWARD_TESTING_ENABLED, config.forwardTestingEnabled),
       FINCOACH_V2_RESEARCH_SIGNAL_ENABLED: provenance(env.FINCOACH_V2_RESEARCH_SIGNAL_ENABLED, config.researchSignalEnabled),
