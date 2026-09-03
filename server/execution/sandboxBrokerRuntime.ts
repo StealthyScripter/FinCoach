@@ -20,6 +20,7 @@ import { demoOnlyPolicyService } from "./demoOnlyPolicy";
 import { operationalBlockerService } from "../operationalBlockerService";
 import { classifyOperationalAlert, shouldSendOperatorTelegramAlert } from "../operationalAlertPolicy";
 import { executionFunnelTelemetry } from "./executionFunnelTelemetry";
+import type { OrderRequest } from "./domain";
 
 export const sandboxProviderSchema = z.enum(["oanda_practice", "metatrader_demo"]);
 export const sandboxPreviewSchema = z.object({
@@ -180,6 +181,35 @@ export class SandboxBrokerRuntime {
     }
   }
 
+  /** Machine-authorized practice path for V2, never available to live endpoints. */
+  async submitAutonomousPractice(request: OrderRequest, idempotencyKey: string) {
+    if (this.env.FINCOACH_DEMO_BROKER_EXECUTION_ENABLED !== "true" || this.env.FINCOACH_LIVE_EXECUTION_ENABLED !== "false" || this.env.FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED !== "false" || this.env.OANDA_ENV?.trim().toLowerCase() !== "practice" || this.env.OANDA_BASE_URL !== "https://api-fxpractice.oanda.com/v3") {
+      throw new SandboxBrokerError("demo_environment_required", "Autonomous execution is restricted to OANDA PRACTICE with live execution disabled.");
+    }
+    if (executionRiskService.snapshot().globalKillSwitch) throw new SandboxBrokerError("kill_switch_active");
+    const adapter = this.adapter("oanda_practice");
+    await this.verifyDemoOnly(adapter, "v2.autonomous_practice", "v2-execution-bridge");
+    const fingerprint = createHash("sha256").update(JSON.stringify({ provider: "oanda_practice", request })).digest("hex");
+    const reservationId = randomUUID();
+    const reservation = await this.transactionalReliability.reserveSubmission(idempotencyKey, fingerprint, reservationId);
+    if (reservation.status === "replay") return { ...reservation.result, replayed: true };
+    if (reservation.status !== "acquired") throw new SandboxBrokerError("order_rejected", "Autonomous submission is already in progress or conflicts with a prior request.");
+    try {
+      const preview = await adapter.previewOrder(request);
+      const result = await adapter.submitSandboxOrder(preview);
+      this.latestOrder = result;
+      this.trackedOrders.push({ provider: "oanda_practice", orderId: result.orderId, expectedStatus: result.status, expectedFilledUnits: result.filledUnits, submittedAt: result.submittedAt, idempotencyKey });
+      await this.transactionalReliability.completeSubmission(idempotencyKey, reservationId, result);
+      executionFunnelTelemetry.increment("brokerSubmissionAttempted");
+      if (result.status !== "rejected") executionFunnelTelemetry.increment("brokerAccepted");
+      return { ...result, replayed: false };
+    } catch (error) {
+      await this.transactionalReliability.markSubmissionInDoubt(idempotencyKey, reservationId).catch(() => undefined);
+      executionFunnelTelemetry.increment("brokerRejected");
+      throw error;
+    }
+  }
+
   getLatestOrder() {
     return this.latestOrder;
   }
@@ -188,6 +218,27 @@ export class SandboxBrokerRuntime {
     const report = await brokerReconciliationService.reconcile(this.adapter(provider), this.trackedOrders, userId);
     await this.transactionalReliability.saveReconciliation(report);
     return report;
+  }
+
+  async closedPracticeTrades() {
+    const adapter = this.adapter("oanda_practice");
+    return "getClosedTrades" in adapter && typeof adapter.getClosedTrades === "function" ? adapter.getClosedTrades() : [];
+  }
+
+  async recoverAutonomousPracticeSubmissions() {
+    const listInDoubt = this.transactionalReliability.listInDoubt;
+    if (!listInDoubt) return 0;
+    const adapter = this.adapter("oanda_practice");
+    if (!("findOrderByClientId" in adapter) || typeof adapter.findOrderByClientId !== "function") return 0;
+    let recovered = 0;
+    for (const item of await listInDoubt()) {
+      const result = await adapter.findOrderByClientId(item.idempotencyKey).catch(() => null);
+      if (!result) continue;
+      await this.transactionalReliability.resolveSubmission(item.idempotencyKey, "record_broker_result", "v2-reconciliation", result);
+      this.trackedOrders.push({ provider: "oanda_practice", orderId: result.orderId, expectedStatus: result.status, expectedFilledUnits: result.filledUnits, submittedAt: result.submittedAt, idempotencyKey: item.idempotencyKey });
+      recovered += 1;
+    }
+    return recovered;
   }
 
   startReconciliationScheduler() {

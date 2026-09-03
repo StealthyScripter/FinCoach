@@ -179,6 +179,7 @@ export class OandaPracticeAdapter implements DemoBrokerAdapter {
       positionFill: "DEFAULT",
       stopLossOnFill: { price: String(request.stopLoss) },
     };
+    if (request.clientOrderId) order.clientExtensions = { id: request.clientOrderId };
     if (request.takeProfit) order.takeProfitOnFill = { price: String(request.takeProfit) };
     if (request.type === "limit") order.price = String(request.limitPrice ?? request.price);
     if (request.type === "stop") order.price = String(request.stopPrice ?? request.price);
@@ -202,6 +203,8 @@ export class OandaPracticeAdapter implements DemoBrokerAdapter {
       filledUnits,
       remainingUnits: Math.max(0, requestedUnits - filledUnits),
       averageFillPrice: transaction?.price === undefined ? null : number(transaction.price),
+      brokerTradeId: payload.orderFillTransaction && transaction?.tradeOpened ? String((transaction.tradeOpened as Record<string, unknown>).tradeID ?? "") || null : null,
+      brokerFillTransactionId: payload.orderFillTransaction ? String(transaction?.id ?? "") || null : null,
       productionOrderSubmissionEnabled: false,
     };
   }
@@ -212,6 +215,12 @@ export class OandaPracticeAdapter implements DemoBrokerAdapter {
     };
     const order = payload.order ?? {};
     return this.orderResult(order);
+  }
+
+  async findOrderByClientId(clientOrderId: string): Promise<SandboxOrderResult | null> {
+    const payload = await this.request("GET", `/accounts/${encodeURIComponent(this.config.accountId)}/orders?count=500`) as { orders?: Array<Record<string, unknown>> };
+    const order = (payload.orders ?? []).find(item => String((item.clientExtensions as Record<string, unknown> | undefined)?.id ?? "") === clientOrderId);
+    return order ? this.orderResult(order) : null;
   }
 
   async getPendingOrders(): Promise<SandboxOrderResult[]> {
@@ -267,6 +276,22 @@ export class OandaPracticeAdapter implements DemoBrokerAdapter {
     });
   }
 
+  async getClosedTrades(): Promise<SandboxTrade[]> {
+    const payload = await this.request("GET", `/accounts/${encodeURIComponent(this.config.accountId)}/trades?state=CLOSED&count=500`) as { trades?: Array<Record<string, unknown>> };
+    return (payload.trades ?? []).map(trade => {
+      const mapping = getSymbolMapping(String(trade.instrument), this.id);
+      const initialUnits = number(trade.initialUnits);
+      const closingIds = Array.isArray(trade.closingTransactionIDs) ? trade.closingTransactionIDs : [];
+      return {
+        id: String(trade.id), instrument: mapping.internalSymbol, providerSymbol: mapping.providerSymbol,
+        side: initialUnits < 0 ? "sell" as const : "buy" as const, units: Math.abs(initialUnits),
+        price: number(trade.averageClosePrice ?? trade.price), openedAt: String(trade.openTime), state: "closed" as const,
+        realizedPnL: number(trade.realizedPL), closedAt: trade.closeTime ? String(trade.closeTime) : null,
+        closingTransactionId: closingIds.length ? String(closingIds.at(-1)) : null,
+      };
+    });
+  }
+
   async disconnect() {
     this.connected = false;
     return this.healthResult(false, "disconnected", "Disconnected by MarketPilot");
@@ -306,6 +331,8 @@ export class OandaPracticeAdapter implements DemoBrokerAdapter {
       filledUnits: requestedUnits ? filledUnits : undefined,
       remainingUnits: requestedUnits ? Math.max(0, requestedUnits - filledUnits) : undefined,
       averageFillPrice: order.averageFillPrice === undefined ? null : number(order.averageFillPrice),
+      brokerTradeId: order.tradeOpenedID ? String(order.tradeOpenedID) : order.tradeReducedID ? String(order.tradeReducedID) : null,
+      brokerFillTransactionId: order.fillingTransactionID ? String(order.fillingTransactionID) : null,
       productionOrderSubmissionEnabled: false,
     };
   }

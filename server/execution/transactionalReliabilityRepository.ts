@@ -15,6 +15,7 @@ export interface TransactionalReliabilityRepository {
   markSubmissionInDoubt(key: string, reservationId: string): Promise<void>;
   abandonSubmission(key: string, reservationId: string): Promise<void>;
   resolveSubmission(key: string, decision: "record_not_submitted" | "record_broker_result", reviewedBy: string, result?: SandboxOrderResult): Promise<void>;
+  listInDoubt?(): Promise<Array<{ idempotencyKey: string; reservationId: string }>>;
   acquireLease(strategyId: string, ownerId: string, ttlMs: number, now?: Date): Promise<{ leaseId: string; expiresAt: string }>;
   renewLease(strategyId: string, ownerId: string, ttlMs: number, now?: Date): Promise<{ leaseId: string; expiresAt: string }>;
   releaseLease(strategyId: string, ownerId: string): Promise<void>;
@@ -74,6 +75,7 @@ export class InMemoryTransactionalReliabilityRepository implements Transactional
       existing.result = result;
     }
   }
+  async listInDoubt() { return [...this.submissions.entries()].filter(([, value]) => value.status === "in_doubt").map(([idempotencyKey, value]) => ({ idempotencyKey, reservationId: value.reservationId })); }
 
   async acquireLease(strategyId: string, ownerId: string, ttlMs: number, now = new Date()) {
     const existing = this.leases.get(strategyId);
@@ -196,6 +198,11 @@ export class PgTransactionalReliabilityRepository implements TransactionalReliab
       [key, JSON.stringify(result), reviewedBy],
     );
     if (response.rowCount !== 1) throw new Error("Submission is not in doubt");
+  }
+
+  async listInDoubt() {
+    const result = await this.pool.query("SELECT idempotency_key, reservation_id FROM execution_submission_idempotency WHERE status = 'in_doubt'");
+    return result.rows.map(row => ({ idempotencyKey: String(row.idempotency_key), reservationId: String(row.reservation_id) }));
   }
 
   async acquireLease(strategyId: string, ownerId: string, ttlMs: number, now = new Date()) {

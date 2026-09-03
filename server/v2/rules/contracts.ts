@@ -10,6 +10,6 @@ export type StrategyDefinition = {
   sidePolicy: { candidateSide: "buy" | "sell" | "both" }; stopLoss: ExitRule; takeProfit: ExitRule; timeExit: ExitRule | null;
   invalidationRules: RuleExpression[]; positionSizing: PositionSizingRule; costModel: CostModelReference; sessionRestrictions: RuleExpression[];
   eventRestrictions: RuleExpression[]; supportedRegimes: string[]; requiredFeatureDefinitions: FeatureReference[]; complexityScore: number;
-  fingerprint: string; createdAt: string; correlationId: string; causationId: string | null;
+  fingerprint: string; createdAt: string; correlationId: string; causationId: string | null; researchOnly?: boolean;
 };
 export type CompileStrategyInput = Omit<StrategyDefinition, "strategyId" | "strategyVersion" | "schemaVersion" | "complexityScore" | "fingerprint" | "createdAt"> & { createdAt?: string };

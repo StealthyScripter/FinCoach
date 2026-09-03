@@ -57,6 +57,11 @@ import { resolveResearchInstrument, validateResearchUniverse } from "../research
 import { activeFxResearchSession, type FxResearchSessionId } from "../fxResearchSessions";
 import { classifyRegimeFromObservation, instantiateStrategyTemplates } from "../strategyTemplates";
 import { evaluateSignalFromFrozenCandles } from "./signalOutcomeEvaluator";
+import { V2OandaPracticeExecutionBridge, externalEvaluationFromBrokerOutcome } from "../execution/bridge";
+import { PgV2ExecutionRequestRepository } from "../execution/repository";
+import { PgDemoPromotionRepository } from "../execution/promotionRepository";
+import { sandboxBrokerRuntime } from "../../execution/sandboxBrokerRuntime";
+import { evaluatePracticeTradeCapacity, loadMaxActivePracticeTrades } from "../../execution/practiceTradeCapacity";
 
 type V2Repositories = ReturnType<typeof createRepositories>;
 type WeeklyTransitionNotifier = (input: { kind: "open" | "close"; boundaryAt: string; window: WeeklyResearchWindowState; aggregate: AggregateTradableWindow }) => Promise<unknown>;
@@ -1129,6 +1134,7 @@ export class FinCoachV2Runtime {
       now: input.now,
       guard: input.guard,
     });
+    await processV2PracticeExecution({ repositories, env: this.env, now: input.now, cycleId: input.cycleId, correlationId: input.correlationId });
     evaluationsCount = await createEvaluationsFromSignals({
       repositories,
       marketData: { candlesForSignal: signal => researchCandles(this.config, this.env, signal.symbol, normalizeTimeframe(signal.timeframe), input.now, 80) },
@@ -1485,6 +1491,8 @@ function createRepositories(pool: Pool) {
     experiments: evidence.experiments,
     backtests: evidence.backtests,
     strategies: evidence.strategies,
+    executionRequests: new PgV2ExecutionRequestRepository(pool),
+    demoPromotions: new PgDemoPromotionRepository(pool),
     evidence,
   };
 }
@@ -2221,6 +2229,49 @@ function forwardSnapshot(rankingId: string, candidate: RankingCandidateInput, so
 type ForwardTestingSignalSourceRepositoryLike = {
   eligibleForSignal?(input: { now: Date; limit: number }): Promise<ForwardTestRecord[]> | ForwardTestRecord[];
 };
+
+export async function processV2PracticeExecution(input: {
+  repositories: {
+    signals?: { listPage?(input?: { limit?: number; offset?: number }): Promise<{ items: V2ResearchSignal[]; total: number }> | { items: V2ResearchSignal[]; total: number } };
+    strategies?: { get(id: string): Promise<(StrategyDefinition & { researchOnly?: boolean }) | null> | (StrategyDefinition & { researchOnly?: boolean }) | null };
+    forwardTesting?: { get(id: string): Promise<ForwardTestRecord | null> | ForwardTestRecord | null };
+    lifecycle?: { list?(input?: { strategyId?: string; limit?: number }): Promise<StrategyLifecycleDecision[]> | StrategyLifecycleDecision[] };
+    executionRequests?: PgV2ExecutionRequestRepository;
+    demoPromotions?: PgDemoPromotionRepository;
+    evaluations?: { saveEvaluation(record: ExternalEvaluation): Promise<unknown> | unknown; getEvaluation?(id: string): Promise<ExternalEvaluation | null> | ExternalEvaluation | null };
+  };
+  env: NodeJS.ProcessEnv;
+  now: Date;
+  cycleId: string;
+  correlationId: string;
+}) {
+  if (!input.repositories.signals?.listPage || !input.repositories.executionRequests || !input.repositories.strategies?.get || !input.repositories.forwardTesting?.get || !input.repositories.lifecycle?.list || !input.repositories.demoPromotions) return 0;
+  if (input.env.FINCOACH_DEMO_BROKER_EXECUTION_ENABLED !== "true") return 0;
+  const health = sandboxBrokerRuntime.reconciliationHealth(input.now);
+  const capacity = evaluatePracticeTradeCapacity({ maxActivePracticeTrades: loadMaxActivePracticeTrades(input.env), brokerConfirmedActiveTrades: health.brokerActiveTrades, reconciliationStatus: health.reconciliationStatus as "never_run" | "healthy" | "discrepancy" | "failed" | "stale" });
+  const bridge = new V2OandaPracticeExecutionBridge(input.repositories.executionRequests);
+  await sandboxBrokerRuntime.recoverAutonomousPracticeSubmissions().catch(() => 0);
+  const closedTrades = await sandboxBrokerRuntime.closedPracticeTrades().catch(() => []);
+  await bridge.reconcileClosedTrades(closedTrades, input.now, async request => {
+    const evaluation = externalEvaluationFromBrokerOutcome(request);
+    if (!evaluation || !input.repositories.evaluations?.saveEvaluation) return;
+    if (input.repositories.evaluations.getEvaluation && await input.repositories.evaluations.getEvaluation(evaluation.evaluationId)) return;
+    await input.repositories.evaluations.saveEvaluation(evaluation);
+  });
+  const page = await input.repositories.signals.listPage({ limit: 20, offset: 0 });
+  let processed = 0;
+  for (const signal of page.items) {
+    const strategy = await input.repositories.strategies.get(signal.strategyId);
+    const forwardTest = await input.repositories.forwardTesting.get(signal.forwardTestId);
+    if (!strategy || !forwardTest) continue;
+    const lifecycle = (await input.repositories.lifecycle.list({ strategyId: signal.strategyId, limit: 20 })).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+    const promotion = await input.repositories.demoPromotions.getForStrategy(signal.strategyId);
+    const result = await bridge.process({ signal, strategy, forwardTest, lifecycle: lifecycle ? { decisionId: lifecycle.decisionId, toState: lifecycle.toState } : null, promotion, killSwitchActive: false, practiceCapacityAvailable: capacity.allowed, now: input.now });
+    processed += result.eligibility.eligible ? 1 : 0;
+    structuredLogger.v2({ level: "info", event: result.eligibility.eligible ? "v2_practice_execution_eligible" : "v2_practice_execution_ineligible", message: "V2 practice execution eligibility evaluated", cycleId: input.cycleId, correlationId: input.correlationId, signalId: signal.signalId, strategyId: signal.strategyId, reason: result.eligibility.reason });
+  }
+  return processed;
+}
 
 type SignalRepositoryLike = {
   save(record: V2ResearchSignal): Promise<unknown> | unknown;

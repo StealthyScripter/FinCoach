@@ -22,7 +22,7 @@ export class PgExternalEvaluationRepository {
   saveReconciliation(record: ReconciledOutcome) { if (!this.reconciliations.has(record.reconciliationId)) this.reconciliations.set(record.reconciliationId, record); return this.reconciliations.get(record.reconciliationId)!; }
   getEvaluation(id: string) { return this.evaluations.get(id); }
   async getForSignal(signalId: string) {
-    const result = await this.db.query("SELECT payload FROM v2_external_evaluations WHERE payload->>'signalId' = $1 ORDER BY created_at ASC, record_id ASC LIMIT 1", [signalId]);
+    const result = await this.db.query("SELECT payload FROM v2_external_evaluations WHERE payload->>'signalId' = $1 ORDER BY (payload->>'evaluationSource' = 'oanda_practice') DESC, created_at ASC, record_id ASC LIMIT 1", [signalId]);
     return (result.rows[0]?.payload as ExternalEvaluation | undefined) ?? null;
   }
   async hasForSignal(signalId: string) {
@@ -35,7 +35,12 @@ export class PgExternalEvaluationRepository {
       `SELECT payload FROM v2_external_evaluations
        WHERE payload->>'outcome' IN ('tp', 'sl', 'expired', 'cancelled')
          AND jsonb_array_length(lineage_event_ids) > 0
-       ORDER BY created_at DESC, record_id ASC
+         AND (payload->>'evaluationSource' = 'oanda_practice' OR NOT EXISTS (
+           SELECT 1 FROM v2_external_evaluations broker
+           WHERE broker.payload->>'signalId' = v2_external_evaluations.payload->>'signalId'
+             AND broker.payload->>'evaluationSource' = 'oanda_practice'
+         ))
+       ORDER BY (payload->>'evaluationSource' = 'oanda_practice') DESC, created_at DESC, record_id ASC
        LIMIT $1`,
       [input.limit],
     );

@@ -151,6 +151,7 @@ export const orderRequestSchema = z.object({
   mode: executionModeSchema,
   explicitUserConfirmation: z.boolean().default(false),
   correlationId: z.string().default(() => randomUUID()),
+  clientOrderId: z.string().min(1).max(200).optional(),
 });
 
 export type OrderRequest = z.infer<typeof orderRequestSchema>;

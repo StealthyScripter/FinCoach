@@ -122,6 +122,7 @@ export function instantiateStrategyTemplates(input: TemplateInstantiationInput):
     costModel: { costModelId: "deterministic-demo-costs", version: "v1" },
     sessionRestrictions: [{ field: "sessionId", operator: "in", value: [input.sessionId] }],
     eventRestrictions: template.primaryFamily === "news_macro" ? [{ field: "eventProvenance", operator: "==", value: "authoritative" }] : [],
+    researchOnly: true,
     supportedRegimes: template.compatibleRegimes,
     requiredFeatureDefinitions: featureReferences(template, input),
     correlationId: input.correlationId,

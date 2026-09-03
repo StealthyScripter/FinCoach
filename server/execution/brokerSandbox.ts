@@ -76,6 +76,8 @@ export type SandboxOrderResult = {
   filledUnits?: number;
   remainingUnits?: number;
   averageFillPrice?: number | null;
+  brokerTradeId?: string | null;
+  brokerFillTransactionId?: string | null;
   productionOrderSubmissionEnabled: false;
 };
 
@@ -98,6 +100,9 @@ export type SandboxTrade = {
   price: number;
   openedAt: string;
   state: "open" | "closed";
+  realizedPnL?: number | null;
+  closedAt?: string | null;
+  closingTransactionId?: string | null;
 };
 
 export interface DemoBrokerAdapter {
@@ -114,6 +119,7 @@ export interface DemoBrokerAdapter {
   getOpenPositions(): Promise<SandboxPosition[]>;
   getPendingOrders(): Promise<SandboxOrderResult[]>;
   getTrades(): Promise<SandboxTrade[]>;
+  getClosedTrades?(): Promise<SandboxTrade[]>;
   closePosition?(positionId: string): Promise<SandboxOrderResult>;
   disconnect(): Promise<BrokerHealth>;
 }
