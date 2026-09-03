@@ -51,10 +51,12 @@ export function log(message: string, source = "express") {
 }
 
 process.on("uncaughtException", (error) => {
+  process.exitCode = 1;
   structuredLogger.application({ level: "fatal", module: "process", event: "uncaught_exception", message: "Uncaught exception", error });
 });
 
 process.on("unhandledRejection", (reason) => {
+  process.exitCode = 1;
   structuredLogger.application({ level: "fatal", module: "process", event: "unhandled_rejection", message: "Unhandled promise rejection", error: reason });
 });
 
@@ -93,6 +95,9 @@ app.use((req, res, next) => {
     throw new Error(`MarketPilot demo-only safety check failed: ${demoOnlyEnvironment.violations.join(", ") || "demo-only mode disabled"}`);
   }
   structuredLogger.audit({ level: "info", event: "startup_safety_check_passed", message: "MarketPilot demo-only safety check passed" });
+  if (process.env.NODE_ENV === "production" && !process.env.DATABASE_URL?.trim()) {
+    throw new Error("DATABASE_URL is required for production startup");
+  }
   const authSessionSchema = await assertAuthSessionSchema();
   structuredLogger.audit({ level: "info", event: "auth_session_schema_checked", message: "Auth session schema check completed", authSessionSchema });
   configureAuth(app);

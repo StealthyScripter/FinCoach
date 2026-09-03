@@ -15,11 +15,9 @@ if (!existsSync(bundlePath)) {
   assert.match(bundle, /auth_sessions/);
   assert.match(bundle, /headersSent/);
 
-  await certifyBundleProcess();
-
   const databaseUrl = process.env.TEST_DATABASE_URL;
   if (!databaseUrl) {
-    console.log("production bundle PostgreSQL certification skipped: TEST_DATABASE_URL is not set");
+    throw new Error("production bundle certification requires TEST_DATABASE_URL");
   } else {
     const schema = `bundle_cert_${process.pid}_${Date.now()}`.replace(/\W/g, "_");
     const scopedDatabaseUrl = withSearchPath(databaseUrl, schema);
