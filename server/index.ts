@@ -204,7 +204,7 @@ app.use((req, res, next) => {
     error,
   });
   console.error("FinCoach application startup failed:", error);
-  process.exitCode = 1;
+  process.exit(1);
 });
 
 function isAutomatedTestProcess(env: NodeJS.ProcessEnv = process.env) {

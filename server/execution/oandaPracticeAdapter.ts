@@ -285,7 +285,7 @@ export class OandaPracticeAdapter implements DemoBrokerAdapter {
       return {
         id: String(trade.id), instrument: mapping.internalSymbol, providerSymbol: mapping.providerSymbol,
         side: initialUnits < 0 ? "sell" as const : "buy" as const, units: Math.abs(initialUnits),
-        price: number(trade.averageClosePrice ?? trade.price), openedAt: String(trade.openTime), state: "closed" as const,
+        price: number(trade.price), closePrice: number(trade.averageClosePrice ?? trade.price), openedAt: String(trade.openTime), state: "closed" as const,
         realizedPnL: number(trade.realizedPL), closedAt: trade.closeTime ? String(trade.closeTime) : null,
         closingTransactionId: closingIds.length ? String(closingIds.at(-1)) : null,
       };

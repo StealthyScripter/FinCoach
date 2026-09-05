@@ -33,7 +33,17 @@ for (const [reason, overrides] of [
 assert.equal(brokerCalls, 0);
 
 const repository = new InMemoryV2ExecutionRequestRepository();
-const bridge = new V2OandaPracticeExecutionBridge(repository, broker);
+const forensicCalls: unknown[] = [];
+const forensicTradeIds = new Set<string>();
+const forensics = {
+  async get(tradeId: string) { return forensicTradeIds.has(tradeId) ? {} : null; },
+  async generateForAuthoritativeBrokerClose(input: { tradeId: string }) {
+    forensicCalls.push(input);
+    forensicTradeIds.add(input.tradeId);
+    return {};
+  },
+};
+const bridge = new V2OandaPracticeExecutionBridge(repository, broker, forensics as never);
 const eligible = await bridge.process({ signal, strategy, forwardTest, lifecycle: { decisionId: "decision-1", toState: "candidate" }, promotion, killSwitchActive: false, practiceCapacityAvailable: true, env, now });
 assert.equal(eligible.eligibility.eligible, true);
 assert.equal(eligible.request?.status, "filled");
@@ -50,7 +60,12 @@ const closed = await bridge.reconcileClosedTrades([{ id: "trade-1", instrument: 
 assert.equal(closed.length, 1);
 assert.ok(Math.abs((closed[0]?.realizedR ?? 0) - 2) < 1e-9);
 assert.equal(closed[0]?.status, "closed");
+assert.equal(forensicCalls.length, 1);
+assert.equal((forensicCalls[0] as { netPnl: number }).netPnl, 0.02);
+assert.equal((forensicCalls[0] as { authoritativePnlSource: string }).authoritativePnlSource, "broker_reconciliation");
+assert.equal((forensicCalls[0] as { source: string }).source, "oanda-practice-reconciliation");
 assert.equal((await bridge.reconcileClosedTrades([{ id: "trade-1", instrument: "EUR/USD", providerSymbol: "EUR_USD", side: "buy", units: 1, price: 1.1002, openedAt: now.toISOString(), state: "closed", realizedPnL: 0.02, closedAt: "2026-09-03T01:30:00.000Z" }])).length, 0);
+assert.equal(forensicCalls.length, 1);
 const evaluation = externalEvaluationFromBrokerOutcome(closed[0]!);
 assert.equal(evaluation?.evaluationSource, "oanda_practice");
 assert.equal(evaluation?.brokerTradeId, "trade-1");

@@ -87,6 +87,7 @@ import { paperStrategyRuntime } from "./execution/paperStrategyRuntime";
 import { strategyAdaptationService } from "./execution/strategyAdaptationService";
 import { postTradeReviewService } from "./execution/postTradeReviewService";
 import { strategyEvidenceStore } from "./execution/strategyEvidenceStore";
+import { openTradeForensicsUnavailable, tradeForensicsService, TradeForensicsUnavailableError } from "./execution/tradeForensicsService";
 import { z } from "zod";
 import { MetaTraderBridgePriceFeedProvider, OandaPracticePriceFeedProvider, priceFeedService } from "./execution/priceFeedService";
 import { strategyLifecycleMonitorService } from "./execution/strategyLifecycleMonitorService";
@@ -1641,6 +1642,34 @@ export async function registerRoutes(
     });
   });
 
+  app.get("/api/marketpilot/trades/:tradeId/forensics", async (req, res) => {
+    const tradeId = String(req.params.tradeId ?? "");
+    const existing = await tradeForensicsService.get(tradeId);
+    if (existing) {
+      res.json(existing);
+      return;
+    }
+    const openPaperTrade = paperStrategyRuntime.listOpen().find((position) => position.id === tradeId);
+    if (openPaperTrade) {
+      try {
+        openTradeForensicsUnavailable(openPaperTrade);
+      } catch (error) {
+        sendTradeForensicsError(res, error);
+      }
+      return;
+    }
+    const closedPaperTrade = paperStrategyRuntime.listClosed().find((trade) => trade.id === tradeId);
+    if (!closedPaperTrade) {
+      res.status(404).json({ message: "Trade not found" });
+      return;
+    }
+    try {
+      res.json(await tradeForensicsService.generateForClosedPaperTrade(closedPaperTrade));
+    } catch (error) {
+      sendTradeForensicsError(res, error);
+    }
+  });
+
   app.get("/api/marketpilot/execution/reliability-state/health", async (_req, res) => {
     res.json({
       ...reliabilityStateStore.health(),
@@ -2259,5 +2288,16 @@ function sendSandboxError(res: Response, error: unknown) {
     code: "order_rejected",
     message: error instanceof Error ? error.message : "Sandbox broker operation failed",
     productionOrderSubmissionEnabled: false,
+  });
+}
+
+function sendTradeForensicsError(res: Response, error: unknown) {
+  if (error instanceof TradeForensicsUnavailableError) {
+    res.status(error.status).json({ code: error.code, message: error.message });
+    return;
+  }
+  res.status(422).json({
+    code: "missing_historical_data",
+    message: error instanceof Error ? error.message : "Trade forensics cannot currently be reconstructed",
   });
 }

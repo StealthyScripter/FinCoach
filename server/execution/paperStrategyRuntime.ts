@@ -7,6 +7,7 @@ import { marketDataMetrics, type MarketDataMetrics } from "./marketDataMetrics";
 import type { PriceTick } from "./priceFeedService";
 import { strategyEvidenceStore, type StrategyTradeEvidenceContext } from "./strategyEvidenceStore";
 import { publishTelegramLifecycleAlert } from "../telegramNotificationBus";
+import { tradeForensicsService } from "./tradeForensicsService";
 
 export type PaperRuntimeConfig = {
   strategyId: string;
@@ -273,6 +274,16 @@ export class PaperStrategyRuntime {
         realizedPnL,
         tradeLifecycle: this.lifecycle.journal(position.lifecycleId),
       },
+    });
+    void tradeForensicsService.generateForClosedPaperTrade(closed, now).catch((error) => {
+      this.events.append({
+        type: "trade.forensics_unavailable",
+        userId: "system",
+        sourceService: "paper-strategy-runtime",
+        correlationId: closed.id,
+        payload: { tradeId: closed.id, symbol: closed.symbol, reason: error instanceof Error ? error.message : "Trade forensics unavailable" },
+        createdAt: now.toISOString(),
+      });
     });
     this.journalEntries.push({ type: "paper_close", ...closed });
     return { ...closed };

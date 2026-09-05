@@ -261,7 +261,7 @@ export function runPgRestoreToDatabase(selection: PostgresToolSelection, databas
 function detectHealthyPostgresContainer(runCommand: CommandRunner = runSpawn) {
   const ps = runCommand("docker", ["ps", "--format", "{{.Names}} {{.Image}} {{.Status}}"], { encoding: "utf8" });
   if (ps.status !== 0) return null;
-  const rows = ps.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  const rows = String(ps.stdout).split("\n").map((line: string) => line.trim()).filter(Boolean);
   const match = rows.find((line) => /postgres/i.test(line) && /healthy/i.test(line)) ?? rows.find((line) => /postgres/i.test(line));
   return match?.split(/\s+/)[0] ?? null;
 }

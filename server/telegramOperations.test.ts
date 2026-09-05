@@ -367,10 +367,11 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
 
 {
   const scheduler = new TelegramScheduler();
-  const rejections = await captureUnhandledRejections(() => {
-    void scheduler.runJob("daily-summary", async () => {
+  const rejections = await captureUnhandledRejections(async () => {
+    const result = await scheduler.runJob("daily-summary", async () => {
       throw new Error("timer duplicate summary rejection");
     });
+    assert.equal(result.ok, false);
   });
   assert.equal(rejections.length, 0);
 }
@@ -425,6 +426,7 @@ function validSignal(overrides: Partial<Parameters<TelegramSignalPublisher["publ
   const first = scheduler.runJob("daily-summary", () => new Promise<string>((resolve) => {
     release = () => resolve("done");
   }));
+  await waitFor(() => typeof release === "function");
   const skipped = await scheduler.runJob("daily-summary", async () => "overlap");
   assert.equal(skipped.ok, true);
   assert.equal(skipped.status, "skipped");

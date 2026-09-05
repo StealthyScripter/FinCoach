@@ -98,6 +98,7 @@ export type SandboxTrade = {
   side: "buy" | "sell";
   units: number;
   price: number;
+  closePrice?: number | null;
   openedAt: string;
   state: "open" | "closed";
   realizedPnL?: number | null;

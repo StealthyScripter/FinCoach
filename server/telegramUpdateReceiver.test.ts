@@ -11,10 +11,30 @@ const lockPath = join(root, "poll.lock");
 const originalLockPath = process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH;
 process.env.FINCOACH_TELEGRAM_POLL_LOCK_PATH = lockPath;
 
+class BlockedFilesystemCoordinator implements TelegramPollingCoordinator {
+  async tryAcquire(_botToken: string) {
+    return { acquired: false as const, reason: "telegram_poll_lock_held", kind: "filesystem" as const };
+  }
+}
+
+class ReleasingFilesystemCoordinator implements TelegramPollingCoordinator {
+  constructor(private readonly lockFile: string) {}
+
+  async tryAcquire(_botToken: string) {
+    const leadership: TelegramPollingLeadership = {
+      kind: "filesystem",
+      release: async () => {
+        rmSync(this.lockFile, { force: true });
+      },
+    };
+    return { acquired: true as const, leadership };
+  }
+}
+
 try {
   {
     writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
-    const receiver = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), okFetch());
+    const receiver = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), okFetch(), new BlockedFilesystemCoordinator());
     receiver.start();
     await waitFor(() => receiver.health().ownershipState === "blocked");
     const health = receiver.health();
@@ -26,7 +46,7 @@ try {
   }
 
   {
-    const receiver = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), conflictFetch());
+    const receiver = new TelegramUpdateReceiver(config(), new TelegramUpdateCursor(new InMemoryTelegramRepository()), transport(), conflictFetch(), new ReleasingFilesystemCoordinator(lockPath));
     receiver.start();
     await waitFor(() => receiver.health().ownershipState === "conflict");
     const health = receiver.health();

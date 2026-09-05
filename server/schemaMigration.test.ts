@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 const migration = readFileSync("migrations/0001_marketpilot_core.sql", "utf-8");
 const reliabilityMigration = readFileSync("migrations/0002_execution_reliability.sql", "utf-8");
@@ -17,6 +17,11 @@ const portfolioOrdersMigration = readFileSync("migrations/0021_portfolio_orders_
 const portfolioResearchMigration = readFileSync("migrations/0022_portfolio_research_validation.sql", "utf-8");
 const authSessionsMigration = readFileSync("migrations/0023_auth_sessions.sql", "utf-8");
 const authSessionsIndexCleanupMigration = readFileSync("migrations/0025_auth_sessions_index_cleanup.sql", "utf-8");
+const v2ExecutionRequestsMigration = readFileSync("migrations/0026_v2_execution_requests.sql", "utf-8");
+const tradeForensicsMigration = readFileSync("migrations/0027_trade_forensics.sql", "utf-8");
+
+const migrationPrefixes = readdirSync("migrations").filter((name) => /^\d{4}_.+\.sql$/.test(name)).map((name) => name.slice(0, 4));
+assert.equal(new Set(migrationPrefixes).size, migrationPrefixes.length, "migration numeric prefixes must be unique");
 
 const requiredTables = [
   "users",
@@ -363,5 +368,21 @@ assert.match(portfolioResearchMigration, /UNIQUE\(strategy_id, portfolio_id, obs
 assert.doesNotMatch(portfolioResearchMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
 assert.match(portfolioResearchMigration, /BEGIN;/i);
 assert.match(portfolioResearchMigration, /COMMIT;/i);
+
+assert.match(v2ExecutionRequestsMigration, /CREATE TABLE IF NOT EXISTS v2_execution_requests\b/i);
+assert.match(v2ExecutionRequestsMigration, /CREATE INDEX IF NOT EXISTS idx_v2_execution_requests_signal/i);
+assert.match(v2ExecutionRequestsMigration, /CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_demo_promotions_strategy/i);
+assert.doesNotMatch(v2ExecutionRequestsMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
+assert.match(v2ExecutionRequestsMigration, /BEGIN;/i);
+assert.match(v2ExecutionRequestsMigration, /COMMIT;/i);
+
+assert.match(tradeForensicsMigration, /CREATE TABLE IF NOT EXISTS trade_forensics\b/i);
+assert.match(tradeForensicsMigration, /trade_id varchar NOT NULL UNIQUE/i);
+assert.match(tradeForensicsMigration, /payload jsonb NOT NULL/i);
+assert.match(tradeForensicsMigration, /idx_trade_forensics_symbol_closed_at/i);
+assert.match(tradeForensicsMigration, /idx_trade_forensics_broker_trade_id/i);
+assert.doesNotMatch(tradeForensicsMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
+assert.match(tradeForensicsMigration, /BEGIN;/i);
+assert.match(tradeForensicsMigration, /COMMIT;/i);
 
 console.log("schema migration smoke tests passed");

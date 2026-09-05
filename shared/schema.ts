@@ -252,6 +252,17 @@ export const strategyEvidenceRecords = pgTable("strategy_evidence_records", {
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
 });
 
+export const tradeForensics = pgTable("trade_forensics", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tradeId: varchar("trade_id").notNull().unique(),
+  brokerTradeId: varchar("broker_trade_id"),
+  symbol: text("symbol").notNull(),
+  enteredAt: timestamp("entered_at").notNull(),
+  closedAt: timestamp("closed_at").notNull(),
+  generatedAt: timestamp("generated_at").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+});
+
 export const ragRuns = pgTable("rag_runs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull(),
@@ -1103,6 +1114,8 @@ export const marketPilotEventSchema = z.object({
     "analytics.snapshot_recorded",
     "analytics.model_validation_recorded",
     "paper.trade_closed",
+    "trade.forensics_generated",
+    "trade.forensics_unavailable",
     "post_trade.review_completed",
     "event_blackout.evaluated",
     "strategy.lifecycle_evaluated",

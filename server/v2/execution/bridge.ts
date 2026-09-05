@@ -6,6 +6,7 @@ import { evaluateDemoExecutionEligibility } from "./eligibility";
 import type { DemoEligibilityInput, DemoPromotionRecord, V2ExecutionRequest } from "./contracts";
 import type { InMemoryV2ExecutionRequestRepository, PgV2ExecutionRequestRepository } from "./repository";
 import type { ExternalEvaluation } from "../external-evaluation";
+import { tradeForensicsService, type TradeForensicsService } from "../../execution/tradeForensicsService";
 
 type RequestRepository = Pick<PgV2ExecutionRequestRepository | InMemoryV2ExecutionRequestRepository, "save" | "get" | "getBySignal" | "update">;
 type SignalLike = DemoEligibilityInput["signal"];
@@ -31,7 +32,11 @@ export type V2ExecutionBridgeResult = {
 };
 
 export class V2OandaPracticeExecutionBridge {
-  constructor(private readonly requests: RequestRepository, private readonly broker: Pick<SandboxBrokerRuntime, "submitAutonomousPractice"> = sandboxBrokerRuntime) {}
+  constructor(
+    private readonly requests: RequestRepository,
+    private readonly broker: Pick<SandboxBrokerRuntime, "submitAutonomousPractice"> = sandboxBrokerRuntime,
+    private readonly forensics: Pick<TradeForensicsService, "generateForAuthoritativeBrokerClose" | "get"> = tradeForensicsService,
+  ) {}
 
   async process(input: V2ExecutionBridgeInput): Promise<V2ExecutionBridgeResult> {
     const eligibility = evaluateDemoExecutionEligibility(input);
@@ -77,13 +82,45 @@ export class V2OandaPracticeExecutionBridge {
     const outcomes: V2ExecutionRequest[] = [];
     for (const trade of closedTrades) {
       const request = await findRequestByTrade(this.requests, trade.id);
-      if (!request || request.status === "closed") continue;
+      if (!request) continue;
+      if (request.status === "closed") {
+        await this.generateForensicsFromClosedTrade(request, trade, now);
+        continue;
+      }
       const risk = Math.abs(request.entryPrice - request.stopLoss) * request.requestedUnits;
       const pnl = trade.realizedPnL ?? null;
       const closed = await this.requests.update(request.executionRequestId, { status: "closed", brokerTradeId: trade.id, closedAt: trade.closedAt ?? now.toISOString(), realizedPnL: pnl, realizedR: pnl !== null && risk > 0 ? pnl / risk : null, brokerStatus: "closed" });
-      if (closed) { outcomes.push(closed); await onOutcome?.(closed); }
+      if (closed) {
+        await this.generateForensicsFromClosedTrade(closed, trade, now);
+        outcomes.push(closed);
+        await onOutcome?.(closed);
+      }
     }
     return outcomes;
+  }
+
+  private async generateForensicsFromClosedTrade(request: V2ExecutionRequest, trade: SandboxTrade, now: Date) {
+    if (request.realizedPnL === null || !request.closedAt) return;
+    if (await this.forensics.get(request.executionRequestId)) return;
+    await this.forensics.generateForAuthoritativeBrokerClose({
+      tradeId: request.executionRequestId,
+      brokerTradeId: trade.id,
+      symbol: request.instrument,
+      side: request.side === "buy" ? "long" : "short",
+      positionSize: request.requestedUnits,
+      enteredAt: request.filledAt ?? trade.openedAt,
+      closedAt: request.closedAt,
+      entryPrice: request.entryPriceFilled ?? request.entryPrice,
+      closingPrice: trade.closePrice ?? trade.price,
+      takeProfitPrice: request.takeProfit,
+      stopLossPrice: request.stopLoss,
+      grossPnl: request.realizedPnL,
+      netPnl: request.realizedPnL,
+      netPnlPercent: percentResult(request.realizedPnL, request.entryPriceFilled ?? request.entryPrice, request.requestedUnits),
+      closeReason: "BROKER_CLOSE",
+      source: "oanda-practice-reconciliation",
+      authoritativePnlSource: "broker_reconciliation",
+    }, now).catch(() => undefined);
   }
 }
 
@@ -125,4 +162,9 @@ function toOrderRequest(request: V2ExecutionRequest): OrderRequest {
 function practiceUnits() {
   const value = Number(process.env.FINCOACH_V2_PRACTICE_UNITS ?? 1);
   return Number.isInteger(value) && value > 0 && value <= 1000 ? value : 1;
+}
+
+function percentResult(pnlValue: number, entryPrice: number, units: number) {
+  const notional = Math.abs(entryPrice * units);
+  return notional > 0 ? Number(((pnlValue / notional) * 100).toFixed(6)) : undefined;
 }

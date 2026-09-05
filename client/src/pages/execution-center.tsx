@@ -2,12 +2,13 @@ import Layout from "@/components/layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiRequest } from "@/lib/queryClient";
 import { usePredictionInsights } from "@/lib/marketpilot";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Ban, CircleDollarSign, Radio, ShieldCheck } from "lucide-react";
+import { Ban, CircleDollarSign, Eye, Radio, ShieldCheck } from "lucide-react";
 import { buildControlledLiveSequence } from "@shared/controlledLiveWorkflow";
 import { buildMemoryActionChecklist, buildPredictionLessonCue } from "@shared/assistantPresentation";
 
@@ -118,7 +119,7 @@ type StrategyOpsDashboard = {
     priceFeeds: Array<{ symbol: string; bid: number; ask: number; freshness: string; provider: string }>;
     strategyOps: unknown[];
     paperRuntime: unknown[];
-    postTradeReviews: Array<{ id: string; strategyId: string; symbol: string; result: string; updatedLesson: string }>;
+    postTradeReviews: Array<{ id: string; tradeId?: string; strategyId: string; symbol: string; result: string; updatedLesson: string }>;
     adaptationSuggestions: Array<{ id: string; type: string; status: string; reason: string }>;
     strategyLifecycleReports: Array<{
       id: string;
@@ -392,11 +393,38 @@ type OrderRequest = {
   correlationId: string;
 };
 
+type TradeForensics = {
+  tradeId: string;
+  brokerTradeId: string | null;
+  symbol: string;
+  side: "long" | "short";
+  positionSize: number | null;
+  enteredAt: string;
+  closedAt: string;
+  durationMs: number;
+  xDomain: { min: number; entry: 0; exit: number; max: number };
+  entryMarker: { timestamp: string; relativeMs: 0; normalizedPrice: 0; normalizedPercent: 0; marketPrice: number };
+  exitMarker: { timestamp: string; relativeMs: number; normalizedPrice: number; normalizedPercent: number; marketPrice: number };
+  requestedWindow: { beforeStart: string; entry: string; exit: string; afterEnd: string };
+  actualWindow: { beforeStart: string; afterEnd: string; afterTruncated: boolean; truncationReason?: string };
+  entryPrice: number;
+  closingPrice: number;
+  netPnl: number;
+  netPnlPercent?: number;
+  closeReason?: string;
+  result: "profit" | "non_profit";
+  mainLineColor: "green" | "red";
+  referenceLines: Array<{ kind: "take_profit" | "stop_loss" | "trailing_stop" | "close"; price: number; normalizedPrice: number; label: string }>;
+  points: Array<{ timestamp: string; relativeMs: number; marketPrice: number; normalizedPrice: number; normalizedPercent: number; phase: "before" | "during" | "after" }>;
+  authoritativePnlSource: "broker_reconciliation" | "paper_runtime";
+};
+
 const AUTOMATION_LEVEL_ACKNOWLEDGEMENT = "I understand this increases MarketPilot automation within configured safety limits.";
 
 export default function ExecutionCenter() {
   const queryClient = useQueryClient();
   const [selectedAuditExport, setSelectedAuditExport] = useState<AuditExportBundle | null>(null);
+  const [selectedForensics, setSelectedForensics] = useState<TradeForensics | null>(null);
   const [latestLivePreview, setLatestLivePreview] = useState<ControlledLivePreview | null>(() => readSessionJson<ControlledLivePreview>("marketpilot-controlled-live-preview"));
   const [latestLiveConfirmation, setLatestLiveConfirmation] = useState<ControlledLiveConfirmation | null>(() => readSessionJson<ControlledLiveConfirmation>("marketpilot-controlled-live-confirmation"));
   const { data } = useQuery<ExecutionStatus>({ queryKey: ["/api/marketpilot/execution/status"] });
@@ -482,6 +510,13 @@ export default function ExecutionCenter() {
       return response.json() as Promise<AuditExportBundle>;
     },
     onSuccess: (bundle) => setSelectedAuditExport(bundle),
+  });
+  const loadForensics = useMutation({
+    mutationFn: async (tradeId: string) => {
+      const response = await apiRequest("GET", `/api/marketpilot/trades/${tradeId}/forensics`);
+      return response.json() as Promise<TradeForensics>;
+    },
+    onSuccess: (payload) => setSelectedForensics(payload),
   });
   const gradeLiveSafetyQuiz = useMutation({
     mutationFn: (payload: { userId: string; answers: Record<string, number> }) => apiRequest("POST", "/api/marketpilot/execution/live-safety-quiz", payload),
@@ -1281,9 +1316,16 @@ export default function ExecutionCenter() {
             <Card><CardHeader><CardTitle>Post-Trade Reviews</CardTitle></CardHeader><CardContent className="space-y-3">
               {!ops?.advanced.postTradeReviews.length && <Empty>No closed trades awaiting display.</Empty>}
               {ops?.advanced.postTradeReviews.slice(0, 5).map((review) => (
-                <div key={review.id} className="rounded-lg border p-3 text-sm">
-                  <p className="font-medium text-white">{review.strategyId} · {review.symbol} · {review.result}</p>
-                  <p className="text-muted-foreground">{review.updatedLesson}</p>
+                <div key={review.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm">
+                  <div>
+                    <p className="font-medium text-white">{review.strategyId} · {review.symbol} · {review.result}</p>
+                    <p className="text-muted-foreground">{review.updatedLesson}</p>
+                  </div>
+                  {review.tradeId && (
+                    <Button size="sm" variant="outline" onClick={() => loadForensics.mutate(review.tradeId!)}>
+                      <Eye className="mr-2 h-4 w-4" /> View Forensics
+                    </Button>
+                  )}
                 </div>
               ))}
               <details className="rounded-lg border p-3">
@@ -1614,6 +1656,14 @@ export default function ExecutionCenter() {
           </TabsContent>
         </Tabs>
       </div>
+      <Dialog open={Boolean(selectedForensics)} onOpenChange={(open) => !open && setSelectedForensics(null)}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>{selectedForensics ? forensicTitle(selectedForensics) : "Trade Forensics"}</DialogTitle>
+          </DialogHeader>
+          {selectedForensics && <TradeForensicsChart forensics={selectedForensics} />}
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }
@@ -1664,6 +1714,111 @@ function buildAutonomyRoadmap(
 
 function Summary({ label, value }: { label: string; value: string }) {
   return <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-medium text-white">{value}</p></div>;
+}
+
+function TradeForensicsChart({ forensics }: { forensics: TradeForensics }) {
+  const width = 960;
+  const height = 360;
+  const padding = { top: 28, right: 36, bottom: 46, left: 56 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const yValues = [0, ...forensics.points.map((point) => point.normalizedPrice), ...forensics.referenceLines.map((line) => line.normalizedPrice)];
+  const maxAbs = Math.max(...yValues.map(Math.abs), Math.abs(forensics.closingPrice - forensics.entryPrice), 0.000001);
+  const yMin = -maxAbs * 1.15;
+  const yMax = maxAbs * 1.15;
+  const x = (relativeMs: number) => padding.left + ((relativeMs - forensics.xDomain.min) / (forensics.xDomain.max - forensics.xDomain.min)) * innerWidth;
+  const y = (value: number) => padding.top + ((yMax - value) / (yMax - yMin)) * innerHeight;
+  const path = forensics.points.map((point, index) => `${index === 0 ? "M" : "L"}${x(point.relativeMs).toFixed(2)},${y(point.normalizedPrice).toFixed(2)}`).join(" ");
+  const truncatedX = forensics.actualWindow.afterTruncated ? x(Date.parse(forensics.actualWindow.afterEnd) - Date.parse(forensics.enteredAt)) : null;
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 text-sm text-muted-foreground md:grid-cols-4">
+        <Summary label="Entry" value={formatDateTime(forensics.enteredAt)} />
+        <Summary label="Close" value={formatDateTime(forensics.closedAt)} />
+        <Summary label="Duration" value={formatDuration(forensics.durationMs)} />
+        <Summary label="Close reason" value={forensics.closeReason ?? "UNKNOWN"} />
+      </div>
+      {forensics.actualWindow.afterTruncated && (
+        <div className="rounded border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100">
+          AFTER window incomplete: {forensics.actualWindow.truncationReason ?? "data_unavailable"} through {formatDateTime(forensics.actualWindow.afterEnd)}.
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-[360px] min-w-[820px] w-full rounded border bg-slate-950">
+          <rect x={padding.left} y={padding.top} width={innerWidth / 3} height={innerHeight} fill="#0f172a" />
+          <rect x={padding.left + innerWidth / 3} y={padding.top} width={innerWidth / 3} height={innerHeight} fill="#111827" />
+          <rect x={padding.left + (innerWidth * 2) / 3} y={padding.top} width={innerWidth / 3} height={innerHeight} fill="#0f172a" />
+          {["BEFORE TRADE", "DURING TRADE", "AFTER TRADE"].map((label, index) => (
+            <text key={label} x={padding.left + innerWidth * ((index + 0.5) / 3)} y={18} textAnchor="middle" className="fill-slate-300 text-[11px] font-semibold">{label}</text>
+          ))}
+          <line x1={padding.left} x2={padding.left + innerWidth} y1={y(0)} y2={y(0)} stroke="#94a3b8" strokeDasharray="5 5" />
+          <line x1={x(0)} x2={x(0)} y1={padding.top} y2={padding.top + innerHeight} stroke="#f8fafc" strokeWidth={2} />
+          <line x1={x(forensics.durationMs)} x2={x(forensics.durationMs)} y1={padding.top} y2={padding.top + innerHeight} stroke="#60a5fa" strokeWidth={2} />
+          <text x={x(0) + 6} y={padding.top + 16} className="fill-white text-[12px] font-semibold">ENTRY</text>
+          <text x={x(forensics.durationMs) + 6} y={padding.top + 16} className="fill-blue-200 text-[12px] font-semibold">EXIT</text>
+          {forensics.referenceLines.map((line) => (
+            <g key={`${line.kind}-${line.price}`}>
+              <line x1={padding.left} x2={padding.left + innerWidth} y1={y(line.normalizedPrice)} y2={y(line.normalizedPrice)} stroke={referenceColor(line.kind)} strokeWidth={line.kind === "close" ? 2.5 : 1.5} strokeDasharray={line.kind === "close" ? undefined : "6 4"} />
+              <text x={padding.left + innerWidth - 8} y={y(line.normalizedPrice) - 5} textAnchor="end" className="fill-slate-100 text-[11px]">{line.label}</text>
+            </g>
+          ))}
+          {truncatedX !== null && (
+            <rect x={truncatedX} y={padding.top} width={Math.max(0, padding.left + innerWidth - truncatedX)} height={innerHeight} fill="#713f12" opacity={0.35} />
+          )}
+          <path d={path} fill="none" stroke={forensics.mainLineColor === "green" ? "#22c55e" : "#ef4444"} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
+          <circle cx={x(forensics.entryMarker.relativeMs)} cy={y(forensics.entryMarker.normalizedPrice)} r={6} fill="#f8fafc" stroke="#020617" strokeWidth={2}>
+            <title>{`ENTRY\n${formatDateTime(forensics.entryMarker.timestamp)}\nFill ${forensics.entryMarker.marketPrice}\nEntry-relative 0 (0%)`}</title>
+          </circle>
+          <circle cx={x(forensics.exitMarker.relativeMs)} cy={y(forensics.exitMarker.normalizedPrice)} r={6} fill="#3b82f6" stroke="#020617" strokeWidth={2}>
+            <title>{`EXIT\n${formatDateTime(forensics.exitMarker.timestamp)}\nClose ${forensics.exitMarker.marketPrice}\nEntry-relative ${forensics.exitMarker.normalizedPrice} (${forensics.exitMarker.normalizedPercent}%)`}</title>
+          </circle>
+          {forensics.points.map((point) => (
+            <circle key={`${point.timestamp}-${point.relativeMs}`} cx={x(point.relativeMs)} cy={y(point.normalizedPrice)} r={3} fill={forensics.mainLineColor === "green" ? "#86efac" : "#fca5a5"}>
+              <title>{`${formatDateTime(point.timestamp)}\n${point.phase}\nPrice ${point.marketPrice}\nEntry-relative ${point.normalizedPrice} (${point.normalizedPercent}%)\nT${formatSignedDuration(point.relativeMs)}`}</title>
+            </circle>
+          ))}
+          <text x={padding.left} y={height - 16} className="fill-slate-400 text-[11px]">Entry baseline: {forensics.entryPrice}</text>
+          <text x={padding.left + innerWidth} y={height - 16} textAnchor="end" className="fill-slate-400 text-[11px]">Domain [-D, +2D]</text>
+        </svg>
+      </div>
+      <div className="grid gap-2 text-sm text-muted-foreground md:grid-cols-3">
+        <Summary label="P/L source" value={forensics.authoritativePnlSource.replace("_", " ")} />
+        <Summary label="Net P/L" value={`${forensics.netPnl >= 0 ? "+" : ""}${forensics.netPnl.toFixed(2)}${forensics.netPnlPercent === undefined ? "" : ` (${forensics.netPnlPercent.toFixed(3)}%)`}`} />
+        <Summary label="Trade identifier" value={forensics.brokerTradeId ?? forensics.tradeId} />
+      </div>
+    </div>
+  );
+}
+
+function forensicTitle(forensics: TradeForensics) {
+  const pnl = `${forensics.netPnl >= 0 ? "+" : ""}$${forensics.netPnl.toFixed(2)}`;
+  const pct = forensics.netPnlPercent === undefined ? "" : ` (${forensics.netPnlPercent.toFixed(2)}%)`;
+  return `${forensics.symbol} ${pnl}${pct} ${forensics.side.toUpperCase()} ${formatDuration(forensics.durationMs)}`;
+}
+
+function referenceColor(kind: TradeForensics["referenceLines"][number]["kind"]) {
+  if (kind === "take_profit") return "#22c55e";
+  if (kind === "stop_loss") return "#ef4444";
+  if (kind === "trailing_stop") return "#eab308";
+  return "#3b82f6";
+}
+
+function formatDateTime(value: string) {
+  return new Date(value).toLocaleString();
+}
+
+function formatDuration(ms: number) {
+  const totalMinutes = Math.max(0, Math.round(ms / 60_000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  return [days ? `${days}d` : null, hours ? `${hours}h` : null, `${minutes}m`].filter(Boolean).join(" ");
+}
+
+function formatSignedDuration(ms: number) {
+  const sign = ms < 0 ? "-" : "+";
+  return `${sign}${formatDuration(Math.abs(ms))}`;
 }
 
 function Info({ title, detail }: { title: string; detail: string }) {
