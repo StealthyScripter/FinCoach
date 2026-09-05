@@ -1670,6 +1670,39 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/marketpilot/trade-forensics", async (_req, res) => {
+    const [persisted, closedPaperTrades] = await Promise.all([
+      tradeForensicsService.list(),
+      Promise.resolve(paperStrategyRuntime.listClosed()),
+    ]);
+    const records = new Map(persisted.map((item) => [item.tradeId, {
+      tradeId: item.tradeId,
+      brokerTradeId: item.brokerTradeId,
+      symbol: item.symbol,
+      side: item.side,
+      enteredAt: item.enteredAt,
+      closedAt: item.closedAt,
+      netPnl: item.netPnl,
+      authoritativePnlSource: item.authoritativePnlSource,
+      forensicsGenerated: true,
+    }]));
+    for (const trade of closedPaperTrades) {
+      if (records.has(trade.id)) continue;
+      records.set(trade.id, {
+        tradeId: trade.id,
+        brokerTradeId: null,
+        symbol: trade.symbol,
+        side: trade.side === "buy" ? "long" : "short",
+        enteredAt: trade.openedAt,
+        closedAt: trade.closedAt,
+        netPnl: trade.realizedPnL,
+        authoritativePnlSource: "paper_runtime" as const,
+        forensicsGenerated: false,
+      });
+    }
+    res.json([...records.values()].sort((left, right) => right.closedAt.localeCompare(left.closedAt)));
+  });
+
   app.get("/api/marketpilot/execution/reliability-state/health", async (_req, res) => {
     res.json({
       ...reliabilityStateStore.health(),

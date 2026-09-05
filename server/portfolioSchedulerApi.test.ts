@@ -20,11 +20,15 @@ const config: PortfolioConfig = {
 };
 
 let runs = 0;
+let rebalances = 0;
 const service = {
   async summaries() {
     runs += 1;
-    return [];
+    return [{ portfolioId: "portfolio-1" }] as never;
   },
+  async research() { return { ok: true as const, results: [] }; },
+  async rebalance(portfolioId: string) { assert.equal(portfolioId, "portfolio-1"); rebalances += 1; return { ok: true as const, action: "HOLD" as const, driftPct: 0 }; },
+  async maintenance() { return { marketDataCache: { durable: false, pruned: 0 }, liveExecutionBlocked: true as const }; },
   async health() {
     return {} as never;
   },
@@ -37,8 +41,10 @@ const second = scheduler.start();
 assert.equal(second.started, false);
 assert.equal(second.reason, "portfolio_scheduler_already_started");
 await scheduler.stop("test");
+while (scheduler.status().running) await new Promise(resolve => setTimeout(resolve, 5));
 await scheduler.runOnce("manual");
 assert.ok(runs >= 1);
+assert.ok(rebalances >= 1);
 assert.equal(scheduler.status().lastError, null);
 assert.equal(scheduler.status().providerState, "healthy");
 
@@ -51,6 +57,9 @@ const failing = new PortfolioScheduler({
   async summaries() {
     throw new Error("provider down");
   },
+  async research() { return { ok: true as const, results: [] }; },
+  async rebalance() { return { ok: true as const, action: "HOLD" as const, driftPct: 0 }; },
+  async maintenance() { return { marketDataCache: { durable: false, pruned: 0 }, liveExecutionBlocked: true as const }; },
   async health() {
     return {} as never;
   },
@@ -66,6 +75,9 @@ const rateLimited = new PortfolioScheduler({
     error.code = "rate_limited";
     throw error;
   },
+  async research() { return { ok: true as const, results: [] }; },
+  async rebalance() { return { ok: true as const, action: "HOLD" as const, driftPct: 0 }; },
+  async maintenance() { return { marketDataCache: { durable: false, pruned: 0 }, liveExecutionBlocked: true as const }; },
   async health() {
     return {} as never;
   },

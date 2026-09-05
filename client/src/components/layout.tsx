@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { TrendingUp, Menu, X, ShieldCheck, NotebookText, Settings, FlaskConical, LayoutDashboard, Microscope, Radio, PieChart, LogOut } from "lucide-react";
+import { TrendingUp, Menu, X, ShieldCheck, NotebookText, Settings, FlaskConical, LayoutDashboard, Microscope, Radio, PieChart, LogOut, SearchCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import MarketTicker from "@/components/market-ticker";
@@ -16,6 +16,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { href: "/strategy-lab", icon: FlaskConical, label: "Strategy Lab" },
     { href: "/portfolio", icon: PieChart, label: "Portfolio Lab" },
     { href: "/forward-testing", icon: Radio, label: "Forward Testing" },
+    { href: "/trade-forensics", icon: SearchCheck, label: "Trade Forensics" },
     { href: "/journal", icon: NotebookText, label: "Journal" },
     { href: "/system", icon: Settings, label: "System" },
   ];

@@ -35,9 +35,11 @@ export class PortfolioScheduler {
     if (this.running) return { ok: false as const, reason: "portfolio_scheduler_already_running" };
     this.running = true;
     try {
-      await this.service.summaries(new Date());
-      if ("research" in this.service && typeof this.service.research === "function") await this.service.research(5, new Date());
-      if ("maintenance" in this.service && typeof this.service.maintenance === "function") await this.service.maintenance(new Date());
+      const now = new Date();
+      const portfolios = await this.service.summaries(now);
+      if (typeof this.service.research === "function") await this.service.research(5, now);
+      for (const portfolio of portfolios) await this.service.rebalance(portfolio.portfolioId, now);
+      if (typeof this.service.maintenance === "function") await this.service.maintenance(now);
       this.lastRunAt = new Date().toISOString();
       this.lastError = null;
       this.providerState = "healthy";

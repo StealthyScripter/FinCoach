@@ -11,7 +11,7 @@ import { PortfolioResearchEngine, researchAllocation } from "./research";
 import { portfolioReadiness } from "./readiness";
 
 type RankedSummary = PortfolioSummary & { score: number; confidence: number };
-export type PortfolioPlatformLike = Pick<PortfolioPlatformService, "summaries" | "health" | "maintenance">;
+export type PortfolioPlatformLike = Pick<PortfolioPlatformService, "summaries" | "health" | "maintenance" | "research" | "rebalance">;
 
 export class PortfolioPlatformService {
   private initialized = false;
@@ -174,6 +174,7 @@ export class PortfolioPlatformService {
     const broker = new VirtualPortfolioBroker(this.repository, this.marketData);
     const fill = await broker.submitOrder({ portfolioId: portfolio.id, idempotencyKey: `rebalance:${portfolio.id}:${strategy.strategyVersion}:${symbol}:${now.toISOString().slice(0, 13)}`, side, symbol, assetClass: "etf", quantity, reason: `Rebalance toward ${strategy.shortName} mandate.`, now });
     if (!fill.ok) {
+      await this.repository.addDecision(decision("HOLD", portfolio.id, strategy.id, symbol, `Rebalance blocked: ${fill.reason}.`, { currentValue, cash: portfolio.cash }, { targetInvest }, { driftPct, thresholdPct: this.config.rebalanceThresholdPct, orderId: fill.order.id, rejectionReason: fill.reason }, now));
       await this.recordBlocker(`portfolio_${fill.reason}`, `rebalance ${portfolio.id}`, fill.reason, "filled virtual order", "FINCOACH_PORTFOLIO_REBALANCE_THRESHOLD_PCT", false);
       return { ok: false as const, reason: fill.reason };
     }

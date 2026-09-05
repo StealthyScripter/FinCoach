@@ -2479,7 +2479,7 @@ function signalRequestFromForwardTest(forwardTest: ForwardTestRecord, now: Date)
     evidenceScore: Math.max(0, Math.min(1, 0.7 + Math.min(forwardTest.expectedR, 0.3))),
     validUntil: new Date(now.getTime() + 60 * 60_000).toISOString(),
     demoOnly: true as const,
-    lineageEventIds: [...new Set([...forwardTest.lineageEventIds, forwardTest.forwardTestId])],
+    lineageEventIds: [...new Set([...forwardTest.lineageEventIds, forwardTest.strategyId, forwardTest.forwardTestId])],
     correlationId: forwardTest.correlationId,
     causationId: forwardTest.causationId,
     killSwitchActive: false,

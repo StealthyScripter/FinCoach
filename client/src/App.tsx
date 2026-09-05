@@ -24,6 +24,7 @@ import System from "@/pages/system";
 import ExecutionCenter from "@/pages/execution-center";
 import ResearchLab from "@/pages/research-lab";
 import ForwardTesting from "@/pages/forward-testing";
+import TradeForensics from "@/pages/trade-forensics";
 
 function Router() {
   return (
@@ -40,6 +41,7 @@ function Router() {
       <Route path="/journal" component={Journal} />
       <Route path="/system" component={System} />
       <Route path="/execution" component={ExecutionCenter} />
+      <Route path="/trade-forensics" component={TradeForensics} />
       <Route path="/forward-testing" component={ForwardTesting} />
       <Route path="/challenge" component={Challenge} />
       <Route path="/trade-desk" component={TradeDesk} />

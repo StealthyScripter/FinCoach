@@ -393,7 +393,7 @@ type OrderRequest = {
   correlationId: string;
 };
 
-type TradeForensics = {
+export type TradeForensics = {
   tradeId: string;
   brokerTradeId: string | null;
   symbol: string;
@@ -1716,7 +1716,7 @@ function Summary({ label, value }: { label: string; value: string }) {
   return <div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-medium text-white">{value}</p></div>;
 }
 
-function TradeForensicsChart({ forensics }: { forensics: TradeForensics }) {
+export function TradeForensicsChart({ forensics }: { forensics: TradeForensics }) {
   const width = 960;
   const height = 360;
   const padding = { top: 28, right: 36, bottom: 46, left: 56 };
@@ -1791,7 +1791,7 @@ function TradeForensicsChart({ forensics }: { forensics: TradeForensics }) {
   );
 }
 
-function forensicTitle(forensics: TradeForensics) {
+export function forensicTitle(forensics: TradeForensics) {
   const pnl = `${forensics.netPnl >= 0 ? "+" : ""}$${forensics.netPnl.toFixed(2)}`;
   const pct = forensics.netPnlPercent === undefined ? "" : ` (${forensics.netPnlPercent.toFixed(2)}%)`;
   return `${forensics.symbol} ${pnl}${pct} ${forensics.side.toUpperCase()} ${formatDuration(forensics.durationMs)}`;
