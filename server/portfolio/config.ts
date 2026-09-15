@@ -16,6 +16,8 @@ export type PortfolioConfig = {
   quoteFreshnessMaxMinutes: number;
   fixtureAllowedInProduction: boolean;
   providerCallBudget: number;
+  /** Maximum provider calls in one rolling budget window. */
+  providerCallBudgetWindowMs?: number;
   cacheEnabled: boolean;
   cacheMaxEntries: number;
   cacheMaxBytes: number | null;
@@ -59,6 +61,7 @@ export function loadPortfolioConfig(env: NodeJS.ProcessEnv = process.env): Portf
     quoteFreshnessMaxMinutes: parsePositiveInt(env.FINCOACH_PORTFOLIO_QUOTE_FRESHNESS_MAX_MINUTES, 1440, "FINCOACH_PORTFOLIO_QUOTE_FRESHNESS_MAX_MINUTES"),
     fixtureAllowedInProduction,
     providerCallBudget: parsePositiveInt(env.FINCOACH_PORTFOLIO_PROVIDER_CALL_BUDGET, 250, "FINCOACH_PORTFOLIO_PROVIDER_CALL_BUDGET"),
+    providerCallBudgetWindowMs: parsePositiveInt(env.FINCOACH_PORTFOLIO_PROVIDER_CALL_BUDGET_WINDOW_MS, 900_000, "FINCOACH_PORTFOLIO_PROVIDER_CALL_BUDGET_WINDOW_MS"),
     cacheEnabled: env.FINCOACH_PORTFOLIO_CACHE_ENABLED !== "false",
     cacheMaxEntries: parsePositiveInt(env.FINCOACH_PORTFOLIO_CACHE_MAX_ENTRIES, 2_000, "FINCOACH_PORTFOLIO_CACHE_MAX_ENTRIES"),
     cacheMaxBytes: env.FINCOACH_PORTFOLIO_CACHE_MAX_BYTES ? parsePositiveInt(env.FINCOACH_PORTFOLIO_CACHE_MAX_BYTES, 50_000_000, "FINCOACH_PORTFOLIO_CACHE_MAX_BYTES") : null,

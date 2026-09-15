@@ -29,7 +29,7 @@ export class PgExternalEvaluationRepository {
     const result = await this.db.query("SELECT 1 FROM v2_external_evaluations WHERE payload->>'signalId' = $1 LIMIT 1", [signalId]);
     return Boolean(result.rowCount);
   }
-  async listEvaluations(input: { limit?: number; offset?: number } = {}) { return (await this.evaluations.list(input)).items; }
+  async listEvaluations(input: { limit?: number; offset?: number; strategyId?: string } = {}) { return (await this.evaluations.list(input)).items; }
   async eligibleForJournal(input: { limit: number }) {
     const result = await this.db.query(
       `SELECT payload FROM v2_external_evaluations

@@ -4,14 +4,28 @@ import type { ForwardTestRecord } from "../forward-testing";
 
 export type DemoExecutionLifecycleState = "candidate" | "focused";
 export type DemoExecutionRequestStatus = "created" | "eligible" | "submitted" | "accepted" | "filled" | "rejected" | "cancelled" | "closed" | "failed";
+export type DemoPromotionStatus = "active" | "revoked";
 
 export type DemoPromotionRecord = {
   promotionId: string;
   strategyId: string;
-  authorizedForPractice: true;
+  strategyVersion: number;
+  authorizedForPractice: boolean;
+  status: DemoPromotionStatus;
+  environment: "practice";
+  authority: string;
   approvedBy: string;
   approvedAt: string;
   reason: string;
+  evidenceEventIds: string[];
+  lifecycleDecisionId: string;
+  forwardTestIds: string[];
+  evaluationIds: string[];
+  policyVersion: string;
+  idempotencyKey: string;
+  correlationId: string;
+  causationId: string | null;
+  supersedesPromotionId: string | null;
   lineageEventIds: string[];
 };
 

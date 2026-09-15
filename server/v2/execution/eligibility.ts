@@ -14,12 +14,13 @@ export function evaluateDemoExecutionEligibility(input: DemoEligibilityInput): D
   if (!["monitoring", "completed"].includes(input.forwardTest.status)) return reject("forward_test_not_qualifying");
   if (!input.forwardTest.lineageEventIds.length || !input.forwardTest.demoVerification.demoOnly || input.forwardTest.demoVerification.environment !== "practice" || input.forwardTest.demoVerification.accountMode !== "practice") return reject("missing_qualifying_forward_test_evidence");
   if (input.forwardTest.courtCaseId !== input.signal.courtCaseId || !input.forwardTest.rankingId) return reject("missing_qualifying_ranking_evidence");
-  if (input.strategy.researchOnly !== false && !(input.promotion?.authorizedForPractice === true && input.promotion.strategyId === input.strategy.strategyId)) return reject("research_only_without_explicit_promotion");
+  if (!(input.promotion?.authorizedForPractice === true && input.promotion.status === "active" && input.promotion.environment === "practice" && input.promotion.strategyId === input.strategy.strategyId && input.promotion.strategyVersion === input.strategy.strategyVersion)) return reject("research_only_without_explicit_promotion");
   if (!input.lifecycle || !permittedLifecycleStates.has(input.lifecycle.toState as DemoExecutionLifecycleState)) return reject("lifecycle_state_not_permitted");
   if (input.killSwitchActive) return reject("kill_switch_active");
   const env = input.env ?? process.env;
   if (env.FINCOACH_DEMO_BROKER_EXECUTION_ENABLED !== "true") return reject("demo_execution_disabled");
   if (env.FINCOACH_LIVE_EXECUTION_ENABLED !== "false") return reject("live_execution_not_false");
+  if (env.FINCOACH_PAPER_EXECUTION_ENABLED !== "false") return reject("paper_execution_not_false");
   if (env.FINCOACH_PORTFOLIO_LIVE_EXECUTION_ENABLED !== "false") return reject("portfolio_live_execution_not_false");
   if (env.OANDA_ENV?.trim().toLowerCase() !== "practice") return reject("oanda_environment_not_practice");
   if (env.OANDA_BASE_URL !== "https://api-fxpractice.oanda.com/v3") return reject("oanda_practice_endpoint_required");

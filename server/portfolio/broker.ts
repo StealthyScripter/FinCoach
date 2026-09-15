@@ -24,7 +24,12 @@ export class VirtualPortfolioBroker {
   async submitOrder(input: { portfolioId: string; idempotencyKey: string; side: "BUY" | "SELL" | "HOLD"; symbol?: string; assetClass?: AssetClass; quantity?: number; reason: string; now?: Date }) {
     const now = input.now ?? new Date();
     const existing = (await this.repository.listOrders(input.portfolioId, 100)).find((order) => order.idempotencyKey === input.idempotencyKey);
-    if (existing) return { ok: true as const, order: existing, idempotent: true };
+    if (existing) {
+      if (existing.status === "rejected") {
+        return { ok: false as const, reason: rejectionReason(existing), order: existing, idempotent: true };
+      }
+      return { ok: true as const, order: existing, idempotent: true };
+    }
     const portfolio = await this.repository.getPortfolio(input.portfolioId);
     if (!portfolio) return this.reject(input, "portfolio_not_found", now);
     if (input.side === "HOLD") {
@@ -84,4 +89,9 @@ export class VirtualPortfolioBroker {
 
 function safeQuote(quote: PortfolioQuote) {
   return { symbol: quote.symbol, observedAt: quote.observedAt, stale: quote.stale, source: quote.source, fixture: quote.fixture, last: quote.last, bid: quote.bid !== null ? "SET" : "EMPTY", ask: quote.ask !== null ? "SET" : "EMPTY" };
+}
+
+function rejectionReason(order: PortfolioOrder) {
+  const reason = order.evidence && typeof order.evidence === "object" ? (order.evidence as { reason?: unknown }).reason : undefined;
+  return typeof reason === "string" && reason.length > 0 ? reason : "order_rejected";
 }

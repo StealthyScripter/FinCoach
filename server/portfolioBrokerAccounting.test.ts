@@ -65,6 +65,9 @@ assert.equal((await repository.listTransactions("portfolio-test")).length, 1);
 const closed = await broker.submitOrder({ portfolioId: "portfolio-test", idempotencyKey: "buy-weekend", side: "BUY", symbol: "SPY", assetClass: "etf", quantity: 1, reason: "weekend", now: new Date("2026-08-15T15:00:00.000Z") });
 assert.equal(closed.ok, false);
 assert.equal(closed.reason, "market_closed");
+const closedDuplicate = await broker.submitOrder({ portfolioId: "portfolio-test", idempotencyKey: "buy-weekend", side: "BUY", symbol: "SPY", assetClass: "etf", quantity: 1, reason: "weekend", now: new Date("2026-08-15T15:00:00.000Z") });
+assert.equal(closedDuplicate.ok, false);
+assert.equal(closedDuplicate.reason, "market_closed");
 
 const sellTooMuch = await broker.submitOrder({ portfolioId: "portfolio-test", idempotencyKey: "sell-too-much", side: "SELL", symbol: "SPY", assetClass: "etf", quantity: 20, reason: "sell", now });
 assert.equal(sellTooMuch.ok, false);

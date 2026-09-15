@@ -6,6 +6,7 @@
   "scripts": {
     "test": "bash scripts/run-tests-with-disposable-postgres.sh --all",
     "test:deterministic": "for file in server/*.test.ts; do if [ \"$file\" = \"server/v2.architecture-review.test.ts\" ] || [ \"$file\" = \"server/v2.persistence-inventory.test.ts\" ]; then echo \"$file skipped: obsolete repository-architecture gate\"; continue; fi; timeout_seconds=60; if [ \"$file\" = \"server/telegramSchedulerFailureMatrix.test.ts\" ]; then timeout_seconds=600; fi; timeout \"${timeout_seconds}s\" tsx \"$file\" || exit 1; done && timeout 60s tsx ./marketpilot-execution.test.ts",
+    "test:promotion-db": "bash scripts/run-tests-with-disposable-postgres.sh --promotion",
     "test:db": "bash scripts/run-tests-with-disposable-postgres.sh --db-only",
     "test:execution": "tsx server/executionV2.test.ts && tsx server/executionV3.test.ts && tsx server/executionV4.test.ts && tsx server/sandboxBrokerIntegration.test.ts && tsx ./marketpilot-execution.test.ts",
     "dev:client": "vite dev --port 5000",

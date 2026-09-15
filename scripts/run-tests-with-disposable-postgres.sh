@@ -106,6 +106,12 @@ npm run db:migrate:status
 npx tsx server/disposableTestDatabase.test.ts
 
 case "$MODE" in
+  --promotion)
+    npx tsx server/v2.practice-promotion-authority.pg.test.ts
+    npx tsx server/v2.practice-promotion-authority.test.ts
+    npx tsx server/v2/execution/bridge.test.ts
+    npx tsx server/v2.orchestration-discipline.pg.test.ts
+    ;;
   --db-only)
     npx tsx server/pgStorage.integration.test.ts
     npx tsx server/authSessionPersistence.pg.test.ts
@@ -128,7 +134,7 @@ case "$MODE" in
     npm run test:deterministic
     ;;
   *)
-    printf 'Usage: %s [--all|--db-only]\n' "$0" >&2
+    printf 'Usage: %s [--all|--db-only|--promotion]\n' "$0" >&2
     exit 2
     ;;
 esac

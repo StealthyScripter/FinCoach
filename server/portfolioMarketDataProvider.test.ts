@@ -153,6 +153,16 @@ assert.equal(tdBars[1].source, "twelve-data");
 assert.equal(tdCalls[0].auth, "apikey td-key");
 assert.ok(tdCalls.every((call) => !call.url.includes("td-key")), "Twelve Data key must not be placed in URLs");
 
+const budgeted = new TwelveDataPortfolioMarketDataProvider({ ...config, providerCallBudget: 1, providerCallBudgetWindowMs: 10 }, (async (url: URL | RequestInfo) => {
+  const parsed = new URL(String(url));
+  assert.ok(parsed.pathname.endsWith("/quote"));
+  return response({ symbol: "SPY", close: "545.39", timestamp: 1786731600 });
+}) as never);
+await budgeted.getQuote("SPY", "etf");
+await assert.rejects(() => budgeted.getQuote("QQQ", "etf"), (error: unknown) => (error as { code?: string }).code === "provider_budget_exhausted");
+await new Promise((resolve) => setTimeout(resolve, 20));
+await budgeted.getQuote("QQQ", "etf");
+
 const rateLimited = new TwelveDataPortfolioMarketDataProvider(config, (async () => response({ status: "error", code: 429, message: "rate limit" }, 429, { "api-credits-left": "0" })) as never);
 await assert.rejects(() => rateLimited.getQuote("SPY", "etf"), (error: unknown) => (error as { code?: string }).code === "rate_limited");
 assert.equal(rateLimited.health()?.quotaState, "rate_limited");

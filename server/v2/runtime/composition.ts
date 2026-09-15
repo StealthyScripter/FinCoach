@@ -27,8 +27,10 @@ import { HypothesisV2Service } from "../hypothesis";
 import type { ResearchHypothesis } from "../hypothesis";
 import { rulesV2Compiler } from "../rules";
 import { ExperimentsV2Service } from "../experiments";
+import type { ResearchExperiment } from "../experiments";
 import { backtestingV2Engine, type BacktestResult } from "../backtesting";
 import { CourtroomV2Service, forwardTestVerdictEligibility } from "../courtroom";
+import type { StrategyCourtCase } from "../courtroom";
 import { RankingV2Service, type RankingCandidateInput, type StrategyRankingDecision } from "../ranking";
 import { ForwardTestingV2Service, type ForwardTestRecord } from "../forward-testing";
 import { SignalsV2Service, evaluateSignalEligibility, type V2ResearchSignal } from "../signals";
@@ -60,6 +62,8 @@ import { evaluateSignalFromFrozenCandles } from "./signalOutcomeEvaluator";
 import { V2OandaPracticeExecutionBridge, externalEvaluationFromBrokerOutcome } from "../execution/bridge";
 import { PgV2ExecutionRequestRepository } from "../execution/repository";
 import { PgDemoPromotionRepository } from "../execution/promotionRepository";
+import { AutonomousPracticePromotionAuthority } from "../execution/promotionAuthority";
+import type { DemoPromotionRecord } from "../execution/contracts";
 import { sandboxBrokerRuntime } from "../../execution/sandboxBrokerRuntime";
 import { evaluatePracticeTradeCapacity, loadMaxActivePracticeTrades } from "../../execution/practiceTradeCapacity";
 
@@ -627,6 +631,7 @@ export class FinCoachV2Runtime {
     let journalEntriesCount = 0;
     let lessonsCount = 0;
     let lifecycleDecisionsCount = 0;
+    let practicePromotionsCount = 0;
     let evaluationsAttempted = 0;
     let evaluationsCompleted = 0;
     let observationsDeduplicated = 0;
@@ -1147,8 +1152,9 @@ export class FinCoachV2Runtime {
     journalEntriesCount = await createJournalEntriesFromEvaluations({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
     lessonsCount = await createLessonsFromJournalEntries({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, limit: artifactLimit(this.config), guard: input.guard });
     lifecycleDecisionsCount = await createLifecycleDecisionsFromLessons({ repositories, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
+    practicePromotionsCount = await createAutonomousPracticePromotions({ repositories, config: this.config, env: this.env, cycleId: input.cycleId, correlationId: input.correlationId, now: input.now, limit: artifactLimit(this.config), guard: input.guard });
     const completedEvent = blockers.length ? "pipeline_cycle_completed_with_blockers" : "pipeline_cycle_completed";
-    structuredLogger.v2({ level: "info", event: completedEvent, message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, planning, evaluationsAttempted, evaluationsCompleted, observations: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypotheses: hypothesesCount, hypothesesBlocked, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, forwardTests: forwardTestsCount, signals: signalsCount, evaluations: evaluationsCount, journalEntries: journalEntriesCount, lessons: lessonsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers });
+    structuredLogger.v2({ level: "info", event: completedEvent, message: "V2 research cycle lineage persisted", cycleId: input.cycleId, correlationId: input.correlationId, runtimeInstanceId: this.bootId, planning, evaluationsAttempted, evaluationsCompleted, observations: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypotheses: hypothesesCount, hypothesesBlocked, strategies: strategiesCount, experiments: experimentsCount, backtests: backtestsCount, verdicts: verdictsCount, rankedCandidates: rankedCount, forwardTests: forwardTestsCount, signals: signalsCount, evaluations: evaluationsCount, journalEntries: journalEntriesCount, lessons: lessonsCount, lifecycleDecisions: lifecycleDecisionsCount, practicePromotions: practicePromotionsCount, blockers });
     emitResearchCycleObserverSummaries({
       cycleId: input.cycleId,
       correlationId: input.correlationId,
@@ -1181,7 +1187,7 @@ export class FinCoachV2Runtime {
       deployedRevision: deploymentMetadata(this.env),
     });
     v2TelemetryService.counter("v2_research_cycles_total", 1, { module: "orchestration", operation: "runOnce", resultClass: "success" });
-    return { status: blockers.length ? "completed_with_blockers" : "completed", planning, evaluationsAttempted, evaluationsCompleted, observationsCreated: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypothesesCreated: hypothesesCount, hypothesesBlocked, strategiesCreated: strategiesCount, experimentsQueued: experimentsCount, backtestsCompleted: backtestsCount, verdictsCreated: verdictsCount, rankedCandidates: rankedCount, forwardTestsCreated: forwardTestsCount, signalsCreated: signalsCount, evaluationsCreated: evaluationsCount, journalEntriesCreated: journalEntriesCount, lessonsCreated: lessonsCount, lifecycleDecisionsCreated: lifecycleDecisionsCount, lifecycleDecisions: lifecycleDecisionsCount, blockers, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
+    return { status: blockers.length ? "completed_with_blockers" : "completed", planning, evaluationsAttempted, evaluationsCompleted, observationsCreated: observationsCount, observationsDeduplicated, hypothesesEvaluated, hypothesesCreated: hypothesesCount, hypothesesBlocked, strategiesCreated: strategiesCount, experimentsQueued: experimentsCount, backtestsCompleted: backtestsCount, verdictsCreated: verdictsCount, rankedCandidates: rankedCount, forwardTestsCreated: forwardTestsCount, signalsCreated: signalsCount, evaluationsCreated: evaluationsCount, journalEntriesCreated: journalEntriesCount, lessonsCreated: lessonsCount, lifecycleDecisionsCreated: lifecycleDecisionsCount, lifecycleDecisions: lifecycleDecisionsCount, practicePromotionsCreated: practicePromotionsCount, blockers, liveExecutionBlocked: true, telegramSignalsPublished: 0 };
   }
 
   private startCadence(initialRequestedBy: string) {
@@ -2639,6 +2645,68 @@ export async function createLifecycleDecisionsFromLessons(input: { repositories:
     }
   }
   return inserted;
+}
+
+type PromotionRuntimeRepositoryLike = {
+  strategies?: { get(id: string): Promise<(StrategyDefinition & { researchOnly?: boolean; lineageEventIds?: readonly string[] }) | null> | (StrategyDefinition & { researchOnly?: boolean; lineageEventIds?: readonly string[] }) | null };
+  courtroom?: { list(input?: { limit?: number; strategyId?: string }): Promise<Array<StrategyCourtCaseWithLineage>> | Array<StrategyCourtCaseWithLineage> };
+  ranking?: { list(input?: { limit?: number }): Promise<Array<StrategyRankingWithLineage>> | Array<StrategyRankingWithLineage> };
+  experiments?: { list(input?: { limit?: number; strategyId?: string }): Promise<Array<ResearchExperiment>> | Array<ResearchExperiment> };
+  backtests?: { list(input?: { limit?: number; strategyId?: string }): Promise<Array<BacktestResult>> | Array<BacktestResult> };
+  forwardTesting?: { list(input?: { limit?: number; strategyId?: string }): Promise<Array<ForwardTestRecord>> | Array<ForwardTestRecord> };
+  evaluations?: { listEvaluations?(input?: { limit?: number; strategyId?: string }): Promise<Array<ExternalEvaluation>> | Array<ExternalEvaluation> };
+  lifecycle?: { list(input?: { limit?: number; strategyId?: string }): Promise<Array<StrategyLifecycleDecision>> | Array<StrategyLifecycleDecision>; listPage?(input?: { limit?: number; offset?: number; strategyId?: string }): Promise<{ items: Array<StrategyLifecycleDecision>; total: number }> | { items: Array<StrategyLifecycleDecision>; total: number } };
+  demoPromotions?: { getForStrategy(strategyId: string): Promise<DemoPromotionRecord | null> | DemoPromotionRecord | null; save(record: DemoPromotionRecord): Promise<DemoPromotionRecord | null> | DemoPromotionRecord | null };
+};
+
+type StrategyCourtCaseWithLineage = StrategyCourtCase & { lineageEventIds?: readonly string[] };
+type StrategyRankingWithLineage = StrategyRankingDecision & { lineageEventIds?: readonly string[] };
+
+export async function createAutonomousPracticePromotions(input: {
+  repositories: PromotionRuntimeRepositoryLike;
+  config: Pick<V2RuntimeConfig, "minBacktestTrades" | "minBacktestDays" | "minForwardTestTrades" | "minForwardTestDays" | "minProfitFactor" | "maxDrawdownPct" | "minSharpeRatio">;
+  env: NodeJS.ProcessEnv;
+  cycleId: string;
+  correlationId: string;
+  now: Date;
+  limit: number;
+  guard?: CycleLeaseGuard;
+}) {
+  const repositories = input.repositories;
+  if (!repositories.strategies?.get || !repositories.courtroom?.list || !repositories.ranking?.list || !repositories.experiments?.list || !repositories.backtests?.list || !repositories.forwardTesting?.list || !repositories.evaluations?.listEvaluations || !repositories.lifecycle?.list || !repositories.demoPromotions) return 0;
+  const lifecyclePage = repositories.lifecycle.listPage ? await repositories.lifecycle.listPage({ limit: 5_000, offset: 0 }) : { items: await repositories.lifecycle.list({ limit: 5_000 }), total: 0 };
+  const lifecycleSeeds = lifecyclePage.items;
+  const strategyIds = [...new Set(lifecycleSeeds.map(item => item.strategyId))].slice(0, input.limit * 4);
+  const rankings = await repositories.ranking.list({ limit: 5_000 });
+  const authority = new AutonomousPracticePromotionAuthority();
+  let persisted = 0;
+  for (const strategyId of strategyIds) {
+    await input.guard?.assertOwned("practice_promotion_evaluation");
+    const strategy = await repositories.strategies.get(strategyId);
+    if (!strategy) continue;
+    const lifecycleDecisions = await repositories.lifecycle.list({ strategyId, limit: 200 });
+    const decision = authority.evaluate({
+      strategy,
+      courtCases: await repositories.courtroom.list({ strategyId, limit: 100 }),
+      rankings,
+      experiments: await repositories.experiments.list({ strategyId, limit: 200 }),
+      backtests: await repositories.backtests.list({ strategyId, limit: 200 }),
+      forwardTests: await repositories.forwardTesting.list({ strategyId, limit: 500 }),
+      evaluations: await repositories.evaluations.listEvaluations({ strategyId, limit: 500 }),
+      lifecycleDecisions,
+      existingPromotion: await repositories.demoPromotions.getForStrategy(strategyId),
+      config: input.config,
+      env: input.env,
+      now: input.now,
+      correlationId: input.correlationId,
+      causationId: lifecycleDecisions.at(-1)?.decisionId ?? null,
+    });
+    structuredLogger.v2({ level: decision.decision === "PROMOTE" ? "info" : decision.decision === "REVOKE" ? "warn" : "debug", event: "practice_promotion_evaluated", message: "Autonomous practice promotion evaluated", cycleId: input.cycleId, correlationId: input.correlationId, strategyId, decision: decision.decision, reason: decision.reason, unmetRequirements: decision.unmetRequirements, policyVersion: "fincoach.v2.autonomous-practice-promotion.v1" });
+    if (!decision.promotion || (decision.decision !== "PROMOTE" && decision.decision !== "REVOKE")) continue;
+    const saved = await guarded(input.guard, `practice_promotion_${decision.decision.toLowerCase()}`, () => repositories.demoPromotions!.save(decision.promotion!));
+    if (saved?.promotionId === decision.promotion.promotionId) persisted += 1;
+  }
+  return persisted;
 }
 
 function journalInputFromEvaluation(evaluation: ExternalEvaluation, now: Date) {

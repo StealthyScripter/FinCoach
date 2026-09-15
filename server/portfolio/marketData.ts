@@ -87,6 +87,7 @@ export class NoPortfolioMarketDataProvider implements PortfolioMarketDataProvide
 
 abstract class RestPortfolioMarketDataProvider implements PortfolioMarketDataProvider {
   protected calls = 0;
+  private callWindowStartedAt = 0;
   protected quotaState: PortfolioProviderQuotaState = "healthy";
   protected lastSuccessfulRefresh: Record<string, string> = {};
   protected creditsUsed: number | null = null;
@@ -98,9 +99,15 @@ abstract class RestPortfolioMarketDataProvider implements PortfolioMarketDataPro
   searchInstruments?(keywords: string): Promise<PortfolioInstrument[]>;
   getMarketStatus?(now?: Date): Promise<PortfolioMarketStatus[]>;
   getOptionChain?(underlying: string, input?: { expiration?: string; contract?: string; historicalDate?: string; requireGreeks?: boolean; now?: Date }): Promise<PortfolioOptionContract[]>;
-  constructor(protected readonly config: Pick<PortfolioConfig, "providerCallBudget" | "providerTimeoutMs">, protected readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(protected readonly config: Pick<PortfolioConfig, "providerCallBudget" | "providerCallBudgetWindowMs" | "providerTimeoutMs">, protected readonly fetchImpl: typeof fetch = fetch) {}
   health(): PortfolioProviderHealth { return { provider: this.id, quotaState: this.quotaState, lastSuccessfulRefresh: { ...this.lastSuccessfulRefresh }, creditsUsed: this.creditsUsed, creditsRemaining: this.creditsRemaining }; }
   protected beforeProviderCall(endpoint: string) {
+    const now = Date.now();
+    const windowMs = this.config.providerCallBudgetWindowMs ?? 900_000;
+    if (this.callWindowStartedAt === 0 || now - this.callWindowStartedAt >= windowMs) {
+      this.calls = 0;
+      this.callWindowStartedAt = now;
+    }
     if (this.calls >= this.config.providerCallBudget) throw providerError("provider_budget_exhausted", `${this.id} Portfolio provider call budget exhausted.`);
     this.calls += 1;
   }
@@ -124,7 +131,7 @@ abstract class RestPortfolioMarketDataProvider implements PortfolioMarketDataPro
 
 export class AlphaVantagePortfolioMarketDataProvider extends RestPortfolioMarketDataProvider {
   id = "alpha-vantage";
-  constructor(private readonly alphaConfig: Pick<PortfolioConfig, "alphaVantageApiKey" | "providerCallBudget" | "providerTimeoutMs" | "quoteFreshnessMaxMinutes">, fetchImpl: typeof fetch = fetch) {
+  constructor(private readonly alphaConfig: Pick<PortfolioConfig, "alphaVantageApiKey" | "providerCallBudget" | "providerCallBudgetWindowMs" | "providerTimeoutMs" | "quoteFreshnessMaxMinutes">, fetchImpl: typeof fetch = fetch) {
     super(alphaConfig, fetchImpl);
     if (!alphaConfig.alphaVantageApiKey?.trim()) throw new Error("ALPHA_VANTAGE_API_KEY is required for Alpha Vantage Portfolio market data.");
   }
@@ -217,7 +224,7 @@ export class AlphaVantagePortfolioMarketDataProvider extends RestPortfolioMarket
 
 export class TwelveDataPortfolioMarketDataProvider extends RestPortfolioMarketDataProvider {
   id = "twelve-data";
-  constructor(private readonly twelveConfig: Pick<PortfolioConfig, "twelveDataApiKey" | "providerCallBudget" | "providerTimeoutMs" | "quoteFreshnessMaxMinutes">, fetchImpl: typeof fetch = fetch) {
+  constructor(private readonly twelveConfig: Pick<PortfolioConfig, "twelveDataApiKey" | "providerCallBudget" | "providerCallBudgetWindowMs" | "providerTimeoutMs" | "quoteFreshnessMaxMinutes">, fetchImpl: typeof fetch = fetch) {
     super(twelveConfig, fetchImpl);
     if (!twelveConfig.twelveDataApiKey?.trim()) throw new Error("TWELVE_DATA_API_KEY is required for Twelve Data Portfolio market data.");
   }

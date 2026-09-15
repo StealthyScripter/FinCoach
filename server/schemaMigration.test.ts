@@ -19,6 +19,7 @@ const authSessionsMigration = readFileSync("migrations/0023_auth_sessions.sql", 
 const authSessionsIndexCleanupMigration = readFileSync("migrations/0025_auth_sessions_index_cleanup.sql", "utf-8");
 const v2ExecutionRequestsMigration = readFileSync("migrations/0026_v2_execution_requests.sql", "utf-8");
 const tradeForensicsMigration = readFileSync("migrations/0027_trade_forensics.sql", "utf-8");
+const autonomousPracticePromotionsMigration = readFileSync("migrations/0028_v2_autonomous_practice_promotions.sql", "utf-8");
 
 const migrationPrefixes = readdirSync("migrations").filter((name) => /^\d{4}_.+\.sql$/.test(name)).map((name) => name.slice(0, 4));
 assert.equal(new Set(migrationPrefixes).size, migrationPrefixes.length, "migration numeric prefixes must be unique");
@@ -384,5 +385,13 @@ assert.match(tradeForensicsMigration, /idx_trade_forensics_broker_trade_id/i);
 assert.doesNotMatch(tradeForensicsMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
 assert.match(tradeForensicsMigration, /BEGIN;/i);
 assert.match(tradeForensicsMigration, /COMMIT;/i);
+
+assert.match(autonomousPracticePromotionsMigration, /ALTER\s+TABLE\s+v2_demo_promotions\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+idempotency_key\s+text/i);
+assert.match(autonomousPracticePromotionsMigration, /DROP\s+INDEX\s+IF\s+EXISTS\s+idx_v2_demo_promotions_strategy/i);
+assert.match(autonomousPracticePromotionsMigration, /idx_v2_demo_promotions_strategy_created/i);
+assert.match(autonomousPracticePromotionsMigration, /CREATE\s+UNIQUE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_v2_demo_promotions_idempotency/i);
+assert.doesNotMatch(autonomousPracticePromotionsMigration, /\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
+assert.match(autonomousPracticePromotionsMigration, /BEGIN;/i);
+assert.match(autonomousPracticePromotionsMigration, /COMMIT;/i);
 
 console.log("schema migration smoke tests passed");
