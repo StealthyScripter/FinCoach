@@ -163,7 +163,7 @@ export class BrokerReconciliationService {
     }
     for (const brokerTrade of trades) {
       const known = localActive.some((local) => local.brokerTradeId === brokerTrade.id || local.brokerOrderId === brokerTrade.id);
-      if (!known && localActive.length > 0) {
+      if (!known) {
         discrepancies.push({ orderId: brokerTrade.id, type: "orphan_broker_trade", expected: "local active trade record", actual: "broker active trade" });
       }
     }

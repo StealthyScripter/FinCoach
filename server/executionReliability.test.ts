@@ -86,7 +86,9 @@ const matched = await reconciliation.reconcile(adapter, [{
   expectedStatus: "pending",
   submittedAt: "2026-06-20T10:00:00.000Z",
   idempotencyKey: "submission-key-1",
-}], "operator", new Date("2026-06-20T10:05:00.000Z"));
+}], "operator", new Date("2026-06-20T10:05:00.000Z"), {
+  localActiveTrades: [{ id: "local-1", provider: "metatrader_demo", brokerTradeId: "trade-1", instrument: "EUR/USD", state: "active" }],
+});
 assert.equal(matched.status, "matched");
 assert.equal(matched.matchedOrderCount, 1);
 assert.equal(matched.productionOrderSubmissionEnabled, false);
@@ -118,6 +120,13 @@ assert.equal(historicalIncident.brokerActiveTrades, 1);
 assert.equal(historicalIncident.mismatchedTrades, 3);
 assert.ok(historicalIncident.discrepancies.some((item) => item.type === "local_active_broker_missing"));
 assert.ok(blockerEvents.some((event) => event.code === "broker_trade_missing" && event.alertCategory === "BROKER_STATE_MISMATCH"));
+const orphanOnlyIncident = await reconciliation.reconcile(adapter, [], "operator", new Date("2026-06-20T10:08:00.000Z"));
+assert.equal(orphanOnlyIncident.status, "discrepancy");
+assert.equal(orphanOnlyIncident.localActiveTrades, 0);
+assert.equal(orphanOnlyIncident.brokerActiveTrades, 1);
+assert.equal(orphanOnlyIncident.orphanBrokerTrades, 1);
+assert.ok(orphanOnlyIncident.discrepancies.some((item) => item.type === "orphan_broker_trade" && item.orderId === "trade-1"));
+assert.ok(blockerEvents.some((event) => event.code === "orphan_broker_trade"));
 const afterMismatch = evaluatePracticeTradeCapacity({
   maxActivePracticeTrades: 3,
   brokerConfirmedActiveTrades: 0,
